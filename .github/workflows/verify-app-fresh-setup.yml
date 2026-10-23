@@ -6,6 +6,11 @@ on:
         type: choice
         default: all
         options: [all, linux]
+      existing_user:
+        description: Fresh install or explicitly seeded old/current managed-user proof
+        type: choice
+        default: none
+        options: [none, older-idle, current]
       source_revision:
         type: string
         required: true
@@ -15,7 +20,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: fresh-default-setup-${{ inputs.source_revision }}
+  group: fresh-default-setup-${{ inputs.source_revision }}-${{ inputs.existing_user }}
   cancel-in-progress: false
 jobs:
   native:
@@ -74,11 +79,12 @@ jobs:
           VERSION: ${{ inputs.version }}
           TARGET: ${{ matrix.target }}
           PACKAGE: ${{ matrix.package }}
-        run: python scripts/verify_app_candidate.py --mode verify-fresh --source "$SOURCE" --version "$VERSION" --target "$TARGET" --linux-package "$PACKAGE"
+          EXISTING_USER: ${{ inputs.existing_user || 'none' }}
+        run: python scripts/verify_app_candidate.py --mode verify-fresh --source "$SOURCE" --version "$VERSION" --target "$TARGET" --linux-package "$PACKAGE" --existing-user "$EXISTING_USER"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: fresh-default-home-${{ matrix.target }}-${{ matrix.format }}-proof
+          name: ${{ inputs.existing_user != '' && inputs.existing_user != 'none' && format('existing-{0}', inputs.existing_user) || 'fresh-default-home' }}-${{ matrix.target }}-${{ matrix.format }}-proof
           path: app-proof/
           if-no-files-found: warn
           retention-days: 14

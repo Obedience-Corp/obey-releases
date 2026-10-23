@@ -387,8 +387,10 @@ def wait_fresh_setup(process, installer, managed, target, output, environment, r
     return result
 
 
-def native(directory, document, target, output, linux_package="both", fresh_setup=False, public_root=None):
+def native(directory, document, target, output, linux_package="both", fresh_setup=False, public_root=None, existing_user="none"):
     require_clean_host({"aarch64-apple-darwin": "macOS-arm64", "x86_64-apple-darwin": "macOS-x86_64", "x86_64-unknown-linux-gnu": "linux-x86_64", "x86_64-pc-windows-msvc": "windows-x86_64"}.get(target))
+    if existing_user not in ("none", "older-idle", "current") or existing_user != "none" and not fresh_setup:
+        raise ValueError("existing-user scenario requires public default-home proof")
     if target not in TARGETS or native_platform() != TARGETS[target][0]:
         raise ValueError("App target does not match native machine")
     if linux_package not in ("both", "appimage") or linux_package == "appimage" and not target.endswith("linux-gnu"):
@@ -409,6 +411,9 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
             environment.pop(key, None)
     default_managed = None
     packaging_root = None
+    existing_fixture = None
+    report["existing_user_scenario"] = existing_user
+    report["existing_user_reconciliation_verified"] = False
     if fresh_setup:
         # Runtime import reuses the existing default-home/normal-quit contracts;
         # upgrade verification itself imports this packaging module.
@@ -525,6 +530,9 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
         report["installer_version"] = command([installer, "version"], environment).strip()
         report["activity_help"] = command([activity, "--help"], environment).strip()
         report["runtime_config"] = str(runtime[0])
+        if existing_user != "none":
+            import existing_obey
+            existing_fixture = existing_obey.seed(temporary, installer, default_managed, target, environment, output, report, existing_user)
         with (output / "app.log").open("w") as log:
             process = subprocess.Popen([str(binary)], env=environment, stdout=log, stderr=subprocess.STDOUT, start_new_session=os.name != "nt")
             report["pid"] = process.pid
@@ -538,6 +546,11 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
                 raise RuntimeError("App did not retain a live captured window")
             if fresh_setup:
                 report["default_after_setup"] = wait_fresh_setup(process, installer, default_managed, target, output, environment, report, "fresh")
+                if existing_fixture is not None:
+                    report["existing_after_setup"] = existing_obey.ready_readback(existing_fixture, installer, environment, "0.2.3")
+                    if report["existing_after_setup"] is None:
+                        raise RuntimeError("updated existing-user service was not ready")
+                    existing_obey.compare(report["existing_before"], report["existing_after_setup"], existing_user)
                 upgrade.normal_quit(process, binary, binary.parent.parent.parent if target.endswith("apple-darwin") else None, target, environment, output)
                 process = subprocess.Popen([str(binary)], env=environment, stdout=log, stderr=subprocess.STDOUT, start_new_session=os.name != "nt")
                 report["reopened_pid"] = process.pid
@@ -545,10 +558,17 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
                 for field in ("receipts", "selected_mtime_ns"):
                     if report["default_after_setup"][field] != report["default_after_reopen"][field]:
                         raise ValueError("App relaunch changed selected package receipts/files")
-                if target.endswith('windows-msvc'):
+                if target.endswith('windows-msvc') and existing_user != 'older-idle':
                     daemon_log = Path.home() / '.local/share/obey/daemon.log'
                     record_windows_discovery_snapshot(daemon_log, output, report)
-                report["fresh_default_setup_verified"] = True
+                if existing_fixture is not None:
+                    report["existing_after_reopen"] = existing_obey.ready_readback(existing_fixture, installer, environment, "0.2.3")
+                    if report["existing_after_reopen"] is None:
+                        raise RuntimeError("reopened existing-user service was not ready")
+                    existing_obey.compare(report["existing_after_setup"], report["existing_after_reopen"], "current")
+                    report["existing_user_reconciliation_verified"] = True
+                else:
+                    report["fresh_default_setup_verified"] = True
             report["primary_packaged_app_launch_verified"] = True
             if linux_package == "appimage":
                 report["appimage_default_launch_verified"] = True
@@ -615,6 +635,7 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
             report["cleanup_failure"] = cleanup_errors
         report["native_packaging_launch_verified"] = "failure" not in report and not cleanup_errors
         report["fresh_default_setup_verified"] = report["fresh_default_setup_verified"] and report["native_packaging_launch_verified"]
+        report["existing_user_reconciliation_verified"] = report["existing_user_reconciliation_verified"] and report["native_packaging_launch_verified"]
         (output / "proof.json").write_text(json.dumps(report, indent=2) + "\n")
         if cleanup_errors:
             raise RuntimeError("owned App cleanup failed: " + "; ".join(cleanup_errors))
@@ -624,6 +645,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=("fetch", "verify", "fetch-public", "verify-fresh"), required=True)
     parser.add_argument("--tag")
+    parser.add_argument("--existing-user", choices=("none", "older-idle", "current"), default="none")
     for name in ("version", "source"):
         parser.add_argument("--" + name, required=True)
     parser.add_argument("--target")
@@ -631,6 +653,8 @@ def main():
     parser.add_argument("--directory", type=Path, default=Path("app-candidate"))
     parser.add_argument("--output", type=Path, default=Path("app-proof"))
     args = parser.parse_args()
+    if args.existing_user != "none" and args.mode != "verify-fresh":
+        raise ValueError("existing-user scenarios require verify-fresh public inputs")
     if args.mode in ("fetch", "verify"):
         identity(args.tag, args.version, args.source)
     if os.environ.get("CANDIDATE_RUNNER_KIND") != "github-hosted" or os.environ.get("GITHUB_REPOSITORY") != REPOSITORY:
@@ -641,7 +665,7 @@ def main():
             fetch_public(args.directory, args.source, args.version)
         else:
             document = checked_public(args.directory, args.source, args.version)
-            native((args.directory / "assets").resolve(), document, args.target, args.output.resolve(), args.linux_package, fresh_setup=True, public_root=args.directory.resolve())
+            native((args.directory / "assets").resolve(), document, args.target, args.output.resolve(), args.linux_package, fresh_setup=True, public_root=args.directory.resolve(), existing_user=args.existing_user)
     elif args.mode == "fetch":
         fetch(args.tag, args.version, args.source, args.directory)
     else:
