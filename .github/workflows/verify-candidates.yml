@@ -53,6 +53,8 @@ jobs:
       # Only this public distribution automation is checked out. Never clone
       # private Obey implementation, modules or private test scripts here.
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v6
         with:
           python-version: '3.13'
