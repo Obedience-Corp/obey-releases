@@ -4,6 +4,7 @@ This is distribution automation, not Obey implementation or private test source.
 It accepts only the six declared targets and never publishes a release.
 """
 import argparse
+from contextlib import closing
 import hashlib
 import json
 import os
@@ -163,7 +164,10 @@ def native_proof(directory, version, source, target, expected_hash):
                     return "daemon starting" in log.read_text()
                 wait_until("SQLite daemon initialization", initialized)
                 database = root / "data/daemon.db"
-                with sqlite3.connect(database.as_uri() + "?mode=ro", uri=True) as connection:
+                # SQLite's connection context manager controls transactions;
+                # it does not close the handle. Windows needs it closed before
+                # the fixture directory can be removed.
+                with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True)) as connection:
                     if connection.execute("pragma integrity_check").fetchone() != ("ok",) or connection.execute("select count(*) from sqlite_master where type='table'").fetchone()[0] == 0:
                         raise RuntimeError("daemon did not create a valid initialized SQLite database")
                 print(log.read_text(), flush=True)
