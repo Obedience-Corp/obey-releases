@@ -35,8 +35,20 @@ def capture(arguments, environment, timeout=30):
 def xattrs(path):
     result = {}
     try:
-        for name in sorted(os.listxattr(path)):
-            value = os.getxattr(path, name)
+        if hasattr(os, "listxattr"):
+            attributes = [(name, os.getxattr(path, name)) for name in sorted(os.listxattr(path))]
+        else:
+            # Python exposes listxattr only on Linux; macOS supplies xattr(1).
+            listing = capture(["xattr", path], os.environ.copy())
+            if listing.get("exit") != 0:
+                raise OSError("xattr name query failed")
+            attributes = []
+            for name in sorted(listing.get("stdout", "").splitlines()):
+                value = capture(["xattr", "-px", name, path], os.environ.copy())
+                if value.get("exit") != 0:
+                    raise OSError("xattr value query failed: " + name)
+                attributes.append((name, bytes.fromhex(value.get("stdout", ""))))
+        for name, value in attributes:
             item = {"bytes": len(value), "sha256": hashlib.sha256(value).hexdigest()}
             # Do not dump arbitrary origin metadata/URLs into public logs.
             if name == "com.apple.quarantine":

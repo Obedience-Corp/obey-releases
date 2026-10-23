@@ -273,7 +273,19 @@ def stop_owned(process, environment):
     if process.poll() is not None:
         return
     if os.name == "nt":
-        command(["taskkill", "/PID", str(process.pid), "/T", "/F"], environment)
+        query = Path(__file__).with_name("windows_owned_processes.ps1")
+        identities = json.loads(command(["pwsh", "-NoProfile", "-NonInteractive", "-File", query],
+                                       dict(environment, APP_PROOF_PROCESS_MODE="snapshot", APP_PROOF_PROCESS_PID=str(process.pid))))
+        if not isinstance(identities, list) or any(not isinstance(item.get("pid"), int) or not str(item.get("started", "")).isdigit() for item in identities):
+            raise RuntimeError("invalid owned process identity snapshot")
+        # taskkill can return nonzero for an already-exiting WebView descendant.
+        # Retain that result, and accept cleanup only after identity-aware readback.
+        killed = subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], env=environment,
+                                text=True, capture_output=True, timeout=30)
+        print(json.dumps({"owned_process_cleanup": {"identities": identities, "taskkill_exit": killed.returncode,
+                                                  "stdout": killed.stdout, "stderr": killed.stderr}}), flush=True)
+        command(["pwsh", "-NoProfile", "-NonInteractive", "-File", query],
+                dict(environment, APP_PROOF_PROCESS_MODE="verify", APP_PROOF_PROCESS_IDENTITIES=json.dumps(identities)), timeout=30)
     else:
         os.killpg(process.pid, signal.SIGTERM)
     process.wait(timeout=20)
