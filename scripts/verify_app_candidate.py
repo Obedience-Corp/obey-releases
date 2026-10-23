@@ -175,9 +175,13 @@ def mac_install(directory, entries, temporary, environment, report):
 
 
 def window_capture(process, target, output, environment):
+    def require_alive():
+        if process.poll() is not None:
+            raise RuntimeError("owned App process exited before its window appeared")
     if target.endswith("apple-darwin"):
         script = 'import CoreGraphics; import Foundation; let ws = CGWindowListCopyWindowInfo([.optionOnScreenOnly,.excludeDesktopElements], kCGNullWindowID) as! [[String:Any]]; print(String(data:try! JSONSerialization.data(withJSONObject:ws.filter { ($0["kCGWindowOwnerPID"] as? Int) == Int(CommandLine.arguments[1]) }),encoding:.utf8)!)'
         def window():
+            require_alive()
             windows = json.loads(command(["swift", "-e", script, str(process.pid)], environment))
             return next((w for w in windows if w.get("kCGWindowLayer") == 0 and w.get("kCGWindowBounds", {}).get("Width", 0) > 100), None)
         found = wait_until("owned App window", window)
@@ -185,17 +189,49 @@ def window_capture(process, target, output, environment):
         return {"window_id": found["kCGWindowNumber"], "title": found.get("kCGWindowName"), "screenshot": output.name}
     if target.endswith("windows-msvc"):
         query = f'$p=Get-Process -Id {process.pid} -ErrorAction Stop; if($p.MainWindowHandle -ne 0){{@{{handle=$p.MainWindowHandle.ToInt64();title=$p.MainWindowTitle}}|ConvertTo-Json -Compress}}'
-        found = wait_until("owned App window", lambda: json.loads(command(["pwsh", "-NoProfile", "-Command", query], environment) or "null"))
+        def window():
+            require_alive()
+            return json.loads(command(["pwsh", "-NoProfile", "-Command", query], environment) or "null")
+        found = wait_until("owned App window", window)
         capture = 'Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing; $r=[Windows.Forms.SystemInformation]::VirtualScreen; $b=New-Object Drawing.Bitmap $r.Width,$r.Height; $g=[Drawing.Graphics]::FromImage($b); try {$g.CopyFromScreen($r.Left,$r.Top,0,0,$b.Size); $b.Save($env:APP_PROOF_SCREENSHOT)} finally {$g.Dispose();$b.Dispose()}'
         command(["pwsh", "-NoProfile", "-Command", capture], dict(environment, APP_PROOF_SCREENSHOT=str(output)))
         return dict(found, screenshot=output.name)
     def window():
+        require_alive()
         result = subprocess.run(["xdotool", "search", "--onlyvisible", "--pid", str(process.pid)], env=environment, text=True, capture_output=True)
         return result.stdout.splitlines()[0] if result.returncode == 0 and result.stdout.strip() else None
     found = wait_until("owned App window", window)
     title = command(["xdotool", "getwindowname", found], environment).strip()
     command(["import", "-window", found, output], environment)
     return {"window_id": found, "title": title, "screenshot": output.name}
+
+
+def appimage_proof(appimage, extracted, target, output, environment, report):
+    process = None
+    try:
+        with (output / "appimage-default.log").open("w") as log:
+            process = subprocess.Popen([str(appimage)], env=environment, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+            try:
+                report["appimage_default_window"] = window_capture(process, target, output / "appimage-default.png", environment)
+                if process.poll() is not None:
+                    raise RuntimeError("default AppImage exited during launch")
+                report["appimage_default_launch_verified"] = True
+            except BaseException as error:
+                report["appimage_default_launch_verified"] = False
+                report["appimage_default_failure"] = str(error)
+                report["appimage_default_exit"] = process.poll()
+        stop_owned(process, environment)
+        process = None
+        if not report["appimage_default_launch_verified"]:
+            # This diagnostic never replaces the original default launch result.
+            with (output / "appimage-extracted-diagnostic.log").open("w") as log:
+                process = subprocess.Popen([str(extracted)], env=environment, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+                report["appimage_extracted_diagnostic_window"] = window_capture(process, target, output / "appimage-extracted-diagnostic.png", environment)
+                report["appimage_extracted_diagnostic_only"] = True
+            raise RuntimeError("default AppImage launch failed; extracted startup is diagnostic only")
+    finally:
+        if process is not None:
+            stop_owned(process, environment)
 
 
 def windows_silent(executable, environment):
@@ -323,29 +359,7 @@ def native(directory, document, target, output):
         stop_owned(process, environment)
         process = None
         if appimage is not None:
-            with (output / "appimage-default.log").open("w") as log:
-                process = subprocess.Popen([str(appimage)], env=environment, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
-                try:
-                    report["appimage_default_window"] = window_capture(process, target, output / "appimage-default.png", environment)
-                    if process.poll() is not None:
-                        raise RuntimeError("default AppImage exited during launch")
-                    report["appimage_default_launch_verified"] = True
-                except BaseException as error:
-                    report["appimage_default_launch_verified"] = False
-                    report["appimage_default_failure"] = str(error)
-                    report["appimage_default_exit"] = process.poll()
-            stop_owned(process, environment)
-            process = None
-            if not report["appimage_default_launch_verified"]:
-                # This is deliberately a diagnostic, never a substitute for the
-                # original downloaded AppImage's normal startup result.
-                with (output / "appimage-extracted-diagnostic.log").open("w") as log:
-                    process = subprocess.Popen([str(extracted_appimage)], env=environment, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
-                    report["appimage_extracted_diagnostic_window"] = window_capture(process, target, output / "appimage-extracted-diagnostic.png", environment)
-                    report["appimage_extracted_diagnostic_only"] = True
-                stop_owned(process, environment)
-                process = None
-                raise RuntimeError("default AppImage launch failed; extracted startup is diagnostic only")
+            appimage_proof(appimage, extracted_appimage, target, output, environment, report)
         if installed is not None:
             uninstall_windows()
             installed = None

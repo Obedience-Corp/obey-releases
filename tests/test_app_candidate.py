@@ -168,6 +168,20 @@ class AppContracts(unittest.TestCase):
                 assemble(directories, root / "mixed")
             self.assertFalse((root / "mixed").exists())
 
+    def test_extracted_success_cannot_replace_failed_default_appimage(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            default, extracted = Mock(), Mock()
+            default.poll.return_value = 1
+            report = {}
+            with patch.object(app.subprocess, "Popen", side_effect=[default, extracted]), patch.object(app, "window_capture", side_effect=[RuntimeError("libfuse missing"), {"window_id": "owned"}]), patch.object(app, "stop_owned") as cleanup:
+                with self.assertRaisesRegex(RuntimeError, "diagnostic only"):
+                    app.appimage_proof(root / "download.AppImage", root / "AppRun", "x86_64-unknown-linux-gnu", root, {}, report)
+            self.assertFalse(report["appimage_default_launch_verified"])
+            self.assertEqual(report["appimage_default_failure"], "libfuse missing")
+            self.assertTrue(report["appimage_extracted_diagnostic_only"])
+            self.assertEqual(cleanup.call_count, 2)
+
     def test_cleanup_never_signals_already_exited_process(self):
         process = Mock()
         process.poll.return_value = 0
