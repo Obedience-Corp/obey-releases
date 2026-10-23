@@ -109,6 +109,22 @@ class AppContracts(unittest.TestCase):
             with self.assertRaises(ValueError):
                 app.verify_signature(root / "bundle", signature, root, {})
 
+    def test_optional_deb_signature_is_checked_when_present_and_bad_fails(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            deb = root / "app.deb"
+            with patch.object(app, "verify_signature") as verify:
+                self.assertFalse(app.verify_optional_signature(deb, root, {}))
+                verify.assert_not_called()
+            signature = root / "app.deb.sig"
+            signature.write_bytes(b"present")
+            with patch.object(app, "verify_signature") as verify:
+                self.assertTrue(app.verify_optional_signature(deb, root, {}))
+                verify.assert_called_once_with(deb, signature, root, {})
+            with patch.object(app, "verify_signature", side_effect=RuntimeError("bad deb signature")):
+                with self.assertRaisesRegex(RuntimeError, "bad deb signature"):
+                    app.verify_optional_signature(deb, root, {})
+
     def test_native_guard_runs_before_any_mutation_or_binary(self):
         with patch.dict(os.environ, {}, clear=True), patch.object(app, "verify_signature") as signature:
             with self.assertRaises(RuntimeError):

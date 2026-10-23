@@ -113,6 +113,14 @@ def verify_signature(artifact, signature, temporary, environment):
     command(["minisign", "-Vm", artifact, "-P", PUBLIC_KEY, "-x", sig], environment)
 
 
+def verify_optional_signature(artifact, temporary, environment):
+    signature = artifact.with_name(artifact.name + ".sig")
+    if not signature.exists():
+        return False
+    verify_signature(artifact, signature, temporary, environment)
+    return True
+
+
 def extract_app(archive, destination):
     with tarfile.open(archive, "r:gz") as stream:
         members = stream.getmembers()
@@ -303,6 +311,7 @@ def native(directory, document, target, output):
             report["installed_version"] = binary_version
         else:
             deb = directory / next(item["name"] for item in entries if item["name"].endswith(".deb"))
+            report["deb_signature_verified"] = verify_optional_signature(deb, temporary, environment)
             if shutil.which("festival-app"):
                 raise RuntimeError("refusing a preexisting App command")
             package = command(["dpkg-deb", "-f", deb, "Package"], environment).strip()
