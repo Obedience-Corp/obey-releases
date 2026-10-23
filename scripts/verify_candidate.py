@@ -77,8 +77,15 @@ def checked_build_info(document, source, target):
 
 
 def command(arguments, environment, timeout=60, json_output=False, check=True):
-    completed = subprocess.run([str(value) for value in arguments], env=environment,
-                               capture_output=True, text=True, timeout=timeout)
+    try:
+        completed = subprocess.run([str(value) for value in arguments], env=environment,
+                                   capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired as error:
+        def decoded(value):
+            return value.decode("utf-8", errors="replace") if isinstance(value, bytes) else value or ""
+        print(json.dumps({"command": [str(value) for value in arguments], "timeout_seconds": timeout,
+                          "stdout": decoded(error.stdout), "stderr": decoded(error.stderr)}), flush=True)
+        raise
     print(json.dumps({"command": [str(value) for value in arguments], "exit": completed.returncode,
                       "stdout": completed.stdout, "stderr": completed.stderr}), flush=True)
     if completed.returncode and check:

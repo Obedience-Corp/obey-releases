@@ -32,6 +32,36 @@ TARGETS = {
 PUBLIC_KEY = "RWTlKfGG4A6IoCRsFpbcpf2yJ7v0D5CFRb17f8gK/n3LWdd9x1NKA+ms"
 
 
+# Keep network transfer separate from the existing five-minute install budget.
+# The failed hosted baseline fetched26.6MB in638s; an apt transaction is not an
+# App startup timeout. GNU timeout owns the privileged process group, so killing
+# only Python's sudo wrapper cannot leave apt holding the package database lock.
+APT_DOWNLOAD_SECONDS = 30 * 60
+APT_INSTALL_SECONDS = 300
+APT_KILL_GRACE_SECONDS = 15
+
+
+def owned_timeout(arguments, seconds):
+    if type(seconds) is not int or seconds <= 0:
+        raise ValueError("invalid owned command budget")
+    return ["timeout", "--signal=TERM", f"--kill-after={APT_KILL_GRACE_SECONDS}s", f"{seconds}s", *arguments]
+
+
+def apt_command(arguments, environment, seconds):
+    return command(["sudo", *owned_timeout(["apt-get", *arguments], seconds)], environment,
+                   timeout=seconds + APT_KILL_GRACE_SECONDS + 30)
+
+
+def install_deb(deb, environment):
+    deb = Path(deb).resolve()
+    # This prints exact dependency/download planning even if transfer later
+    # fails. --assume-no intentionally exits1; errors remain in the same log,
+    # and the following checked download/install commands still fail closed.
+    command(["apt-get", "--assume-no", "install", deb], environment, check=False)
+    apt_command(["install", "--download-only", "-y", deb], environment, APT_DOWNLOAD_SECONDS)
+    apt_command(["install", "--no-download", "-y", deb], environment, APT_INSTALL_SECONDS)
+
+
 def identity(tag, version, source):
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version) or not re.fullmatch(r"[a-f0-9]{40}", source):
         raise ValueError("invalid App candidate version/source")
@@ -326,7 +356,7 @@ def native(directory, document, target, output, linux_package="both"):
         report["uninstalled"] = True
 
     def uninstall_deb():
-        command(["sudo", "apt-get", "remove", "--purge", "-y", "festival-app"], environment, timeout=120)
+        apt_command(["remove", "--purge", "-y", "festival-app"], environment, 120)
         if Path("/usr/bin/festival-app").exists():
             raise RuntimeError("owned deb uninstall left App executable")
         report["deb_uninstalled"] = True
@@ -368,7 +398,7 @@ def native(directory, document, target, output, linux_package="both"):
                 if state.returncode == 0 and state.stdout.strip() != "not-installed":
                     raise RuntimeError("refusing preexisting App package state")
                 owned_deb = True
-                command(["sudo", "apt-get", "install", "-y", deb], environment, timeout=300)
+                install_deb(deb, environment)
                 installed_version = command(["dpkg-query", "-W", "-f=${Version}", package], environment).strip()
                 if installed_version != report["version"]:
                     raise ValueError("installed deb version mismatch")

@@ -47,7 +47,7 @@ jobs:
           retention-days: 7
   native:
     needs: anonymous-inputs
-    timeout-minutes: 45
+    timeout-minutes: ${{ matrix.target == 'x86_64-unknown-linux-gnu' && 60 || 45 }}
     strategy:
       fail-fast: false
       matrix:
