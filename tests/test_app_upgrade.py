@@ -3,6 +3,7 @@ import copy
 import hashlib
 import json
 import os
+import sqlite3
 from pathlib import Path
 import sys
 import tempfile
@@ -63,11 +64,34 @@ class UpgradeContracts(unittest.TestCase):
         active = {"installed": True, "loaded": True, "socket_reachable": True, "daemon_pid": 123}
         with patch.object(upgrade, "default_home_readback", return_value={}), patch("verify_selected_components.checked_receipts", return_value={"files": []}), patch.object(app, "command", return_value=active) as run:
             self.assertEqual(app.fresh_setup_readback(Path("/app/festival.exe"), managed, {})["service"], active)
-            self.assertEqual(run.call_args.args[0], [managed / "bin/obey.exe", "service", "status", "--json"])
+            self.assertEqual(run.call_args.args[0], [managed / "bin" / ("obey.exe" if os.name == "nt" else "obey"), "service", "status", "--json"])
             for key in active:
                 run.return_value = dict(active, **{key: False})
                 with self.assertRaisesRegex(RuntimeError, "responsive"):
                     app.fresh_setup_readback(Path("/app/festival.exe"), managed, {})
+
+    def test_fresh_nonwindows_waits_for_real_readback_and_retains_ui_boundary(self):
+        import verify_app_candidate as app
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            report = {}
+            process = Mock()
+            process.poll.return_value = None
+            def poll(description, predicate, seconds):
+                self.assertEqual(seconds, 600)
+                self.assertIsNone(predicate())
+                self.assertIsNone(predicate())
+                return predicate()
+            with patch.object(app, "fresh_setup_readback", side_effect=[sqlite3.OperationalError("not created"), ValueError("not installed"), {"service": "live"}]), patch.object(app, "wait_until", side_effect=poll), patch.object(app, "capture_startup", return_value={"window": "retained"}) as capture:
+                result = app.wait_fresh_setup(process, Path("/app/festival"), Path("/home/managed"), "x86_64-unknown-linux-gnu", output, {}, report, "fresh")
+                self.assertEqual(result, {"service": "live"})
+                self.assertTrue(report["rendered_setup_requires_image_review"])
+                self.assertEqual(capture.call_args.args[2], output / "fresh")
+                self.assertEqual(report["fresh_last_provisioning_error"], "not installed")
+            process.poll.return_value = 1
+            with patch.object(app, "wait_until", side_effect=lambda description, predicate, seconds: predicate()):
+                with self.assertRaisesRegex(RuntimeError, "App exited"):
+                    app.wait_fresh_setup(process, Path("/app/festival"), Path("/home/managed"), "x86_64-unknown-linux-gnu", output, {}, {}, "dead")
 
     def test_default_home_refuses_existing_state_or_environment_override(self):
         with tempfile.TemporaryDirectory() as name:

@@ -314,7 +314,7 @@ and original screenshots must still be reviewed before accepting the journey.
 ## Fresh public default-home setup
 
 `verify-app-fresh-setup.yml` exercises the published App on a fresh disposable
-Windows account, using anonymous immutable `app-test-SOURCE` bytes and the pinned
+native account, using anonymous immutable `app-test-SOURCE` bytes and the pinned
 production updater key. It installs no selected component fixture and makes no
 installer/config/PATH override: the App must provision its selected three packages.
 The proof waits for setup to leave the package screen, validates official receipts,
@@ -324,6 +324,12 @@ the default daemon log before uninstalling only the service/App it created.
 The uploaded proof retains original public release metadata, inventory, both
 checksum documents and updater manifest, plus the selected payload name/hash.
 
-This initial Windows lane does not establish other-platform fresh setup, licensing,
+Mac ARM/Intel, Debian, default AppImage and Windows NSIS each use a separate fresh
+machine. Linux runs normal desktop graphics/window-manager dependencies; Deb never
+provides dependencies or state to the AppImage leg. Windows requires visible
+licensing UI; Mac/Linux retain delayed setup and reopened frames for explicit
+image inspection. Receipt/service readiness alone does not prove rendered UI.
+
+These lanes do not establish licensing,
 useful first work, provider control, reboot, consumer trust or failure recovery.
 A Licenses window alone cannot satisfy the setup result.

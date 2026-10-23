@@ -13,6 +13,7 @@ import plistlib
 import re
 import shutil
 import signal
+import sqlite3
 import subprocess
 import tarfile
 import tempfile
@@ -344,14 +345,38 @@ def stop_owned(process, environment):
 def fresh_setup_readback(installer, managed, environment):
     import verify_app_upgrade as upgrade
     from verify_selected_components import checked_receipts
-    status = upgrade.default_home_readback(installer.parent / "festival-app.exe", managed, environment)
+    status = upgrade.default_home_readback(installer, managed, environment)
     status["receipts"] = checked_receipts(managed)
-    obey = managed / "bin/obey.exe"
+    obey = managed / "bin" / ("obey.exe" if os.name == "nt" else "obey")
     service = command([obey, "service", "status", "--json"], environment, json_output=True)
     if not (service.get("installed") and service.get("loaded") and service.get("socket_reachable") and service.get("daemon_pid", 0) > 0):
         raise RuntimeError("App-provisioned default service is not installed, loaded and responsive")
     status["service"] = service
     return status
+
+
+def wait_fresh_setup(process, installer, managed, target, output, environment, report, stage):
+    import verify_app_upgrade as upgrade
+    if target.endswith("windows-msvc"):
+        upgrade.wait_windows_setup(process, target, output, environment, report, stage)
+        return fresh_setup_readback(installer, managed, environment)
+    def ready():
+        if process.poll() is not None:
+            raise RuntimeError("App exited during fresh default-home setup")
+        try:
+            return fresh_setup_readback(installer, managed, environment)
+        except (RuntimeError, ValueError, OSError, sqlite3.Error) as error:
+            report[stage + "_last_provisioning_error"] = str(error)
+            return None
+    result = wait_until("App-driven default-home selected packages and live service", ready, seconds=600)
+    # Component/service readiness cannot establish rendered UI. Retain delayed
+    # original windows for explicit image review before accepting that boundary.
+    capture_dir = output / stage
+    capture_dir.mkdir()
+    report[stage + "_capture_directory"] = stage
+    report[stage + "_window"] = capture_startup(process, target, capture_dir, environment, report.setdefault(stage + "_captures", []))
+    report["rendered_setup_requires_image_review"] = True
+    return result
 
 
 def native(directory, document, target, output, linux_package="both", fresh_setup=False, public_root=None):
@@ -362,13 +387,11 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
         raise ValueError("invalid fresh AppImage target/mode")
     if any(os.environ.get(name) for name in ("GH_TOKEN", "GITHUB_TOKEN")):
         raise RuntimeError("App native execution must not receive a draft credential")
-    if fresh_setup and target != "x86_64-pc-windows-msvc":
-        raise ValueError("fresh default-home setup currently requires Windows NSIS")
     report = {"source_revision": document["source_revision"], "version": document["version"], "target": target,
-              "runner_platform": native_platform(), "first_use_complete": False, "license_access_verified": False,
+              "runner_platform": native_platform(), "first_use_complete": False, "useful_first_use_verified": False, "native_failure_recovery_verified": False, "license_access_verified": False,
               "reboot_verified": False, "consumer_trust_verified": False, "two_version_update_verified": False, "native_packaging_launch_verified": False, "linux_package_mode": linux_package}
     output.mkdir()
-    process = xvfb = None
+    process = xvfb = manager = None
     installed = None
     owned_deb = False
     appimage = extracted_appimage = None
@@ -469,6 +492,8 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
             xvfb = subprocess.Popen(["Xvfb", ":99", "-screen", "0", "1280x900x24"], env=environment, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             environment["DISPLAY"] = ":99"
             wait_until("owned Xvfb", lambda: subprocess.run(["xdpyinfo"], env=environment, capture_output=True).returncode == 0)
+            if fresh_setup:
+                manager = subprocess.Popen(["openbox"], env=environment, start_new_session=True)
         suffix = ".exe" if target.endswith("windows-msvc") else ""
         installer, activity = commands / ("festival" + suffix), commands / ("festival-activity-engine" + suffix)
         for path in (binary, installer, activity):
@@ -494,13 +519,11 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
             if process.poll() is not None or not (output / "app.png").is_file() or (output / "app.png").stat().st_size == 0:
                 raise RuntimeError("App did not retain a live captured window")
             if fresh_setup:
-                upgrade.wait_windows_setup(process, target, output, environment, report, "fresh")
-                report["default_after_setup"] = fresh_setup_readback(installer, default_managed, environment)
-                upgrade.normal_quit(process, binary, None, target, environment, output)
-                process = subprocess.Popen([str(binary)], env=environment, stdout=log, stderr=subprocess.STDOUT)
+                report["default_after_setup"] = wait_fresh_setup(process, installer, default_managed, target, output, environment, report, "fresh")
+                upgrade.normal_quit(process, binary, binary.parent.parent.parent if target.endswith("apple-darwin") else None, target, environment, output)
+                process = subprocess.Popen([str(binary)], env=environment, stdout=log, stderr=subprocess.STDOUT, start_new_session=os.name != "nt")
                 report["reopened_pid"] = process.pid
-                upgrade.wait_windows_setup(process, target, output, environment, report, "reopened")
-                report["default_after_reopen"] = fresh_setup_readback(installer, default_managed, environment)
+                report["default_after_reopen"] = wait_fresh_setup(process, installer, default_managed, target, output, environment, report, "reopened")
                 for field in ("receipts", "selected_mtime_ns"):
                     if report["default_after_setup"][field] != report["default_after_reopen"][field]:
                         raise ValueError("App relaunch changed selected package receipts/files")
@@ -512,7 +535,7 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
         # Stop only the process created by this proof, before uninstall/temp cleanup.
         stop_owned(process, environment)
         process = None
-        if appimage is not None and linux_package == "both":
+        if appimage is not None and linux_package == "both" and not fresh_setup:
             appimage_proof(appimage, extracted_appimage, target, output, environment, report)
         if installed is not None:
             uninstall_windows()
@@ -536,7 +559,7 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
                     cleanup_errors.append("cannot retain default daemon log: " + str(error))
             elif report.get("fresh_default_setup_verified"):
                 cleanup_errors.append("App setup did not retain a default daemon log")
-            obey = default_managed / "bin/obey.exe"
+            obey = default_managed / "bin" / ("obey.exe" if os.name == "nt" else "obey")
             if obey.is_file():
                 def uninstall_owned_service():
                     command([obey, "service", "uninstall"], environment, timeout=120)
@@ -549,6 +572,11 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
             actions.append(uninstall_windows)
         if owned_deb:
             actions.append(uninstall_deb)
+        if manager is not None:
+            def stop_manager():
+                manager.terminate()
+                manager.wait(timeout=10)
+            actions.append(stop_manager)
         if xvfb is not None:
             def stop_display():
                 xvfb.terminate()
@@ -590,7 +618,7 @@ def main():
             fetch_public(args.directory, args.source, args.version)
         else:
             document = checked_public(args.directory, args.source, args.version)
-            native((args.directory / "assets").resolve(), document, args.target, args.output.resolve(), fresh_setup=True, public_root=args.directory.resolve())
+            native((args.directory / "assets").resolve(), document, args.target, args.output.resolve(), args.linux_package, fresh_setup=True, public_root=args.directory.resolve())
     elif args.mode == "fetch":
         fetch(args.tag, args.version, args.source, args.directory)
     else:
