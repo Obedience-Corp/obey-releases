@@ -1,0 +1,60 @@
+name: Verify fresh public App default-home setup
+on:
+  workflow_dispatch:
+    inputs:
+      source_revision:
+        type: string
+        required: true
+      version:
+        type: string
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: fresh-default-setup-${{ inputs.source_revision }}
+  cancel-in-progress: false
+jobs:
+  native:
+    runs-on: windows-2025
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Require fresh hosted account
+        env:
+          KIND: ${{ runner.environment }}
+        run: test "$KIND" = github-hosted
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Stage pinned signature verification tool only
+        run: |
+          archive="$RUNNER_TEMP/minisign.zip"
+          curl -fsSL -o "$archive" https://github.com/jedisct1/minisign/releases/download/0.12/minisign-0.12-win64.zip
+          echo "37b600344e20c19314b2e82813db2bfdcc408b77b876f7727889dbd46d539479  $archive" | sha256sum -c -
+          unzip -q "$archive" -d "$RUNNER_TEMP/app-minisign"
+          cygpath -w "$RUNNER_TEMP/app-minisign/minisign-win64/x86_64" >> "$GITHUB_PATH"
+      - name: Validate anonymous original public App bytes
+        env:
+          CANDIDATE_RUNNER_KIND: ${{ runner.environment }}
+          SOURCE: ${{ inputs.source_revision }}
+          VERSION: ${{ inputs.version }}
+        run: python scripts/verify_app_candidate.py --mode fetch-public --source "$SOURCE" --version "$VERSION"
+      - name: Let App provision selected tools and verify normal-home relaunch
+        env:
+          CANDIDATE_NATIVE_DISPOSABLE: '1'
+          CANDIDATE_RUNNER_KIND: ${{ runner.environment }}
+          SOURCE: ${{ inputs.source_revision }}
+          VERSION: ${{ inputs.version }}
+        run: python scripts/verify_app_candidate.py --mode verify-fresh --source "$SOURCE" --version "$VERSION" --target x86_64-pc-windows-msvc
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fresh-default-home-windows-proof
+          path: app-proof/
+          if-no-files-found: warn
+          retention-days: 14

@@ -341,7 +341,20 @@ def stop_owned(process, environment):
     process.wait(timeout=20)
 
 
-def native(directory, document, target, output, linux_package="both"):
+def fresh_setup_readback(installer, managed, environment):
+    import verify_app_upgrade as upgrade
+    from verify_selected_components import checked_receipts
+    status = upgrade.default_home_readback(installer.parent / "festival-app.exe", managed, environment)
+    status["receipts"] = checked_receipts(managed)
+    obey = managed / "bin/obey.exe"
+    service = command([obey, "service", "status", "--json"], environment, json_output=True)
+    if not (service.get("installed") and service.get("loaded") and service.get("socket_reachable") and service.get("daemon_pid", 0) > 0):
+        raise RuntimeError("App-provisioned default service is not installed, loaded and responsive")
+    status["service"] = service
+    return status
+
+
+def native(directory, document, target, output, linux_package="both", fresh_setup=False, public_root=None):
     require_clean_host({"aarch64-apple-darwin": "macOS-arm64", "x86_64-apple-darwin": "macOS-x86_64", "x86_64-unknown-linux-gnu": "linux-x86_64", "x86_64-pc-windows-msvc": "windows-x86_64"}.get(target))
     if target not in TARGETS or native_platform() != TARGETS[target][0]:
         raise ValueError("App target does not match native machine")
@@ -349,6 +362,8 @@ def native(directory, document, target, output, linux_package="both"):
         raise ValueError("invalid fresh AppImage target/mode")
     if any(os.environ.get(name) for name in ("GH_TOKEN", "GITHUB_TOKEN")):
         raise RuntimeError("App native execution must not receive a draft credential")
+    if fresh_setup and target != "x86_64-pc-windows-msvc":
+        raise ValueError("fresh default-home setup currently requires Windows NSIS")
     report = {"source_revision": document["source_revision"], "version": document["version"], "target": target,
               "runner_platform": native_platform(), "first_use_complete": False, "license_access_verified": False,
               "reboot_verified": False, "consumer_trust_verified": False, "two_version_update_verified": False, "native_packaging_launch_verified": False, "linux_package_mode": linux_package}
@@ -361,6 +376,15 @@ def native(directory, document, target, output, linux_package="both"):
     for key in list(environment):
         if key.endswith(("_TOKEN", "_PASSWORD", "_PRIVATE_KEY")):
             environment.pop(key, None)
+    default_managed = None
+    if fresh_setup:
+        # Runtime import reuses the existing default-home/normal-quit contracts;
+        # upgrade verification itself imports this packaging module.
+        import verify_app_upgrade as upgrade
+        default_managed = upgrade.default_home_layout(Path.home(), environment)
+    report["fresh_default_setup_verified"] = False
+    report["selected_packages_preseeded"] = False
+
     def uninstall_windows():
         windows_silent(installed / "uninstall.exe", environment)
         wait_until("owned App uninstall", lambda: not (installed / "festival-app.exe").exists())
@@ -375,11 +399,20 @@ def native(directory, document, target, output, linux_package="both"):
     temporary_context = tempfile.TemporaryDirectory(prefix="app-proof-", dir=os.environ["RUNNER_TEMP"])
     try:
         temporary = Path(temporary_context.name)
-        environment.update(FESTIVAL_HOME=str(temporary / "managed"), OBEY_CONFIG=str(temporary / "obey.yaml"))
+        if not fresh_setup:
+            environment.update(FESTIVAL_HOME=str(temporary / "managed"), OBEY_CONFIG=str(temporary / "obey.yaml"))
         # The machine/account itself is disposable. Native OS lookup retains
         # its real HOME, unlike redirected-home tests that miss supervisors.
+        if public_root is not None:
+            retained = output / "public-inputs"
+            retained.mkdir()
+            for name in ("release.json", "SHA256SUMS", "latest.json"):
+                shutil.copyfile(public_root / name, retained / name)
+            for name in ("app-candidate.json", "checksums.txt"):
+                shutil.copyfile(public_root / "assets" / name, retained / name)
         entries = document["targets"][target]
         updater = next(item["name"] for item in entries if item["name"].endswith((".app.tar.gz", ".AppImage", "-setup.exe")))
+        report["original_updater_payload"] = next(item for item in entries if item["name"] == updater)
         verify_signature(directory / updater, directory / (updater + ".sig"), temporary, environment)
         report["production_updater_signature_verified"] = True
         if target.endswith("apple-darwin"):
@@ -460,6 +493,18 @@ def native(directory, document, target, output, linux_package="both"):
             report["window"] = capture_startup(process, target, output, environment, report.setdefault("startup_captures", []))
             if process.poll() is not None or not (output / "app.png").is_file() or (output / "app.png").stat().st_size == 0:
                 raise RuntimeError("App did not retain a live captured window")
+            if fresh_setup:
+                upgrade.wait_windows_setup(process, target, output, environment, report, "fresh")
+                report["default_after_setup"] = fresh_setup_readback(installer, default_managed, environment)
+                upgrade.normal_quit(process, binary, None, target, environment, output)
+                process = subprocess.Popen([str(binary)], env=environment, stdout=log, stderr=subprocess.STDOUT)
+                report["reopened_pid"] = process.pid
+                upgrade.wait_windows_setup(process, target, output, environment, report, "reopened")
+                report["default_after_reopen"] = fresh_setup_readback(installer, default_managed, environment)
+                for field in ("receipts", "selected_mtime_ns"):
+                    if report["default_after_setup"][field] != report["default_after_reopen"][field]:
+                        raise ValueError("App relaunch changed selected package receipts/files")
+                report["fresh_default_setup_verified"] = True
             report["primary_packaged_app_launch_verified"] = True
             if linux_package == "appimage":
                 report["appimage_default_launch_verified"] = True
@@ -482,6 +527,24 @@ def native(directory, document, target, output, linux_package="both"):
         actions = []
         if process is not None and process.poll() is None:
             actions.append(lambda: stop_owned(process, environment))
+        if default_managed is not None:
+            daemon_log = Path.home() / ".local/share/obey/daemon.log"
+            if daemon_log.is_file():
+                try:
+                    shutil.copyfile(daemon_log, output / "default-daemon.log")
+                except OSError as error:
+                    cleanup_errors.append("cannot retain default daemon log: " + str(error))
+            elif report.get("fresh_default_setup_verified"):
+                cleanup_errors.append("App setup did not retain a default daemon log")
+            obey = default_managed / "bin/obey.exe"
+            if obey.is_file():
+                def uninstall_owned_service():
+                    command([obey, "service", "uninstall"], environment, timeout=120)
+                    state = command([obey, "service", "status", "--json"], environment, json_output=True)
+                    report["service_after_cleanup"] = state
+                    if state.get("installed") or state.get("loaded") or state.get("socket_reachable"):
+                        raise RuntimeError("owned default service remained after cleanup")
+                actions.append(uninstall_owned_service)
         if installed is not None and (installed / "uninstall.exe").is_file():
             actions.append(uninstall_windows)
         if owned_deb:
@@ -500,6 +563,7 @@ def native(directory, document, target, output, linux_package="both"):
         if cleanup_errors:
             report["cleanup_failure"] = cleanup_errors
         report["native_packaging_launch_verified"] = "failure" not in report and not cleanup_errors
+        report["fresh_default_setup_verified"] = report["fresh_default_setup_verified"] and report["native_packaging_launch_verified"]
         (output / "proof.json").write_text(json.dumps(report, indent=2) + "\n")
         if cleanup_errors:
             raise RuntimeError("owned App cleanup failed: " + "; ".join(cleanup_errors))
@@ -507,18 +571,27 @@ def native(directory, document, target, output, linux_package="both"):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mode", choices=("fetch", "verify"), required=True)
-    for name in ("tag", "version", "source"):
+    parser.add_argument("--mode", choices=("fetch", "verify", "fetch-public", "verify-fresh"), required=True)
+    parser.add_argument("--tag")
+    for name in ("version", "source"):
         parser.add_argument("--" + name, required=True)
     parser.add_argument("--target")
     parser.add_argument("--linux-package", choices=("both", "appimage"), default="both")
     parser.add_argument("--directory", type=Path, default=Path("app-candidate"))
     parser.add_argument("--output", type=Path, default=Path("app-proof"))
     args = parser.parse_args()
-    identity(args.tag, args.version, args.source)
+    if args.mode in ("fetch", "verify"):
+        identity(args.tag, args.version, args.source)
     if os.environ.get("CANDIDATE_RUNNER_KIND") != "github-hosted" or os.environ.get("GITHUB_REPOSITORY") != REPOSITORY:
         raise RuntimeError("App proof restricted to hosted binary-repository workflow")
-    if args.mode == "fetch":
+    if args.mode in ("fetch-public", "verify-fresh"):
+        from app_upgrade_contract import fetch_public, checked_public
+        if args.mode == "fetch-public":
+            fetch_public(args.directory, args.source, args.version)
+        else:
+            document = checked_public(args.directory, args.source, args.version)
+            native((args.directory / "assets").resolve(), document, args.target, args.output.resolve(), fresh_setup=True, public_root=args.directory.resolve())
+    elif args.mode == "fetch":
         fetch(args.tag, args.version, args.source, args.directory)
     else:
         document = checked_downloads(args.directory, args.version, args.source)

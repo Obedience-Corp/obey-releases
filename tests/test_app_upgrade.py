@@ -57,6 +57,18 @@ def refresh_metadata(root, filename):
 
 
 class UpgradeContracts(unittest.TestCase):
+    def test_fresh_readback_requires_live_service_without_starting_it(self):
+        import verify_app_candidate as app
+        managed = Path("/home/.obey/installer")
+        active = {"installed": True, "loaded": True, "socket_reachable": True, "daemon_pid": 123}
+        with patch.object(upgrade, "default_home_readback", return_value={}), patch("verify_selected_components.checked_receipts", return_value={"files": []}), patch.object(app, "command", return_value=active) as run:
+            self.assertEqual(app.fresh_setup_readback(Path("/app/festival.exe"), managed, {})["service"], active)
+            self.assertEqual(run.call_args.args[0], [managed / "bin/obey.exe", "service", "status", "--json"])
+            for key in active:
+                run.return_value = dict(active, **{key: False})
+                with self.assertRaisesRegex(RuntimeError, "responsive"):
+                    app.fresh_setup_readback(Path("/app/festival.exe"), managed, {})
+
     def test_default_home_refuses_existing_state_or_environment_override(self):
         with tempfile.TemporaryDirectory() as name:
             home = Path(name)
