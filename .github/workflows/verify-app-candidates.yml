@@ -11,6 +11,10 @@ on:
         description: Exact App version
         required: true
         type: string
+      mac_entitlement_diagnostic:
+        description: On Mac failure, probe a separately modified copy; never acceptance
+        type: boolean
+        default: false
       source_revision:
         description: Full reviewed App source revision, never private source
         required: true
@@ -112,6 +116,7 @@ jobs:
           VERSION: ${{ inputs.version }}
           SOURCE: ${{ inputs.source_revision }}
           TARGET: ${{ matrix.target }}
+          APP_PROOF_MAC_ENTITLEMENT_DIAGNOSTIC: ${{ inputs.mac_entitlement_diagnostic }}
         run: python scripts/verify_app_candidate.py --mode verify --tag "$TAG" --version "$VERSION" --source "$SOURCE" --target "$TARGET"
       - uses: actions/upload-artifact@v4
         if: always()
