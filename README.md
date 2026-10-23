@@ -86,6 +86,60 @@ module loading from nested Windows PowerShell5.1. A failed query still fails the
 job and retains a partial report showing which installation/execution checks
 actually completed; partial reports are not successful native acceptance.
 
+## Unpublished App packaging and launch proof
+
+`verify-app-candidates.yml` verifies the actual packaged App on four fresh hosted
+native machines (Mac ARM/Intel, Linux x64, Windows x64). It reuses the separate
+privileged data-only draft fetch and read-only, credential-free native execution
+boundary. No private implementation or private test source is checked out.
+
+Collect four **same-source, same-version** original builder directories, each
+containing its `candidate-<target>.json` and declared artifacts. Preserve those
+inventories. Use a fresh destination with the data-only collector:
+
+```sh
+python scripts/assemble_app_candidate.py --destination app-draft \
+  MAC_ARM_DIR MAC_INTEL_DIR LINUX_X64_DIR WINDOWS_X64_DIR
+```
+
+It retains the exact bytes/hashes, normalizes asset spaces to dots for GitHub,
+and records `original_name`. The resulting `app-candidate.json` uses schema
+`festival-app-candidate/v1`, exact `source_revision`, `version`, and a `targets`
+map containing the original file records. App binaries do not embed a Git
+revision: source identity is validated builder provenance, not an embedded-binary
+claim. Never combine different source revisions. Upload only the collected files
+to an **unpublished draft** `candidate-app-vVERSION-SOURCE8` under existing release
+authority. Verify actual returned asset names/digests against this manifest;
+never infer stored names or download URLs from guessed GitHub normalization.
+
+```sh
+gh workflow run verify-app-candidates.yml --repo Obedience-Corp/obey-releases \
+  -f candidate_tag=candidate-app-vVERSION-SOURCE8 \
+  -f version=VERSION -f source_revision=FULL_REVIEWED_APP_SOURCE_SHA
+```
+
+Every native leg revalidates the entire inventory and checks its updater payload
+with the **pinned production** public key A0880EE086F129E5. A draft or input cannot
+replace the trust anchor. Mac proof compares the read-only DMG's copied App to the
+authenticated updater archive, verifies macOS12 metadata and structural codesign,
+and launches only the owned copy. Windows follows the per-user NSIS `/S` layout
+contract, checks live bundled sidecars, launches the installed App and uninstalls
+only its own installation. Linux installs the owned deb through apt with dependency resolution, checks the
+installed version/layout, and launches it on its own Xvfb. It separately records
+the authenticated downloaded AppImage's default launch. If that fails (including
+unavailable FUSE), extracted startup is diagnostic only and the proof fails; it
+never substitutes extracted success for normal AppImage launch.
+The proof requires a live owned window and saves a screenshot, logs and partial
+JSON on failures. It changes no global security settings or existing installation.
+
+This is packaging/launch acceptance only. A license screen/window is not license
+access, useful first use, a configured provider, a reboot, consumer SmartScreen/
+SAC trust, or an A-to-B update. Reports keep those claims false. Apple Developer ID
+and notarization are optional; per-app Open Anyway remains the supported unsigned
+macOS path. An unavailable GUI or failed launch remains an explicit failed proof,
+not an inferred success from signatures/builds. Never run native mode on an operator
+account. Unit/negative filesystem tests run only in the Docker harness below.
+
 ## Automation checks
 
 Filesystem mutation tests run only in Docker:
