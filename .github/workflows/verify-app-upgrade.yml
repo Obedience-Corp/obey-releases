@@ -3,9 +3,9 @@ on:
   workflow_dispatch:
     inputs:
       package_format:
-        description: Verify all declared formats, or only the unqualified Debian leg
+        description: Verify all declared formats, or one format needing additional proof
         type: choice
-        options: [all, deb]
+        options: [all, deb, nsis]
         default: all
       a_source:
         description: Full reviewed source of published app-test A (compiled endpoint already points to B)
@@ -36,7 +36,7 @@ jobs:
           PACKAGE_FORMAT: ${{ inputs.package_format || 'all' }}
         run: |
           case "$PACKAGE_FORMAT" in
-            all|deb) ;;
+            all|deb|nsis) ;;
             *) echo "unsupported package format selection" >&2; exit 64 ;;
           esac
       - uses: actions/checkout@v4
@@ -65,7 +65,7 @@ jobs:
       fail-fast: false
       matrix:
         include: >-
-          ${{ fromJSON(inputs.package_format == 'deb' && '[{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu","format":"deb"}]' || '[{"runner":"macos-15","target":"aarch64-apple-darwin","format":"dmg"},{"runner":"macos-15-intel","target":"x86_64-apple-darwin","format":"dmg"},{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu","format":"deb"},{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu","format":"appimage"},{"runner":"windows-2025","target":"x86_64-pc-windows-msvc","format":"nsis"}]') }}
+          ${{ fromJSON(inputs.package_format == 'deb' && '[{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu","format":"deb"}]' || inputs.package_format == 'nsis' && '[{"runner":"windows-2025","target":"x86_64-pc-windows-msvc","format":"nsis"}]' || '[{"runner":"macos-15","target":"aarch64-apple-darwin","format":"dmg"},{"runner":"macos-15-intel","target":"x86_64-apple-darwin","format":"dmg"},{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu","format":"deb"},{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu","format":"appimage"},{"runner":"windows-2025","target":"x86_64-pc-windows-msvc","format":"nsis"}]') }}
     runs-on: ${{ matrix.runner }}
     defaults:
       run:
