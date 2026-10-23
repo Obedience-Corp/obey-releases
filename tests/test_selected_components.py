@@ -96,9 +96,9 @@ class SelectedContracts(unittest.TestCase):
     def test_live_status_requires_selected_paths_and_companion_protocol(self):
         with tempfile.TemporaryDirectory() as temporary:
             home = self.fixture(Path(temporary))
-            tools = [{"tool": name, "version": version, "path": str(home / "bin" / name), "present": True} for name, version in (("camp", "0.16.2"), ("fest", "0.9.8"), ("obey", "0.2.2"), ("camp-app", "0.1.0"))]
+            tools = [{"tool": name, "version": version, "path": str(home / "bin" / name), "present": True} for name, version in (("camp", "0.16.2"), ("fest", "0.9.8"), ("obey", "0.2.3"), ("camp-app", "0.1.0"))]
             tools[-1].update(protocol_major=1, capabilities=["status", "open"])
-            tools.append({"tool": "ob", "version": "0.1.0", "present": True, "receipt_version": "0.2.2"})
+            tools.append({"tool": "ob", "version": "0.1.0", "present": True, "receipt_version": "0.2.3"})
             document = {"ok": True, "data": {"tools": tools}}
             checked_status(document, home)
             for field, value in (("version", "0.0.0"), ("path", str(home.parent / "outside")), ("capabilities", ["status"]), ("protocol_major", 0)):
@@ -106,3 +106,26 @@ class SelectedContracts(unittest.TestCase):
                 wrong["data"]["tools"][3][field] = value
                 with self.assertRaises(ValueError):
                     checked_status(wrong, home)
+
+    def test_old_obey_runtime_and_receipt_do_not_qualify_corrected_windows_release(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = self.fixture(Path(temporary))
+            with closing(sqlite3.connect(home / 'state.db')) as database:
+                database.execute("update receipts set version='0.2.2' where package_id='obedience-corp/obey'")
+                database.commit()
+            with self.assertRaises(ValueError):
+                checked_receipts(home)
+            tools = [{'tool': name, 'version': version, 'path': str(home / 'bin' / name), 'present': True} for name, version in [('camp','0.16.2'), ('fest','0.9.8'), ('obey','0.2.2'), ('camp-app','0.1.0')]]
+            tools[-1].update(protocol_major=1, capabilities=['status','open'])
+            with self.assertRaises(ValueError):
+                checked_status({'ok':True,'data':{'tools':tools}},home)
+
+    def test_actual_windows_runtime_log_requires_observability_and_quiet_discovery(self):
+        from verify_selected_components import checked_windows_discovery_log
+        good = b'time=now level=INFO msg="daemon ready"\ntime=now level=WARN msg="optional provider not configured"\n'
+        result = checked_windows_discovery_log(good)
+        self.assertEqual(result['required_obey_version'], '0.2.3')
+        self.assertEqual(result['sha256'], hashlib.sha256(good).hexdigest())
+        for bad in [b'', b'   ', b'exec: "lsof": executable file not found in %PATH%', b'exec: \"ps\": executable file not found', b'msg="bridge startup provider discovery failed" error="list Codex processes failed"']:
+            with self.assertRaises(ValueError):
+                checked_windows_discovery_log(bad)

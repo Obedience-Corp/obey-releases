@@ -15,7 +15,7 @@ import urllib.request
 
 from verify_candidate import command, native_platform, require_disposable
 
-PACKAGES = {"obedience-corp/festival": "0.3.24", "obedience-corp/obey": "0.2.2",
+PACKAGES = {"obedience-corp/festival": "0.3.24", "obedience-corp/obey": "0.2.3",
             "obedience-corp/camp-app": "0.1.0"}
 TARGETS = {"macOS-arm64": ("darwin/arm64", "darwin-arm64"),
            "macOS-x86_64": ("darwin/amd64", "darwin-amd64"),
@@ -65,11 +65,22 @@ def checked_receipts(home):
     return {"receipts": receipts, "files": files}
 
 
+def checked_windows_discovery_log(data):
+    text = data.decode('utf-8-sig')
+    if not text.strip():
+        raise ValueError('Windows daemon runtime log is empty')
+    if re.search(r'exec:.*\b(?:lsof|ps)\b.*(?:executable file not found|not recognized|cannot find)', text, re.IGNORECASE) or 'bridge startup provider discovery failed' in text.lower():
+        raise ValueError('Windows daemon retained provider discovery failures or Unix utility dependency')
+    return {'required_obey_version': PACKAGES['obedience-corp/obey'], 'bytes': len(data),
+            'sha256': hashlib.sha256(data).hexdigest(), 'unix_utility_discovery_errors_absent': True,
+            'provider_discovery_failure_messages_absent': True}
+
+
 def checked_status(document, home):
     if not document.get("ok"):
         raise ValueError("status failed")
     tools = document["data"]["tools"]
-    for name, version in {"camp": "0.16.2", "fest": "0.9.8", "obey": "0.2.2", "camp-app": "0.1.0"}.items():
+    for name, version in {"camp": "0.16.2", "fest": "0.9.8", "obey": PACKAGES["obedience-corp/obey"], "camp-app": "0.1.0"}.items():
         matches = [tool for tool in tools if tool.get("tool") == name]
         if len(matches) != 1 or not matches[0].get("present") or matches[0].get("version") != version:
             raise ValueError("selected native version is missing or unexpected")
