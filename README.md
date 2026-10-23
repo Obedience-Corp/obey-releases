@@ -245,3 +245,11 @@ Linux packaging/upgrade jobs allow60minutes for prerequisite setup, dependency
 transfer, the original installation budget, native proof and owned cleanup. Other
 OS budgets are unchanged. No producer artifact bytes or runtime/security settings
 change for this harness repair.
+
+Upgrade fixtures initialize the released Camp noninteractively with explicit name,
+description and mission, plus `--no-git --no-skills`, then require its real registry
+entry and persisted camp metadata. Current `camp init --help` must expose all five
+flags. The first five-leg run failed before App installation because description
+and mission were omitted; those failures are retained, not treated as updater
+failures. The corrected invocation was verified with the public suite's actual
+Camp binary in a disposable container and the registry/config read back afterward.

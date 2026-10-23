@@ -104,10 +104,10 @@ def bootstrap_fixture(root, environment, machine):
     receipts = checked_receipts(managed)
     camp = managed / "bin" / ("camp" + suffix)
     help_text = command([camp, "init", "--help"], environment)
-    if any(flag not in help_text for flag in ("--no-git", "--no-skills", "--name")):
+    if any(flag not in help_text for flag in ("--no-git", "--no-skills", "--name", "--description", "--mission")):
         raise RuntimeError("released Camp lacks required fixture initialization contract")
     fixture = root / "fixture-camp"
-    command([camp, "init", fixture, "--name", "FA0027 upgrade fixture", "--no-git", "--no-skills"], environment, timeout=120)
+    command([camp, "init", fixture, "--name", "FA0027 upgrade fixture", "--description", "Disposable published App upgrade fixture", "--mission", "Verify settings and selected tools survive the published App update", "--no-git", "--no-skills"], environment, timeout=120)
     entries = command([camp, "list", "--format", "json"], environment, json_output=True)
     matches = [item for item in entries if Path(item["path"]).resolve() == fixture.resolve()]
     if len(matches) != 1:
