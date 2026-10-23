@@ -29,6 +29,20 @@ class DiagnosticBoundaries(unittest.TestCase):
         with self.assertRaises(ValueError):
             mac.without_managed_browser_entitlements([])
 
+    def test_macos_xattr_fallback_hashes_origin_without_dumping_it(self):
+        responses = [
+            {"exit": 0, "stdout": "com.apple.metadata:kMDItemWhereFroms\ncom.apple.quarantine\n"},
+            {"exit": 0, "stdout": b"private origin URL".hex()},
+            {"exit": 0, "stdout": b"0081;owned".hex()},
+        ]
+        with patch.object(mac, "os", wraps=os) as native_os, patch.object(mac, "capture", side_effect=responses):
+            del native_os.listxattr
+            result = mac.xattrs(Path("/owned/candidate"))
+        origin = result["com.apple.metadata:kMDItemWhereFroms"]
+        self.assertEqual(origin["sha256"], hashlib.sha256(b"private origin URL").hexdigest())
+        self.assertNotIn("value", origin)
+        self.assertEqual(result["com.apple.quarantine"]["value"], "0081;owned")
+
     def diagnostic_fixture(self, root):
         application = root / "installed/Festival App.app"
         binary = application / "Contents/MacOS/festival"
@@ -117,6 +131,25 @@ class DiagnosticBoundaries(unittest.TestCase):
             report = json.loads((root / "report/proof.json").read_text())
             self.assertFalse(report["native_packaging_launch_verified"])
             self.assertEqual(report["failure"], "original SIGKILL")
+
+    def test_windows_nonzero_taskkill_requires_owned_identity_readback(self):
+        process = Mock(pid=123)
+        process.poll.return_value = None
+        identities = [{"pid": 123, "started": "10001"}, {"pid": 124, "started": "10002"}]
+        killed = Mock(returncode=255, stdout="root terminated", stderr="child unsupported")
+        with patch.object(app.os, "name", "nt"), patch.object(app, "Path", return_value=Mock(with_name=Mock(return_value="query.ps1"))), patch.object(app, "command", side_effect=[json.dumps(identities), '{"owned_processes_exited":true}']) as query, patch.object(app.subprocess, "run", return_value=killed):
+            app.stop_owned(process, {})
+        self.assertEqual(json.loads(query.call_args_list[1].args[1]["APP_PROOF_PROCESS_IDENTITIES"]), identities)
+        process.wait.assert_called_once_with(timeout=20)
+
+    def test_windows_cleanup_survivor_readback_still_fails(self):
+        process = Mock(pid=123)
+        process.poll.return_value = None
+        killed = Mock(returncode=0, stdout="", stderr="")
+        with patch.object(app.os, "name", "nt"), patch.object(app, "Path", return_value=Mock(with_name=Mock(return_value="query.ps1"))), patch.object(app, "command", side_effect=['[{"pid":123,"started":"10001"}]', RuntimeError("owned survivor")]), patch.object(app.subprocess, "run", return_value=killed):
+            with self.assertRaisesRegex(RuntimeError, "owned survivor"):
+                app.stop_owned(process, {})
+        process.wait.assert_not_called()
 
     def test_delayed_captures_keep_all_frames_and_late_primary(self):
         with tempfile.TemporaryDirectory() as name:
