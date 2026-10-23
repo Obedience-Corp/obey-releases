@@ -54,10 +54,9 @@ def apt_command(arguments, environment, seconds, check=True):
 
 def install_deb(deb, environment):
     deb = Path(deb).resolve()
-    # This prints exact dependency/download planning even if transfer later
-    # fails. --assume-no intentionally exits1; errors remain in the same log,
-    # and the following checked download/install commands still fail closed.
-    apt_command(["--assume-no", "install", deb], environment, 60, check=False)
+    # Simulation cannot install even when the hosted apt configuration forces
+    # Assume-Yes. The subsequent real download logs its exact transfer size.
+    apt_command(["--simulate", "install", deb], environment, 60)
     apt_command(["install", "--download-only", "-y", deb], environment, APT_DOWNLOAD_SECONDS)
     apt_command(["install", "--no-download", "-y", deb], environment, APT_INSTALL_SECONDS)
 
