@@ -2,6 +2,10 @@ name: Verify fresh public App default-home setup
 on:
   workflow_dispatch:
     inputs:
+      platform_scope:
+        type: choice
+        default: all
+        options: [all, linux]
       source_revision:
         type: string
         required: true
@@ -18,27 +22,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - runner: macos-15
-            target: aarch64-apple-darwin
-            package: both
-            format: dmg
-          - runner: macos-15-intel
-            target: x86_64-apple-darwin
-            package: both
-            format: dmg
-          - runner: ubuntu-24.04
-            target: x86_64-unknown-linux-gnu
-            package: both
-            format: deb
-          - runner: ubuntu-24.04
-            target: x86_64-unknown-linux-gnu
-            package: appimage
-            format: appimage
-          - runner: windows-2025
-            target: x86_64-pc-windows-msvc
-            package: both
-            format: nsis
+        include: >-
+          ${{ fromJSON(inputs.platform_scope == 'linux' && '[{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu","package":"both","format":"deb"},{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu","package":"appimage","format":"appimage"}]' || '[{"runner":"macos-15","target":"aarch64-apple-darwin","package":"both","format":"dmg"},{"runner":"macos-15-intel","target":"x86_64-apple-darwin","package":"both","format":"dmg"},{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu","package":"both","format":"deb"},{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu","package":"appimage","format":"appimage"},{"runner":"windows-2025","target":"x86_64-pc-windows-msvc","package":"both","format":"nsis"}]') }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: ${{ matrix.runner == 'ubuntu-24.04' && 60 || 45 }}
     defaults:
@@ -48,7 +33,10 @@ jobs:
       - name: Require fresh hosted account
         env:
           KIND: ${{ runner.environment }}
-        run: test "$KIND" = github-hosted
+          SCOPE: ${{ inputs.platform_scope || 'all' }}
+        run: |
+          test "$KIND" = github-hosted
+          case "$SCOPE" in all|linux) ;; *) echo 'Unsupported platform scope' >&2; exit 1 ;; esac
       - uses: actions/checkout@v4
         with:
           persist-credentials: false

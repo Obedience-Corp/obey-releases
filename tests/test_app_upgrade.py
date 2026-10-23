@@ -112,6 +112,25 @@ class UpgradeContracts(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "preexisting"):
                 upgrade.default_home_layout(home, env)
 
+    def test_default_xdg_values_are_same_home_and_never_rewritten(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            expected = {"XDG_CONFIG_HOME": str(home / ".config"), "XDG_DATA_HOME": str(home / ".local/share"), "XDG_STATE_HOME": str(home / ".local/state")}
+            original = dict(expected)
+            self.assertEqual(upgrade.default_home_layout(home, expected), home / ".obey/installer")
+            self.assertEqual(expected, original)
+            for name in expected:
+                for value in ("relative", str(home / "foreign"), "$HOME/.config"):
+                    with self.assertRaisesRegex(RuntimeError, name):
+                        upgrade.default_home_layout(home, dict(expected, **{name: value}))
+            (home / ".config").symlink_to(home / "foreign")
+            with self.assertRaisesRegex(RuntimeError, "XDG_CONFIG_HOME"):
+                upgrade.default_home_layout(home, expected)
+            (home / ".config").unlink()
+            (home / ".local").symlink_to(home / "foreign")
+            with self.assertRaisesRegex(RuntimeError, "XDG_DATA_HOME"):
+                upgrade.default_home_layout(home, expected)
+
     def test_setup_window_must_leave_installation_screen(self):
         setup = {"visible_names": ["Getting this machine ready", "not found"]}
         update_dialog = {"visible_names": ["Update ready", "Restart now"]}

@@ -404,7 +404,6 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
         # Runtime import reuses the existing default-home/normal-quit contracts;
         # upgrade verification itself imports this packaging module.
         import verify_app_upgrade as upgrade
-        default_managed = upgrade.default_home_layout(Path.home(), environment)
     report["fresh_default_setup_verified"] = False
     report["selected_packages_preseeded"] = False
 
@@ -422,6 +421,9 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
     temporary_context = tempfile.TemporaryDirectory(prefix="app-proof-", dir=os.environ["RUNNER_TEMP"])
     try:
         temporary = Path(temporary_context.name)
+        if fresh_setup:
+            report["default_xdg_environment"] = {name: environment[name] for name in ("XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME") if environment.get(name)}
+            default_managed = upgrade.default_home_layout(Path.home(), environment)
         if not fresh_setup:
             environment.update(FESTIVAL_HOME=str(temporary / "managed"), OBEY_CONFIG=str(temporary / "obey.yaml"))
         # The machine/account itself is disposable. Native OS lookup retains
@@ -542,7 +544,7 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
             installed = None
     except BaseException as error:
         report["failure"] = str(error)
-        if target.endswith("apple-darwin"):
+        if target.endswith("apple-darwin") and (temporary / "installed/Festival App.app").exists():
             report["mac_diagnostics"] = diagnose_mac_failure(temporary / "installed/Festival App.app", temporary, output, environment, allow_modified_copy=os.environ.get("APP_PROOF_MAC_ENTITLEMENT_DIAGNOSTIC") == "true")
         raise
     finally:
