@@ -217,19 +217,28 @@ def window_capture(process, target, output, environment):
 
 
 def capture_startup(process, target, output, environment, captures, stem="app"):
-    start = time.monotonic()
+    launch_started = time.monotonic()
+    first_capture = None
     latest = None
     for delay, label in ((0, "initial"), (5, "5s"), (15, "15s")):
-        remaining = delay - (time.monotonic() - start)
-        if remaining > 0:
-            time.sleep(remaining)
+        # A cold window or its first screenshot can take longer than all
+        # requested delays. Anchor later samples after that first capture,
+        # otherwise every supposed delayed frame is captured back-to-back.
+        if first_capture is not None:
+            remaining = delay - (time.monotonic() - first_capture)
+            if remaining > 0:
+                time.sleep(remaining)
         if process.poll() is not None:
             raise RuntimeError("owned App exited before delayed startup capture")
         screenshot = output / f"{stem}-{label}.png"
         latest = window_capture(process, target, screenshot, environment)
         if process.poll() is not None or not screenshot.is_file() or screenshot.stat().st_size == 0:
             raise RuntimeError("owned App did not retain a live delayed screenshot")
-        captures.append({"requested_seconds": delay, "elapsed_seconds": round(time.monotonic() - start, 3), "window": latest})
+        captured = time.monotonic()
+        if first_capture is None:
+            first_capture = captured
+        captures.append({"requested_seconds": delay, "elapsed_seconds": round(captured - first_capture, 3),
+                         "elapsed_since_launch_seconds": round(captured - launch_started, 3), "window": latest})
     # Keep the existing primary artifact name, now pointing at the late frame.
     primary = output / f"{stem}.png"
     shutil.copyfile(output / latest["screenshot"], primary)

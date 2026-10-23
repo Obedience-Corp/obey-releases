@@ -172,6 +172,28 @@ class DiagnosticBoundaries(unittest.TestCase):
             self.assertEqual((root / "app.png").read_bytes(), (root / "app-15s.png").read_bytes())
             self.assertEqual(result["screenshot"], "app.png")
 
+    def test_slow_first_capture_does_not_collapse_later_delays(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            process = Mock()
+            process.poll.return_value = None
+            clock = {"now": 0}
+            sleeps = []
+            def sleep(seconds):
+                sleeps.append(seconds)
+                clock["now"] += seconds
+            def capture(process, target, path, environment):
+                if path.name == "app-initial.png":
+                    clock["now"] += 31
+                path.write_bytes(b"actual frame")
+                return {"screenshot": path.name}
+            records = []
+            with patch.object(app.time, "monotonic", side_effect=lambda: clock["now"]), patch.object(app.time, "sleep", side_effect=sleep), patch.object(app, "window_capture", side_effect=capture):
+                app.capture_startup(process, "linux", root, {}, records)
+            self.assertEqual(sleeps, [5, 10])
+            self.assertEqual([item["elapsed_seconds"] for item in records], [0, 5, 15])
+            self.assertEqual([item["elapsed_since_launch_seconds"] for item in records], [31, 36, 46])
+
     def test_exit_between_frames_keeps_prior_evidence_and_fails(self):
         with tempfile.TemporaryDirectory() as name:
             root = Path(name)
