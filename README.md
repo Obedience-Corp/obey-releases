@@ -289,3 +289,21 @@ Fixture proof is separate from actual packaged App proof.
 `package_format=nsis` selects the existing Windows upgrade leg for that follow-up;
 the default still runs all five formats. A real native rerun and image inspection
 are required before claiming the reopened App renders correctly.
+
+`installation_context=default-home` with `package_format=nsis` exercises selected
+packages in the fresh hosted account's normal `~/.obey/installer` directory.
+It refuses preexisting ecosystem state and tool/config environment overrides;
+it does not inject `FESTIVAL_HOME`, `OBEY_CONFIG` or a managed-bin PATH. The original
+redirected fixture remains the default for the five-format mechanism matrix.
+This additional journey checks that A, NSIS-auto-restarted B and normally reopened
+B leave setup and display the enforced licensing screen. It records the bundled
+installer's default-environment status, requires all selected tool versions/paths,
+and rejects rewritten current executable mtimes as well as changed hashes.
+The daemon log is retained before owned service cleanup. The hosted account is
+discarded; default-home files are not removed recursively by the verifier.
+
+This diagnoses the earlier mismatch between NSIS auto-restart and a direct launch
+with process-only overrides. It does not prove that environment inheritance was
+the cause, inspect another process's environment, or claim license access, chat,
+fresh component setup, reboot or consumer Windows trust. Actual native results
+and original screenshots must still be reviewed before accepting the journey.
