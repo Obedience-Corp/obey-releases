@@ -1,0 +1,44 @@
+name: Verify published selected components
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: selected-component-native-proof
+  cancel-in-progress: false
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: macOS-arm64
+          - runner: macos-15-intel
+            target: macOS-x86_64
+          - runner: ubuntu-24.04
+            target: linux-x86_64
+          - runner: windows-2025
+            target: windows-x86_64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Require a disposable hosted native machine
+        shell: bash
+        run: test "${RUNNER_ENVIRONMENT}" = github-hosted
+      - name: Install and inspect only the three selected public packages
+        env:
+          CANDIDATE_NATIVE_DISPOSABLE: '1'
+          CANDIDATE_RUNNER_KIND: github-hosted
+        run: python scripts/verify_selected_components.py --target ${{ matrix.target }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: selected-component-proof-${{ matrix.target }}
+          path: proof-selected-*.json
+          if-no-files-found: error
