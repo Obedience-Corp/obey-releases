@@ -7,7 +7,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 if ($WindowColor) {
     if ($SlowUIA) {
-        Add-Type -ReferencedAssemblies @([Windows.Forms.Form].Assembly.Location, [System.ComponentModel.Component].Assembly.Location) @'
+        Add-Type -ReferencedAssemblies @([Windows.Forms.Form].Assembly.Location, [Windows.Forms.Message].Assembly.Location, [System.ComponentModel.Component].Assembly.Location) @'
 using System;
 using System.Windows.Forms;
 public class SlowAccessibleFixture : Form {
