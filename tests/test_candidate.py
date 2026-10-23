@@ -13,13 +13,33 @@ from unittest.mock import patch
 if os.environ.get("CANDIDATE_TEST_CONTAINER") != "1" or not Path("/.dockerenv").exists():
     raise RuntimeError("filesystem candidate tests require the Docker harness")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-from verify_candidate import TARGETS, checked_manifest, checked_payloads, checked_request, require_disposable
+from verify_candidate import TARGETS, checked_build_info, checked_manifest, checked_payloads, checked_request, require_disposable
 
 SOURCE = "a" * 40
 VERSION = "0.2.2"
 
 
 class CandidateContracts(unittest.TestCase):
+    def test_embedded_build_source_must_match_even_when_cli_stamp_would_match(self):
+        values = {"vcs": "git", "vcs.revision": SOURCE, "vcs.modified": "false",
+                  "CGO_ENABLED": "1", "GOOS": "windows", "GOARCH": "arm64"}
+        def document(settings):
+            return {"Settings": [{"Key": key, "Value": value} for key, value in settings.items()]}
+        checked_build_info(document(values), SOURCE, "windows-arm64")
+        for key, wrong in (("vcs.revision", "c" * 40), ("vcs.modified", "true"),
+                           ("CGO_ENABLED", "0"), ("GOOS", "linux"),
+                           ("GOARCH", "amd64"), ("vcs", "hg")):
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                checked_build_info(document(dict(values, **{key: wrong})), SOURCE, "windows-arm64")
+            missing = dict(values)
+            missing.pop(key)
+            with self.subTest(missing=key), self.assertRaises(ValueError):
+                checked_build_info(document(missing), SOURCE, "windows-arm64")
+        duplicate = document(values)
+        duplicate["Settings"].append({"Key": "vcs.revision", "Value": SOURCE})
+        with self.assertRaises(ValueError):
+            checked_build_info(duplicate, SOURCE, "windows-arm64")
+
     def manifest(self):
         return {"schema": "obey-candidate/v1", "version": VERSION, "source_revision": SOURCE,
                 "artifacts": [{"filename": f"obey-{VERSION}-{target}.tar.gz", "sha256": "b" * 64} for target in TARGETS]}

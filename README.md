@@ -35,7 +35,10 @@ credential is used; workflow permissions are read-only and there is no publicati
 step. A published tag, partial inventory, bad digest, unsafe archive, wrong binary
 identity or wrong runner fails closed.
 
-Each native job checks version/source/platform, starts its own isolated daemon,
+Before executing either binary, each native job uses Go's build-info reader to
+verify both files embed the exact reviewed Git revision, a clean source state,
+CGO enabled, and the expected OS/architecture. A matching CLI version stamp alone
+does not establish source provenance. The job then checks version/source/platform, starts its own isolated daemon,
 verifies real initialized SQLite state and exercises sibling CLI autostart. Mac
 binaries retain the macOS12 floor. Windows additionally checks service install,
 owned-process crash recovery, restart, sibling wake and uninstall, refusing any
