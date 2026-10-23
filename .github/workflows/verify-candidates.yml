@@ -16,7 +16,9 @@ on:
         required: true
         type: string
 
-# This workflow can read draft binaries and cannot publish a release.
+# Default and native jobs are read-only. GitHub requires push access to see
+# drafts, so only the data-only fetch job has contents:write; it never runs
+# candidates or contains a publication step.
 permissions:
   contents: read
 
@@ -25,7 +27,39 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  fetch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Fetch and validate draft data only
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_RUNNER_KIND: ${{ runner.environment }}
+          CANDIDATE_TAG: ${{ inputs.candidate_tag }}
+          CANDIDATE_VERSION: ${{ inputs.version }}
+          SOURCE_REVISION: ${{ inputs.source_revision }}
+        run: |
+          python scripts/verify_candidate.py --mode fetch --tag "$CANDIDATE_TAG" \
+            --version "$CANDIDATE_VERSION" --source "$SOURCE_REVISION"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: validated-candidates
+          path: candidate/
+          if-no-files-found: error
+          retention-days: 7
+
   native:
+    needs: fetch
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -62,10 +96,13 @@ jobs:
         with:
           go-version: '1.26.10'
           cache: false
-      - name: Verify authenticated draft bytes and native contracts
+      - uses: actions/download-artifact@v4
+        with:
+          name: validated-candidates
+          path: candidate
+      - name: Verify artifact bytes and native contracts
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
           CANDIDATE_NATIVE_DISPOSABLE: '1'
           CANDIDATE_RUNNER_KIND: ${{ runner.environment }}
           CANDIDATE_TAG: ${{ inputs.candidate_tag }}
@@ -73,7 +110,7 @@ jobs:
           SOURCE_REVISION: ${{ inputs.source_revision }}
           CANDIDATE_TARGET: ${{ matrix.target }}
         run: |
-          python scripts/verify_candidate.py --tag "$CANDIDATE_TAG" \
+          python scripts/verify_candidate.py --mode verify --tag "$CANDIDATE_TAG" \
             --version "$CANDIDATE_VERSION" --source "$SOURCE_REVISION" \
             --target "$CANDIDATE_TARGET"
       - uses: actions/upload-artifact@v4

@@ -229,28 +229,58 @@ def native_proof(directory, version, source, target, expected_hash):
     return report
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    for name in ("tag", "version", "source", "target"):
-        parser.add_argument("--" + name, required=True)
-    parser.add_argument("--directory", type=Path, default=Path("candidate"))
-    args = parser.parse_args()
-    require_disposable()
-    filename = checked_request(args.tag, args.version, args.source, args.target)
-    if os.environ.get("GITHUB_REPOSITORY") != REPOSITORY:
-        raise RuntimeError("candidate download restricted to the binary repository")
-    metadata = json.loads(subprocess.check_output(["gh", "release", "view", args.tag, "--repo", REPOSITORY,
-                                                   "--json", "isDraft,assets"], text=True))
-    expected = {f"obey-{args.version}-{target}.tar.gz" for target in TARGETS} | {"candidate.json", "checksums.txt"}
-    if not metadata["isDraft"] or len(metadata["assets"]) != len(expected) or {item["name"] for item in metadata["assets"]} != expected:
-        raise ValueError("requires an unpublished draft with the complete candidate inventory")
-    args.directory.mkdir()
-    subprocess.run(["gh", "release", "download", args.tag, "--repo", REPOSITORY, "--dir", str(args.directory),
-                    "--pattern", "candidate.json", "--pattern", "checksums.txt", "--pattern", filename], check=True)
-    hashes = checked_manifest(json.loads((args.directory / "candidate.json").read_text()), args.version, args.source)
-    rows = [line.split() for line in (args.directory / "checksums.txt").read_text().splitlines()]
+def checked_downloads(directory, version, source):
+    hashes = checked_manifest(json.loads((directory / "candidate.json").read_text()), version, source)
+    if {path.name for path in directory.iterdir()} != set(hashes) | {"candidate.json", "checksums.txt"}:
+        raise ValueError("candidate directory has missing or unexpected files")
+    rows = [line.split() for line in (directory / "checksums.txt").read_text().splitlines()]
     if len(rows) != 6 or any(len(row) != 2 for row in rows) or {name: digest for digest, name in rows} != hashes:
         raise ValueError("checksums do not match the complete candidate manifest")
+    for target in TARGETS:
+        filename = f"obey-{version}-{target}.tar.gz"
+        checked_payloads(directory / filename, hashes[filename], target.startswith("windows-"))
+    return hashes
+
+
+def fetch_candidates(tag, version, source, directory):
+    # Data-only boundary: this function never executes any candidate binary.
+    checked_request(tag, version, source, next(iter(TARGETS)))
+    metadata = json.loads(subprocess.check_output(["gh", "release", "view", tag, "--repo", REPOSITORY,
+                                                   "--json", "isDraft,assets"], text=True))
+    expected = {f"obey-{version}-{target}.tar.gz" for target in TARGETS} | {"candidate.json", "checksums.txt"}
+    if not metadata["isDraft"] or len(metadata["assets"]) != len(expected) or {item["name"] for item in metadata["assets"]} != expected:
+        raise ValueError("requires an unpublished draft with the complete candidate inventory")
+    directory.mkdir()
+    arguments = ["gh", "release", "download", tag, "--repo", REPOSITORY, "--dir", str(directory)]
+    for filename in sorted(expected):
+        arguments.extend(["--pattern", filename])
+    subprocess.run(arguments, check=True)
+    checked_downloads(directory, version, source)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--mode", choices=("fetch", "verify"), required=True)
+    for name in ("tag", "version", "source"):
+        parser.add_argument("--" + name, required=True)
+    parser.add_argument("--target")
+    parser.add_argument("--directory", type=Path, default=Path("candidate"))
+    args = parser.parse_args()
+    if os.environ.get("CANDIDATE_RUNNER_KIND") != "github-hosted":
+        raise RuntimeError("candidate staging requires a disposable hosted runner")
+    if os.environ.get("GITHUB_REPOSITORY") != REPOSITORY:
+        raise RuntimeError("candidate verification restricted to the binary repository")
+    if args.mode == "fetch":
+        if args.target is not None:
+            raise ValueError("fetch must validate all targets, not one selected target")
+        fetch_candidates(args.tag, args.version, args.source, args.directory)
+        print("Validated complete eight-file draft inventory; no candidate executed", flush=True)
+        return
+    require_disposable()
+    if os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN"):
+        raise RuntimeError("native execution must not receive a draft download credential")
+    filename = checked_request(args.tag, args.version, args.source, args.target)
+    hashes = checked_downloads(args.directory, args.version, args.source)
     report = native_proof(args.directory, args.version, args.source, args.target, hashes[filename])
     Path("proof-" + args.target + ".json").write_text(json.dumps(report, sort_keys=True, indent=2) + "\n")
     print(json.dumps(report, sort_keys=True), flush=True)
