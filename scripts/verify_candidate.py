@@ -63,6 +63,18 @@ def checked_payloads(archive, expected_hash, windows):
         return {item.name: stream.extractfile(item).read() for item in members}
 
 
+def checked_build_info(document, source, target):
+    settings = document.get("Settings", [])
+    values = {item["Key"]: item["Value"] for item in settings}
+    if len(values) != len(settings):
+        raise ValueError("duplicate binary build settings")
+    goos, goarch = TARGETS[target].split("/")
+    required = {"vcs": "git", "vcs.revision": source, "vcs.modified": "false",
+                "CGO_ENABLED": "1", "GOOS": goos, "GOARCH": goarch}
+    if any(values.get(key) != value for key, value in required.items()):
+        raise ValueError("binary build provenance does not match clean reviewed source and target")
+
+
 def command(arguments, environment, timeout=60, json_output=False, check=True):
     completed = subprocess.run([str(value) for value in arguments], env=environment,
                                capture_output=True, text=True, timeout=timeout)
@@ -121,6 +133,13 @@ def native_proof(directory, version, source, target, expected_hash):
                            NO_COLOR="1", PATH=str(root) + os.pathsep + os.environ["PATH"])
         for credential in ("GH_TOKEN", "GITHUB_TOKEN", "ACTIONS_RUNTIME_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_TOKEN"):
             environment.pop(credential, None)
+        # Inspect both files before executing either. CLI linker stamps alone
+        # can claim the right revision while Go captured a different enclosing
+        # repository; a nested worktree build exposed exactly that mismatch.
+        for binary in (obey, ob):
+            build_info = command(["go", "version", "-m", "-json", binary], environment, json_output=True)
+            checked_build_info(build_info, source, target)
+        report["embedded_source_verified"] = True
         info = command([obey, "version", "--json"], environment, json_output=True)
         abbreviated = info.get("commit", "")
         if info.get("version") != version or info.get("platform") != TARGETS[target] or not re.fullmatch(r"[0-9a-f]{7,40}", abbreviated) or not source.startswith(abbreviated):
