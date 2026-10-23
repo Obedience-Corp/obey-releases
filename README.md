@@ -124,8 +124,11 @@ replace the trust anchor. Mac proof compares the read-only DMG's copied App to t
 authenticated updater archive, verifies macOS12 metadata and structural codesign,
 and launches only the owned copy. Windows follows the per-user NSIS `/S` layout
 contract, checks live bundled sidecars, launches the installed App and uninstalls
-only its own installation. Linux extracts the deb and authenticated AppImage,
-checks version/layout, and launches the actual AppImage payload on its own Xvfb.
+only its own installation. Linux installs the owned deb through apt with dependency resolution, checks the
+installed version/layout, and launches it on its own Xvfb. It separately records
+the authenticated downloaded AppImage's default launch. If that fails (including
+unavailable FUSE), extracted startup is diagnostic only and the proof fails; it
+never substitutes extracted success for normal AppImage launch.
 The proof requires a live owned window and saves a screenshot, logs and partial
 JSON on failures. It changes no global security settings or existing installation.
 

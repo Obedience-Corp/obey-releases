@@ -88,7 +88,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y minisign xvfb x11-utils xdotool imagemagick libwebkit2gtk-4.1-0 libayatana-appindicator3-1 libxdo3
+          sudo apt-get install -y minisign xvfb x11-utils xdotool imagemagick
       - name: Install macOS signature verifier
         if: runner.os == 'macOS'
         run: command -v minisign >/dev/null || brew install minisign

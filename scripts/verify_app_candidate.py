@@ -225,10 +225,23 @@ def native(directory, document, target, output):
     output.mkdir()
     process = xvfb = None
     installed = None
+    owned_deb = False
+    appimage = extracted_appimage = None
     environment = dict(os.environ)
     for key in list(environment):
         if key.endswith(("_TOKEN", "_PASSWORD", "_PRIVATE_KEY")):
             environment.pop(key, None)
+    def uninstall_windows():
+        windows_silent(installed / "uninstall.exe", environment)
+        wait_until("owned App uninstall", lambda: not (installed / "festival-app.exe").exists())
+        report["uninstalled"] = True
+
+    def uninstall_deb():
+        command(["sudo", "apt-get", "remove", "--purge", "-y", "festival-app"], environment, timeout=120)
+        if Path("/usr/bin/festival-app").exists():
+            raise RuntimeError("owned deb uninstall left App executable")
+        report["deb_uninstalled"] = True
+
     temporary_context = tempfile.TemporaryDirectory(prefix="app-proof-", dir=os.environ["RUNNER_TEMP"])
     try:
         temporary = Path(temporary_context.name)
@@ -254,20 +267,28 @@ def native(directory, document, target, output):
             report["installed_version"] = binary_version
         else:
             deb = directory / next(item["name"] for item in entries if item["name"].endswith(".deb"))
-            command(["dpkg-deb", "--extract", deb, temporary / "deb"], environment)
+            if shutil.which("festival-app"):
+                raise RuntimeError("refusing a preexisting App command")
+            package = command(["dpkg-deb", "-f", deb, "Package"], environment).strip()
+            deb_version = command(["dpkg-deb", "-f", deb, "Version"], environment).strip()
+            if package != "festival-app" or deb_version != report["version"]:
+                raise ValueError("deb package/version differs from candidate identity")
+            state = subprocess.run(["dpkg-query", "-W", "-f=${db:Status-Status}", package], capture_output=True, text=True, env=environment)
+            if state.returncode == 0 and state.stdout.strip() != "not-installed":
+                raise RuntimeError("refusing preexisting App package state")
+            owned_deb = True
+            command(["sudo", "apt-get", "install", "-y", deb], environment, timeout=300)
+            installed_version = command(["dpkg-query", "-W", "-f=${Version}", package], environment).strip()
+            if installed_version != report["version"]:
+                raise ValueError("installed deb version mismatch")
+            report["deb_installed_version"] = installed_version
+            report["deb_install_with_dependency_resolution"] = True
             appimage = temporary / updater
             shutil.copyfile(directory / updater, appimage)
             appimage.chmod(0o755)
             subprocess.run([str(appimage), "--appimage-extract"], cwd=temporary, env=environment, check=True, stdout=subprocess.DEVNULL, timeout=60)
-            root = temporary / "squashfs-root"
-            binary, commands, resources = root / "AppRun", root / "usr/bin", root / "usr/lib"
-            deb_binary = temporary / "deb/usr/bin/festival-app"
-            if not deb_binary.is_file():
-                raise ValueError("deb does not contain the App executable")
-            deb_version = command(["dpkg-deb", "-f", deb, "Version"], environment).strip()
-            if deb_version != report["version"]:
-                raise ValueError("deb version differs from candidate identity")
-            report["deb_version"] = deb_version
+            extracted_appimage = temporary / "squashfs-root/AppRun"
+            binary, commands, resources = Path("/usr/bin/festival-app"), Path("/usr/bin"), Path("/usr/lib")
             if Path("/tmp/.X11-unix/X99").exists():
                 raise RuntimeError("refusing a preexisting display")
             xvfb = subprocess.Popen(["Xvfb", ":99", "-screen", "0", "1280x900x24"], env=environment, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -301,10 +322,32 @@ def native(directory, document, target, output):
         # Stop only the process created by this proof, before uninstall/temp cleanup.
         stop_owned(process, environment)
         process = None
+        if appimage is not None:
+            with (output / "appimage-default.log").open("w") as log:
+                process = subprocess.Popen([str(appimage)], env=environment, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+                try:
+                    report["appimage_default_window"] = window_capture(process, target, output / "appimage-default.png", environment)
+                    if process.poll() is not None:
+                        raise RuntimeError("default AppImage exited during launch")
+                    report["appimage_default_launch_verified"] = True
+                except BaseException as error:
+                    report["appimage_default_launch_verified"] = False
+                    report["appimage_default_failure"] = str(error)
+                    report["appimage_default_exit"] = process.poll()
+            stop_owned(process, environment)
+            process = None
+            if not report["appimage_default_launch_verified"]:
+                # This is deliberately a diagnostic, never a substitute for the
+                # original downloaded AppImage's normal startup result.
+                with (output / "appimage-extracted-diagnostic.log").open("w") as log:
+                    process = subprocess.Popen([str(extracted_appimage)], env=environment, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+                    report["appimage_extracted_diagnostic_window"] = window_capture(process, target, output / "appimage-extracted-diagnostic.png", environment)
+                    report["appimage_extracted_diagnostic_only"] = True
+                stop_owned(process, environment)
+                process = None
+                raise RuntimeError("default AppImage launch failed; extracted startup is diagnostic only")
         if installed is not None:
-            windows_silent(installed / "uninstall.exe", environment)
-            wait_until("owned App uninstall", lambda: not (installed / "festival-app.exe").exists())
-            report["uninstalled"] = True
+            uninstall_windows()
             installed = None
     except BaseException as error:
         report["failure"] = str(error)
@@ -315,7 +358,9 @@ def native(directory, document, target, output):
         if process is not None and process.poll() is None:
             actions.append(lambda: stop_owned(process, environment))
         if installed is not None and (installed / "uninstall.exe").is_file():
-            actions.append(lambda: windows_silent(installed / "uninstall.exe", environment))
+            actions.append(uninstall_windows)
+        if owned_deb:
+            actions.append(uninstall_deb)
         if xvfb is not None:
             def stop_display():
                 xvfb.terminate()
