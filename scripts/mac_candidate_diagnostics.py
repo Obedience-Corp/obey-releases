@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import plistlib
+import re
 import subprocess
 
 MANAGED_BROWSER_ENTITLEMENTS = frozenset({
@@ -99,26 +100,38 @@ def diagnose(app, temporary, output, environment, allow_modified_copy=False):
             else:
                 directory = temporary / "mac-entitlement-diagnostic-only"
                 directory.mkdir()
-                baseline, modified = directory / "original-copy", directory / "modified-copy"
+                baseline, control, modified = (directory / name for name in ("original-copy", "same-entitlement-copy", "modified-copy"))
+                identifiers = re.findall(r"^Identifier=(.+)$", signed.get("stderr", ""), re.MULTILINE)
+                if len(identifiers) != 1 or not identifiers[0].strip():
+                    raise RuntimeError("original signing identifier is unavailable or ambiguous")
+                identifier = identifiers[0]
                 probe = {"diagnostic_only": True, "removed_entitlements": removed,
-                         "original_sha256": hashlib.sha256(original.read_bytes()).hexdigest()}
+                         "original_sha256": hashlib.sha256(original.read_bytes()).hexdigest(),
+                         "signing_identifier": identifier}
                 report["modified_copy_probe"] = probe
-                for destination in (baseline, modified):
+                for destination in (baseline, control, modified):
                     copied = capture(["ditto", original, destination], environment)
                     if copied.get("exit") != 0 or hashlib.sha256(destination.read_bytes()).hexdigest() != probe["original_sha256"]:
                         raise RuntimeError("diagnostic copy did not retain original bytes")
                 probe["unchanged_copy_xattrs"] = xattrs(baseline)
                 probe["unchanged_copy_execution"] = capture([baseline, "version"], environment)
-                plist = directory / "filtered-entitlements.plist"
-                plist.write_bytes(plistlib.dumps(filtered))
-                probe["signing"] = capture(["codesign", "--force", "--sign", "-", "--options", "runtime", "--entitlements", plist, modified], environment)
-                if probe["signing"].get("exit") == 0:
-                    display = capture(["codesign", "-dvv", "--entitlements", ":-", modified], environment)
-                    probe["modified_codesign"] = display
-                    if display.get("exit") != 0 or plistlib.loads(display.get("stdout", "").encode()) != filtered:
-                        raise RuntimeError("diagnostic signing changed unexpected entitlement keys")
-                    probe["modified_sha256"] = hashlib.sha256(modified.read_bytes()).hexdigest()
-                    probe["modified_copy_execution"] = capture([modified, "version"], environment)
+                for destination, values, label in ((control, entitlements, "same_entitlement"),
+                                                    (modified, filtered, "modified")):
+                    plist = directory / (label + "-entitlements.plist")
+                    plist.write_bytes(plistlib.dumps(values))
+                    signing = capture(["codesign", "--force", "--sign", "-", "--identifier", identifier,
+                                       "--options", "runtime", "--entitlements", plist, destination], environment)
+                    probe[label + "_signing"] = signing
+                    if signing.get("exit") != 0:
+                        raise RuntimeError("diagnostic signing failed for " + label)
+                    display = capture(["codesign", "-dvv", "--entitlements", ":-", destination], environment)
+                    probe[label + "_codesign"] = display
+                    actual_identifiers = re.findall(r"^Identifier=(.+)$", display.get("stderr", ""), re.MULTILINE)
+                    if (display.get("exit") != 0 or plistlib.loads(display.get("stdout", "").encode()) != values
+                            or actual_identifiers != [identifier]):
+                        raise RuntimeError("diagnostic signing changed unexpected entitlements or identifier")
+                    probe[label + "_sha256"] = hashlib.sha256(destination.read_bytes()).hexdigest()
+                    probe[label + "_copy_execution"] = capture([destination, "version"], environment)
                 # Neither this successful diagnostic nor an unmodified copy can
                 # replace the original failed installed-bundle probe.
     except Exception as error:

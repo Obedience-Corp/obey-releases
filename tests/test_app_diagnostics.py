@@ -51,6 +51,7 @@ class DiagnosticBoundaries(unittest.TestCase):
                 if Path(arguments[-1]).name == "modified-copy":
                     values, _ = mac.without_managed_browser_entitlements(values)
                 data["stdout"] = plistlib.dumps(values).decode()
+                data["stderr"] = "Identifier=original.festival\n"
             elif arguments[-1] == "version":
                 data.update(exit=0 if Path(arguments[0]).name == "modified-copy" else -9,
                             stdout="v0.3.7" if Path(arguments[0]).name == "modified-copy" else "")
@@ -68,11 +69,34 @@ class DiagnosticBoundaries(unittest.TestCase):
             self.assertFalse(report["original_candidate_accepted"])
             probe = report["modified_copy_probe"]
             self.assertEqual(probe["unchanged_copy_execution"]["exit"], -9)
+            self.assertEqual(probe["same_entitlement_copy_execution"]["exit"], -9)
             self.assertEqual(probe["modified_copy_execution"]["exit"], 0)
+            signed = [call for call in calls if "--force" in call]
+            self.assertEqual(len(signed), 2)
+            for call in signed:
+                self.assertEqual(call[call.index("--identifier") + 1], "original.festival")
+                self.assertEqual(call[call.index("--options") + 1], "runtime")
+            self.assertEqual(probe["signing_identifier"], "original.festival")
             self.assertTrue(probe["diagnostic_only"])
             self.assertNotEqual(probe["original_sha256"], probe["modified_sha256"])
             self.assertEqual(set(probe["removed_entitlements"]), mac.MANAGED_BROWSER_ENTITLEMENTS)
             self.assertNotIn("diagnostic_error", report)
+
+    def test_resigned_control_identifier_drift_stops_comparison(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            application, binary, output, capture, calls = self.diagnostic_fixture(root)
+            def wrong_identifier(arguments, environment, timeout=30):
+                record = capture(arguments, environment, timeout)
+                if arguments[0] == "codesign" and "-dvv" in arguments and Path(arguments[-1]).name == "same-entitlement-copy":
+                    record["stderr"] = "Identifier=unexpected\n"
+                return record
+            with patch.object(mac, "capture", side_effect=wrong_identifier), patch.object(mac, "crash_reports", return_value=[]):
+                report = mac.diagnose(application, root, output, {}, True)
+            self.assertIn("identifier", report["diagnostic_error"])
+            self.assertNotIn("modified_copy_execution", report["modified_copy_probe"])
+            self.assertTrue(report["original_cli_bytes_unchanged"])
+            self.assertFalse(report["original_candidate_accepted"])
 
     def test_default_failure_diagnostics_do_not_sign_or_copy_payloads(self):
         with tempfile.TemporaryDirectory() as name:
