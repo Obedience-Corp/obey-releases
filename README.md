@@ -411,3 +411,11 @@ nonempty runtime evidence and absence of the prior Unix-utility/provider
 session-discovery failure messages after normal reopen. Exact Obey0.2.3 receipts
 and resolved executable versions are required; this does not prove provider chat
 or licensed useful work. Historical0.2.2 packets remain unchanged.
+
+An original Linux window timeout now retains the owned root/descendant PID birth,
+state and executable paths, isolated X-display window inventory and a separately
+labeled diagnostic desktop image. No environment/credential dump, process signal,
+security workaround or timeout inflation is used, and diagnostics cannot turn a
+failed primary launch into success. `package_format=appimage` selects only the
+outstanding AppImage upgrade leg; default all-five and complete A/B input checks
+remain unchanged.

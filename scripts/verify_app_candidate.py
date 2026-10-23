@@ -22,6 +22,7 @@ import time
 from verify_candidate import REPOSITORY, command, native_platform, wait_until
 from verify_selected_components import require_clean_host, record_windows_discovery_snapshot
 from mac_candidate_diagnostics import diagnose as diagnose_mac_failure
+from linux_window_diagnostics import capture_failure as capture_linux_failure
 
 TARGETS = {
     "aarch64-apple-darwin": ("darwin/arm64", {".dmg", ".app.tar.gz", ".app.tar.gz.sig"}),
@@ -252,7 +253,14 @@ def window_capture(process, target, output, environment):
         require_alive()
         result = subprocess.run(["xdotool", "search", "--onlyvisible", "--pid", str(process.pid)], env=environment, text=True, capture_output=True)
         return result.stdout.splitlines()[0] if result.returncode == 0 and result.stdout.strip() else None
-    found = wait_until("owned App window", window)
+    try:
+        found = wait_until("owned App window", window)
+    except (RuntimeError, subprocess.TimeoutExpired) as error:
+        try:
+            capture_linux_failure(process, output, environment, error)
+        except Exception as diagnostic_error:
+            print(json.dumps({'linux_window_diagnostic_error': str(diagnostic_error)}), flush=True)
+        raise
     title = command(["xdotool", "getwindowname", found], environment).strip()
     command(["import", "-window", found, output], environment)
     return {"window_id": found, "title": title, "screenshot": output.name}

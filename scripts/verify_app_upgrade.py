@@ -380,6 +380,7 @@ def native(root, target, package_format, a_source, a_version, b_source, b_versio
             if default_managed is not None:
                 report["default_before"] = default_home_readback(binary, managed, environment)
             process = subprocess.Popen([str(binary)], env=environment, stdout=log, stderr=subprocess.STDOUT, start_new_session=os.name != "nt")
+            report["a_pid"] = process.pid
             report["a_window"] = app.window_capture(process, target, output / "a.png", environment)
             # A's real Update ready modal hides the underlying licensing screen
             # from UIA. Invoke its authenticated Restart now control below;
@@ -416,6 +417,7 @@ def native(root, target, package_format, a_source, a_version, b_source, b_versio
             process = None
             report["normal_quit_verified"] = True
             process = subprocess.Popen([str(binary)], env=environment, stdout=log, stderr=subprocess.STDOUT, start_new_session=os.name != "nt")
+            report["reopened_pid"] = process.pid
             report["reopened_captures"] = []
             report["reopened_b_window"] = app.capture_startup(process, target, output, environment, report["reopened_captures"], "b-reopened")
             report["reopened_b_payload"] = check_installed_b(package_format, binary, bundle, reference, artifact(root / "b", b, target, ".AppImage") if package_format == "appimage" else None, b_version, environment)
