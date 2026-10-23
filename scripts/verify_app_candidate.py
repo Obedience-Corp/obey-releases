@@ -20,7 +20,7 @@ import tempfile
 import time
 
 from verify_candidate import REPOSITORY, command, native_platform, wait_until
-from verify_selected_components import require_clean_host
+from verify_selected_components import require_clean_host, record_windows_discovery_snapshot
 from mac_candidate_diagnostics import diagnose as diagnose_mac_failure
 
 TARGETS = {
@@ -537,6 +537,9 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
                 for field in ("receipts", "selected_mtime_ns"):
                     if report["default_after_setup"][field] != report["default_after_reopen"][field]:
                         raise ValueError("App relaunch changed selected package receipts/files")
+                if target.endswith('windows-msvc'):
+                    daemon_log = Path.home() / '.local/share/obey/daemon.log'
+                    record_windows_discovery_snapshot(daemon_log, output, report)
                 report["fresh_default_setup_verified"] = True
             report["primary_packaged_app_launch_verified"] = True
             if linux_package == "appimage":

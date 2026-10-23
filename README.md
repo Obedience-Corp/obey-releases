@@ -58,7 +58,7 @@ verification does not grant publication authority or waive any failed festival g
 `verify-selected-components.yml` uses the actual public Installer0.3.7 and its
 official signed marketplace source to install only the App's selected suite,
 Camp App companion and Obey packages. The expected receipts are suite0.3.24,
-CampApp0.1.0 and Obey0.2.2. Producer URLs/checksums remain in the existing release
+CampApp0.1.0 and Obey0.2.3. Producer URLs/checksums remain in the existing release
 and marketplace machinery, rather than a second install catalog.
 
 ```sh
@@ -403,3 +403,11 @@ must be empty before temporary files are deleted. A detached instance receives
 only normal stop through its unique fixture config. No arbitrary PID/name kill
 or default-home service acceptance is inferred. The existing fresh-default
 service lifecycle checks remain strict and unchanged.
+
+
+Fresh Windows setup retains the exact checked `windows-discovery-after-reopen.log`
+snapshot and its digest separately from the later full default daemon log, requiring
+nonempty runtime evidence and absence of the prior Unix-utility/provider
+session-discovery failure messages after normal reopen. Exact Obey0.2.3 receipts
+and resolved executable versions are required; this does not prove provider chat
+or licensed useful work. Historical0.2.2 packets remain unchanged.
