@@ -419,3 +419,32 @@ security workaround or timeout inflation is used, and diagnostics cannot turn a
 failed primary launch into success. `package_format=appimage` selects only the
 outstanding AppImage upgrade leg; default all-five and complete A/B input checks
 remain unchanged.
+
+### Existing managed Obey users
+
+The public default-home setup workflow accepts `existing_user=older-idle` or
+`current`; its default `none` still runs the unchanged fresh-install scenario.
+Both explicit existing scenarios seed current official suite/camp-app/Obey,
+a registered fixture camp, user preferences and foreign files on a guarded
+fresh hosted account. The older scenario then stops the fixture-owned service,
+verifies the actual public0.2.2 archive/checksums and replaces exactly the two
+owned Obey binary files and their matching receipt version/hashes. This is
+explicit fixture preparation, not an Installer historical-version feature.
+The initial runtime version, receipt hashes and idle service are read back.
+
+A recent `lastUpdateCheckAt` prevents the ordinary background check from hiding
+the minimum-version behavior. Original public App bytes must update0.2.2 to0.2.3,
+restart the idle service, preserve other selected packages/settings/foreign files,
+and preserve current bytes, mtimes, receipts and daemon PID on normal reopen.
+The separate current scenario checks no-op behavior from the first launch,
+including the service unit hash and mtime. All underlying fresh/package guards,
+original App signature checks and owned service cleanup remain in use. Reports
+set `existing_user_reconciliation_verified`, never `fresh_default_setup_verified`,
+for seeded scenarios. Actual captured screens still require review.
+
+The seeding helper deliberately preserves an existing user's shell-setup opt-out;
+these scenarios do not prove ordinary new-shell integration, active-session
+continuity, licensed access or useful first use. The old Windows daemon's retained
+log can contain its known Unix-discovery errors, so the older scenario preserves
+that full mixed-version log without claiming it is error-free. The separate
+fresh0.2.3 scenario retains its strict Windows discovery-log assertion.

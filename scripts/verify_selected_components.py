@@ -43,12 +43,17 @@ def checked_bootstrap(data, checksums, name):
     return digest
 
 
-def checked_receipts(home):
+def checked_receipts(home, *, obey_version=None):
+    expected = dict(PACKAGES)
+    if obey_version is not None:
+        if obey_version not in ("0.2.2", PACKAGES["obedience-corp/obey"]):
+            raise ValueError("unsupported existing Obey fixture version")
+        expected["obedience-corp/obey"] = obey_version
     with closing(sqlite3.connect((home / "state.db").as_uri() + "?mode=ro", uri=True)) as database:
         database.row_factory = sqlite3.Row
         receipts = [dict(row) for row in database.execute("select * from receipts order by package_id")]
         files = [dict(row) for row in database.execute("select * from receipt_files order by path")]
-    if {row["package_id"]: row["version"] for row in receipts} != PACKAGES:
+    if {row["package_id"]: row["version"] for row in receipts} != expected:
         raise ValueError("receipt selection/version differs from the App's three selected packages")
     if any(row["source"] != "official-obey" or row["channel"] != "stable" for row in receipts):
         raise ValueError("selected package did not use the official stable source")
@@ -87,11 +92,14 @@ def record_windows_discovery_snapshot(source, output, report):
     evidence['verified'] = True
 
 
-def checked_status(document, home):
+def checked_status(document, home, *, obey_version=None):
+    required_obey = PACKAGES["obedience-corp/obey"] if obey_version is None else obey_version
+    if required_obey not in ("0.2.2", PACKAGES["obedience-corp/obey"]):
+        raise ValueError("unsupported existing Obey fixture version")
     if not document.get("ok"):
         raise ValueError("status failed")
     tools = document["data"]["tools"]
-    for name, version in {"camp": "0.16.2", "fest": "0.9.8", "obey": PACKAGES["obedience-corp/obey"], "camp-app": "0.1.0"}.items():
+    for name, version in {"camp": "0.16.2", "fest": "0.9.8", "obey": required_obey, "camp-app": "0.1.0"}.items():
         matches = [tool for tool in tools if tool.get("tool") == name]
         if len(matches) != 1 or not matches[0].get("present") or matches[0].get("version") != version:
             raise ValueError("selected native version is missing or unexpected")
@@ -101,7 +109,7 @@ def checked_status(document, home):
     if companion.get("protocol_major") != 1 or not {"status", "open"} <= set(companion.get("capabilities", [])):
         raise ValueError("companion lacks required control capabilities")
     siblings = [tool for tool in tools if tool.get("tool") == "ob"]
-    if len(siblings) != 1 or not siblings[0].get("present") or siblings[0].get("receipt_version") != PACKAGES["obedience-corp/obey"]:
+    if len(siblings) != 1 or not siblings[0].get("present") or siblings[0].get("receipt_version") != required_obey:
         raise ValueError("sibling CLI is not in the selected Obey package")
 
 
