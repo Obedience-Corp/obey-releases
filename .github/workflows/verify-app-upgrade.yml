@@ -2,6 +2,11 @@ name: Verify published immutable App upgrade
 on:
   workflow_dispatch:
     inputs:
+      failure_mode:
+        description: Optional bounded transport failure and same-process retry (new-menu A required)
+        type: choice
+        options: [none, offline-check]
+        default: none
       installation_context:
         description: Redirected mechanism fixture, or Windows default-home relaunch acceptance
         type: choice
@@ -40,6 +45,7 @@ jobs:
         env:
           PACKAGE_FORMAT: ${{ inputs.package_format || 'all' }}
           INSTALLATION_CONTEXT: ${{ inputs.installation_context || 'redirected' }}
+          FAILURE_MODE: ${{ inputs.failure_mode || 'none' }}
         run: |
           case "$PACKAGE_FORMAT" in
             all|deb|nsis) ;;
@@ -48,6 +54,10 @@ jobs:
           case "$INSTALLATION_CONTEXT:$PACKAGE_FORMAT" in
             redirected:*|default-home:nsis) ;;
             *) echo "default-home acceptance requires package_format=nsis" >&2; exit 64 ;;
+          esac
+          case "$FAILURE_MODE:$INSTALLATION_CONTEXT:$PACKAGE_FORMAT" in
+            none:*|offline-check:redirected:nsis) ;;
+            *) echo "offline-check requires redirected NSIS-only selection" >&2; exit 64 ;;
           esac
       - uses: actions/checkout@v4
         with:
@@ -125,7 +135,8 @@ jobs:
           TARGET: ${{ matrix.target }}
           FORMAT: ${{ matrix.format }}
           INSTALLATION_CONTEXT: ${{ inputs.installation_context || 'redirected' }}
-        run: python scripts/verify_app_upgrade.py --mode verify --a-source "$A_SOURCE" --a-version "$A_VERSION" --b-source "$B_SOURCE" --b-version "$B_VERSION" --target "$TARGET" --format "$FORMAT" --installation-context "$INSTALLATION_CONTEXT"
+          FAILURE_MODE: ${{ inputs.failure_mode || 'none' }}
+        run: python scripts/verify_app_upgrade.py --mode verify --a-source "$A_SOURCE" --a-version "$A_VERSION" --b-source "$B_SOURCE" --b-version "$B_VERSION" --target "$TARGET" --format "$FORMAT" --installation-context "$INSTALLATION_CONTEXT" --failure-mode "$FAILURE_MODE"
       - uses: actions/upload-artifact@v4
         if: always()
         with:

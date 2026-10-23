@@ -341,3 +341,28 @@ official Ubuntu24 image explicitly declares its normal XDG config path in
 [configure-environment.sh](https://github.com/actions/runner-images/blob/ubuntu24/20261012.334/images/ubuntu/scripts/build/configure-environment.sh).
 `platform_scope=linux` targets only the two Linux packages when repairing that
 baseline; the default remains all five native legs, and invalid scope fails.
+
+## Native offline update check and same-process retry
+
+The existing upgrade workflow's opt-in `failure_mode=offline-check` requires
+`package_format=nsis` and `installation_context=redirected`. Default none/all-five
+coverage is unchanged. A must contain the real native **Check for app updates**
+menu and already target the immutable B feed. Old A/B artifacts are not modified.
+
+An owned loopback CONNECT proxy blocks the child App's update transport, while
+real TLS, feed URLs and pinned production signatures stay intact. Actual UI
+Automation invokes the menu; a visible update-check error and a newly observed
+blocked request are mandatory. A's installed payload and retained user/component
+state must remain unchanged. The same PID then retries through the same menu
+after tunnels to the exact public GitHub asset hosts are enabled; existing real
+Restart now, B payload/version, normal reopen and preserved-state checks follow.
+The proxy changes only the disposable child environment, never system/user proxy
+settings, certificate trust or licensing. Unknown destinations are denied; no
+headers, credentials or TLS contents are recorded.
+
+Reports distinguish this one transport-failure recovery case from signature/feed
+corruption, rollback, other-OS failure cases, reboot or useful licensed work. A
+missing/effectless proxy, changed A state, wrong PID, absent real menu, wrong B
+payload or incomplete owned cleanup fails the run. The normal hosted WinForms
+fixture exercises actual menu invocation and stale-identity refusal before native
+candidate evidence may rely on it. No new native run is accepted from unit tests.

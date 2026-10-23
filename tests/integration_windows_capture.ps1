@@ -13,6 +13,20 @@ if ($WindowColor) {
     $form.Size = [Drawing.Size]::new(500, 400)
     $form.BackColor = [Drawing.Color]::FromName($WindowColor)
     $form.TopMost = $WindowColor -eq 'Blue'
+    if ($WindowColor -eq 'Red') {
+        $menu = [Windows.Forms.MenuStrip]::new()
+        $appMenu = [Windows.Forms.ToolStripMenuItem]::new('App')
+        $check = [Windows.Forms.ToolStripMenuItem]::new('Check for app updates')
+        $script:menuInvocations = 0
+        $check.Add_Click({
+            $script:menuInvocations++
+            [IO.File]::WriteAllText("$ReadyPath.menu.json", (@{pid=$PID; count=$script:menuInvocations} | ConvertTo-Json -Compress))
+        })
+        [void]$appMenu.DropDownItems.Add($check)
+        [void]$menu.Items.Add($appMenu)
+        $form.MainMenuStrip = $menu
+        $form.Controls.Add($menu)
+    }
     $form.Add_Shown({
         $state = @{pid=$PID; handle=$form.Handle.ToInt64(); visible=$form.Visible;
             apartment=[Threading.Thread]::CurrentThread.ApartmentState.ToString()} | ConvertTo-Json -Compress
@@ -48,6 +62,37 @@ function StartFixture($color) {
 }
 try {
     $target = StartFixture 'Red'
+    $env:APP_UPGRADE_MODE = 'check-updates'
+    $env:APP_UPGRADE_PID = $target.Id.ToString()
+    $env:APP_UPGRADE_EXE = $target.Path
+    $env:APP_UPGRADE_STARTED = '0'
+    $menuAction = Join-Path $PSScriptRoot '../scripts/windows_app_upgrade.ps1'
+    $menuResult = Join-Path $env:RUNNER_TEMP 'capture-fixture-Red.ready.json.menu.json'
+    function InvokeMenuFixture($tag) {
+        $stdout = Join-Path $env:RUNNER_TEMP "capture-fixture-menu-$tag.stdout.log"
+        $stderr = Join-Path $env:RUNNER_TEMP "capture-fixture-menu-$tag.stderr.log"
+        $helper = Start-Process (Get-Command pwsh).Source -WindowStyle Hidden -Wait -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr -ArgumentList @('-NoProfile', '-NonInteractive', '-File', "`"$menuAction`"")
+        try { return @{code=$helper.ExitCode; output=(Get-Content -Raw $stdout); error=(Get-Content -Raw $stderr)} }
+        finally { $helper.Dispose() }
+    }
+    $stale = InvokeMenuFixture 'stale'
+    if ($stale.code -eq 0 -or $stale.error -notmatch 'PID was reused') { throw "Stale menu identity was not refused: $($stale.error)" }
+    if (Test-Path $menuResult) { throw 'Rejected identity invoked the menu fixture' }
+    $env:APP_UPGRADE_STARTED = $target.StartTime.ToUniversalTime().Ticks.ToString()
+    $deadline = [DateTime]::UtcNow.AddSeconds(10)
+    do {
+        $invocation = InvokeMenuFixture 'owned'
+        if ($invocation.code -ne 0) { throw "Owned menu helper failed: $($invocation.error)" }
+        $menu = $invocation.output | ConvertFrom-Json
+        if ($menu.invoked) { break }
+        Start-Sleep -Milliseconds 100
+    } while ([DateTime]::UtcNow -lt $deadline)
+    if (-not $menu.invoked -or $menu.root_pid -ne $target.Id) { throw 'Owned native App menu invocation did not verify' }
+    $deadline = [DateTime]::UtcNow.AddSeconds(5)
+    while (-not (Test-Path $menuResult) -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 100 }
+    $observed = Get-Content -Raw $menuResult | ConvertFrom-Json
+    if ($observed.pid -ne $target.Id -or $observed.count -ne 1) { throw 'Menu action did not run exactly once in the owned fixture' }
+    'PASS: stale menu identity refused; actual owned App menu action invoked once'
     $obscurer = StartFixture 'Blue'
     Start-Sleep -Milliseconds 500
     $baseline = [Drawing.Bitmap]::new(1, 1)

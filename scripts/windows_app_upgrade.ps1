@@ -28,12 +28,40 @@ if ($mode -eq 'quit') {
     '{"normal_close_requested":true}'
     exit 0
 }
-if ($mode -ne 'restart') { throw 'Unknown App UI operation' }
+if ($mode -notin @('restart', 'check-updates')) { throw 'Unknown App UI operation' }
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 if ($process.MainWindowHandle -eq 0) { '{"invoked":false}'; exit 0 }
 $root = [System.Windows.Automation.AutomationElement]::FromHandle($process.MainWindowHandle)
 if ($root.Current.ProcessId -ne $appId) { throw 'UI root is not the owned App window' }
+if ($mode -eq 'check-updates') {
+    $menuCondition = [System.Windows.Automation.AndCondition]::new(
+        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, 'App'),
+        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::MenuItem))
+    $menus = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $menuCondition)
+    if ($menus.Count -gt 1) { throw 'Ambiguous owned App menus' }
+    if ($menus.Count -eq 0 -or -not $menus[0].Current.IsEnabled -or $menus[0].Current.IsOffscreen) { '{"invoked":false}'; exit 0 }
+    $pattern = $null
+    if ($menus[0].TryGetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern, [ref]$pattern)) {
+        if ($pattern.Current.ExpandCollapseState -ne [System.Windows.Automation.ExpandCollapseState]::Expanded) { $pattern.Expand() }
+    } elseif ($menus[0].TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)) {
+        $pattern.Invoke()
+    } else { throw 'Owned App menu has no interaction pattern' }
+    # Native menu popups may be separate HWNDs, so match the exact action in
+    # this same owned process and refuse ambiguity rather than another window.
+    $actionCondition = [System.Windows.Automation.AndCondition]::new(
+        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty, $appId),
+        [System.Windows.Automation.AndCondition]::new(
+            [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, 'Check for app updates'),
+            [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::MenuItem)))
+    $actions = [System.Windows.Automation.AutomationElement]::RootElement.FindAll([System.Windows.Automation.TreeScope]::Descendants, $actionCondition)
+    if ($actions.Count -gt 1) { throw 'Ambiguous owned App update actions' }
+    if ($actions.Count -eq 0 -or -not $actions[0].Current.IsEnabled -or $actions[0].Current.IsOffscreen) { '{"invoked":false}'; exit 0 }
+    $pattern = $actions[0].GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
+    $pattern.Invoke()
+    @{invoked=$true; method='UIAutomation.InvokePattern'; root_pid=$appId; menu_path=@('App', 'Check for app updates')} | ConvertTo-Json -Compress
+    exit 0
+}
 $all = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
 $names = @($all | ForEach-Object { $_.Current.Name } | Where-Object { $_ })
 $description = "Festival App $($env:APP_UPGRADE_VERSION) is downloaded."

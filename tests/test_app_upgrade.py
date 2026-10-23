@@ -93,6 +93,40 @@ class UpgradeContracts(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "App exited"):
                     app.wait_fresh_setup(process, Path("/app/festival"), Path("/home/managed"), "x86_64-unknown-linux-gnu", output, {}, {}, "dead")
 
+    def test_offline_recovery_refuses_effectless_fault_and_changed_a_payload(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            install = output / "installed"
+            install.mkdir()
+            binary = install / "festival-app.exe"
+            binary.write_bytes(b"original-A")
+            process = Mock(pid=123)
+            identity = {"pid": 123, "started": "42", "path": str(binary)}
+            frame = {"visible_names": ["Update check failed: offline"]}
+            def once(description, predicate, seconds):
+                return predicate()
+            proxy = Mock()
+            with patch.object(upgrade, "menu_update_check", return_value={"invoked": True}), patch.object(upgrade, "retained_state", return_value={"selected": "unchanged"}), patch.object(upgrade.app, "window_capture", return_value=frame), patch.object(upgrade, "wait_until", side_effect=once), patch.object(upgrade, "windows_query", return_value=identity):
+                proxy.snapshot.side_effect = [{"requests": []}, {"requests": []}]
+                with self.assertRaisesRegex(RuntimeError, "did not observe"):
+                    upgrade.offline_check_then_retry(process, binary, {}, proxy, "windows", output, {}, {}, identity)
+                proxy.allow_release_tunnels.assert_not_called()
+                proxy.snapshot.side_effect = [{"requests": []}, {"requests": [{"outcome": "blocked"}]}]
+                def corrupt(*args):
+                    binary.write_bytes(b"damaged-A")
+                    return frame
+                with patch.object(upgrade.app, "window_capture", side_effect=corrupt):
+                    with self.assertRaisesRegex(ValueError, "changed A"):
+                        upgrade.offline_check_then_retry(process, binary, {}, proxy, "windows", output, {}, {}, identity)
+                proxy.allow_release_tunnels.assert_not_called()
+                binary.write_bytes(b"original-A")
+                proxy.snapshot.side_effect = [{"requests": []}, {"requests": [{"outcome": "blocked"}]}]
+                report = {}
+                upgrade.offline_check_then_retry(process, binary, {}, proxy, "windows", output, {}, report, identity)
+                proxy.allow_release_tunnels.assert_called_once()
+                self.assertEqual(report["same_pid_retry_identity"], identity)
+                self.assertTrue(report["offline_check_preserved_a"])
+
     def test_default_home_refuses_existing_state_or_environment_override(self):
         with tempfile.TemporaryDirectory() as name:
             home = Path(name)

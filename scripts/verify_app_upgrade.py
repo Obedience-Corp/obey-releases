@@ -16,6 +16,7 @@ import time
 import verify_app_candidate as app
 from app_upgrade_contract import checked_upgrade_pair, checked_public, fetch_public, persisted_snapshot, sha256, verify_persisted
 from verify_candidate import command, native_platform, wait_until
+from owned_update_proxy import UpdateProxy
 from verify_selected_components import TARGETS as COMPONENT_TARGETS, checked_bootstrap, checked_receipts, checked_status, fetch, require_clean_host
 
 SCRIPT = Path(__file__).resolve().parent
@@ -239,7 +240,40 @@ def check_installed_b(package_format, binary, bundle, reference, expected_image,
     return {"appimage_sha256": sha256(binary)}
 
 
-def native(root, target, package_format, a_source, a_version, b_source, b_version, output, installation_context="redirected"):
+def menu_update_check(process, binary, environment, identity):
+    return wait_until("actual owned App update menu", lambda: (
+        value if (value := windows_query("check-updates", environment,
+            APP_UPGRADE_PID=str(process.pid), APP_UPGRADE_EXE=str(binary),
+            APP_UPGRADE_STARTED=identity["started"])).get("invoked") else None), seconds=30)
+
+
+def offline_check_then_retry(process, binary, fixture, proxy, target, output, environment, report, identity):
+    before_payload = tree(binary.parent)
+    before_state = retained_state(fixture, environment)
+    blocked_before = sum(row["outcome"] == "blocked" for row in proxy.snapshot()["requests"])
+    report["offline_menu_action"] = menu_update_check(process, binary, environment, identity)
+    def failure_window():
+        frame = app.window_capture(process, target, output / "offline-check.png", environment)
+        report["offline_window"] = frame
+        return frame if any("Update check failed:" in name for name in frame.get("visible_names", [])) else None
+    wait_until("visible native update-check failure", failure_window, seconds=60)
+    snapshot = proxy.snapshot()
+    if sum(row["outcome"] == "blocked" for row in snapshot["requests"]) <= blocked_before:
+        raise RuntimeError("offline injection did not observe the explicit update request")
+    if windows_query("identity", environment, APP_UPGRADE_PID=str(process.pid)) != identity:
+        raise RuntimeError("failed update changed the owned App process")
+    if tree(binary.parent) != before_payload or retained_state(fixture, environment) != before_state:
+        raise ValueError("failed update changed A payload or preserved user/component state")
+    report["offline_original_payload"] = before_payload
+    report["offline_preserved_state"] = before_state
+    report["proxy_after_failure"] = snapshot
+    proxy.allow_release_tunnels()
+    report["same_pid_retry_action"] = menu_update_check(process, binary, environment, identity)
+    report["same_pid_retry_identity"] = identity
+    report["offline_check_preserved_a"] = True
+
+
+def native(root, target, package_format, a_source, a_version, b_source, b_version, output, installation_context="redirected", failure_mode="none"):
     require_clean_host(MACHINES.get(target))
     if target not in MACHINES or native_platform() != app.TARGETS[target][0] or package_format not in FORMATS:
         raise ValueError("upgrade target/format does not match native machine")
@@ -248,6 +282,8 @@ def native(root, target, package_format, a_source, a_version, b_source, b_versio
         raise ValueError("unsupported native package format")
     if installation_context not in ("redirected", "default-home") or installation_context == "default-home" and package_format != "nsis":
         raise ValueError("default-home acceptance currently requires the native NSIS leg")
+    if failure_mode not in ("none", "offline-check") or failure_mode == "offline-check" and (package_format != "nsis" or installation_context != "redirected"):
+        raise ValueError("offline-check proof requires the Windows NSIS redirected fixture")
     if any(os.environ.get(key) for key in ("GH_TOKEN", "GITHUB_TOKEN")):
         raise RuntimeError("native upgrade must not receive GitHub credentials")
     if tuple(map(int, a_version.split("."))) >= tuple(map(int, b_version.split("."))):
@@ -258,12 +294,12 @@ def native(root, target, package_format, a_source, a_version, b_source, b_versio
     checked_upgrade_pair(a, b)
     output.mkdir()
     report = {"a_source": a_source, "a_version": a_version, "b_source": b_source, "b_version": b_version,
-              "target": target, "package_format": package_format, "installation_context": installation_context,
+              "target": target, "package_format": package_format, "installation_context": installation_context, "failure_mode": failure_mode,
               "default_home_relaunch_verified": False, "two_version_update_verified": False,
               "license_access_verified": False, "useful_first_use_verified": False, "consumer_trust_verified": False, "reboot_verified": False, "native_failure_recovery_verified": False}
     environment = {key: value for key, value in os.environ.items() if not key.endswith(("_TOKEN", "_PASSWORD", "_PRIVATE_KEY"))}
     default_managed = default_home_layout(Path.home(), environment) if installation_context == "default-home" else None
-    process = display = manager = None
+    process = display = manager = proxy = None
     owned_deb = owned_nsis = False
     temporary = tempfile.TemporaryDirectory(prefix="app-upgrade-", dir=os.environ["RUNNER_TEMP"])
     work = Path(temporary.name)
@@ -332,6 +368,13 @@ def native(root, target, package_format, a_source, a_version, b_source, b_versio
                 binary = work / "Festival.App.AppImage"
                 shutil.copyfile(artifact(root / "a", a, target, ".AppImage"), binary)
                 binary.chmod(0o755)
+        if failure_mode == "offline-check":
+            proxy_names = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy")
+            if any(environment.get(name) for name in proxy_names):
+                raise RuntimeError("owned transport proof refuses inherited proxy configuration")
+            proxy = UpdateProxy()
+            environment.update(HTTPS_PROXY=proxy.url, HTTP_PROXY=proxy.url, NO_PROXY="127.0.0.1,localhost")
+            report["owned_proxy_url"] = proxy.url
         log = (output / "app.log").open("w")
         try:
             if default_managed is not None:
@@ -343,6 +386,8 @@ def native(root, target, package_format, a_source, a_version, b_source, b_versio
             # require unobscured setup completion in auto-restarted/reopened B.
             if package_format == "nsis":
                 initial = windows_query("identity", environment, APP_UPGRADE_PID=str(process.pid))
+                if proxy is not None:
+                    offline_check_then_retry(process, binary, fixture, proxy, target, output, environment, report, initial)
                 report["restart_control"] = wait_until("real Restart now control", lambda: (value if (value := windows_query("restart", environment, APP_UPGRADE_PID=str(process.pid), APP_UPGRADE_EXE=str(binary), APP_UPGRADE_STARTED=initial["started"], APP_UPGRADE_VERSION=b_version)).get("invoked") else None), seconds=600)
                 process.wait(timeout=120)
                 found = wait_until("NSIS installed and relaunched B", lambda: windows_query("find", environment, APP_UPGRADE_EXE=str(binary), APP_UPGRADE_OLD_PID=str(process.pid), APP_UPGRADE_AFTER=initial["started"]), seconds=300)
@@ -382,11 +427,18 @@ def native(root, target, package_format, a_source, a_version, b_source, b_versio
                 if any(report[key]["selected_mtime_ns"] != initial_mtimes for key in ("default_after_auto_restart", "default_after_reopen")):
                     raise ValueError("current selected executables were needlessly rewritten")
                 report["default_home_relaunch_verified"] = True
+            if proxy is not None:
+                report["proxy_after_recovery"] = proxy.snapshot()
+                if not report.get("offline_check_preserved_a") or not any(row["outcome"] == "tunneled" for row in report["proxy_after_recovery"]["requests"]):
+                    raise RuntimeError("same-process recovery did not use the owned original TLS tunnel")
+                report["verified_failure_cases"] = ["offline-update-check"]
+                report["native_failure_recovery_verified"] = True
             report["two_version_update_verified"] = True
         finally:
             log.close()
     except BaseException as error:
         report["two_version_update_verified"] = False
+        report["native_failure_recovery_verified"] = False
         report["failure"] = str(error)
         raise
     finally:
@@ -414,6 +466,12 @@ def native(root, target, package_format, a_source, a_version, b_source, b_versio
                     child.terminate()
                     child.wait(timeout=20)
                 actions.append(stop_child)
+        if proxy is not None:
+            def close_proxy():
+                report["proxy_before_cleanup"] = proxy.snapshot()
+                proxy.close()
+                report["proxy_after_cleanup"] = proxy.snapshot()
+            actions.append(close_proxy)
         for action in actions:
             try:
                 action()
@@ -428,6 +486,7 @@ def native(root, target, package_format, a_source, a_version, b_source, b_versio
             report["cleanup_failure"] = errors
             report["two_version_update_verified"] = False
             report["default_home_relaunch_verified"] = False
+            report["native_failure_recovery_verified"] = False
         (output / "proof.json").write_text(json.dumps(report, indent=2) + "\n")
         if errors:
             raise RuntimeError("owned upgrade cleanup failed: " + "; ".join(errors))
@@ -439,6 +498,7 @@ if __name__ == "__main__":
     for label in ("a", "b"):
         parser.add_argument("--" + label + "-source", required=True)
         parser.add_argument("--" + label + "-version", required=True)
+    parser.add_argument("--failure-mode", choices=("none", "offline-check"), default="none")
     parser.add_argument("--target")
     parser.add_argument("--format", choices=tuple(FORMATS))
     parser.add_argument("--installation-context", choices=("redirected", "default-home"), default="redirected")
@@ -450,4 +510,4 @@ if __name__ == "__main__":
         b = fetch_public(root / "b", args.b_source, args.b_version)
         checked_upgrade_pair(a, b)
     else:
-        native(root, args.target, args.format, args.a_source, args.a_version, args.b_source, args.b_version, Path("upgrade-proof").resolve(), args.installation_context)
+        native(root, args.target, args.format, args.a_source, args.a_version, args.b_source, args.b_version, Path("upgrade-proof").resolve(), args.installation_context, args.failure_mode)
