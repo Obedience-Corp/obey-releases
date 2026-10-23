@@ -274,12 +274,18 @@ frame rather than the entire desktop. The prior upgrade proof retained valid
 payload/restart/preservation evidence, but terminal windows obscured the reopened
 App image. The capture restores the original topmost state in `finally` and
 records visible UI Automation names alongside the image. It refuses stale process
-identity, hidden/minimized/offscreen windows and a covering window at the frame's
-center. This uses the documented [SetWindowPos](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setwindowpos)
+identity, hidden/minimized windows and a covering window at the frame's center.
+When the owned frame extends beyond the disposable desktop, capture uses normal
+window maximization and restores the original placement afterward. Empty frames
+or frames still outside the desktop fail with original/current/display bounds.
+This uses the documented [SetWindowPos](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setwindowpos)
 window-ordering operation; it does not minimize unrelated windows or change
 security settings. Native Windows CI puts a blue fixture window above a red target,
 rejects a stale process identity, verifies the captured target pixel and checks
-topmost-state restoration. Fixture proof is separate from actual packaged App proof.
+topmost-state restoration. An oversized fixture also verifies rendered pixels and
+placement/topmost restoration after success and a failed image write. This covers
+the real App's larger default window, which the initial small fixture missed.
+Fixture proof is separate from actual packaged App proof.
 `package_format=nsis` selects the existing Windows upgrade leg for that follow-up;
 the default still runs all five formats. A real native rerun and image inspection
 are required before claiming the reopened App renders correctly.

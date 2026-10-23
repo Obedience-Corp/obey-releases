@@ -80,6 +80,42 @@ try {
         if ($pixel.R -ne 255 -or $pixel.G -ne 0 -or $pixel.B -ne 0) { throw 'Captured the covering window instead of the target' }
     } finally { $bitmap.Dispose() }
     'PASS: rejected stale identity; captured owned red window behind blue window; restored topmost state'
+    $desktop = [Windows.Forms.SystemInformation]::VirtualScreen
+    if (-not [AppWindowCapture]::SetWindowPos($target.MainWindowHandle, [IntPtr](-2), 100, 100, $desktop.Width + 200, $desktop.Height + 100, 0x0010)) {
+        throw 'Could not create oversized owned fixture'
+    }
+    $original = [AppWindowCapture+Placement]::new()
+    $original.Length = [Runtime.InteropServices.Marshal]::SizeOf($original)
+    if (-not [AppWindowCapture]::GetWindowPlacement($target.MainWindowHandle, [ref]$original)) { throw 'Cannot inspect oversized fixture placement' }
+    function AssertRestoredPlacement {
+        $actual = [AppWindowCapture+Placement]::new()
+        $actual.Length = [Runtime.InteropServices.Marshal]::SizeOf($actual)
+        if (-not [AppWindowCapture]::GetWindowPlacement($target.MainWindowHandle, [ref]$actual) -or
+            $actual.ShowCommand -ne $original.ShowCommand -or
+            $actual.Normal.Left -ne $original.Normal.Left -or $actual.Normal.Top -ne $original.Normal.Top -or
+            $actual.Normal.Right -ne $original.Normal.Right -or $actual.Normal.Bottom -ne $original.Normal.Bottom -or
+            ([AppWindowCapture]::GetWindowLong($target.MainWindowHandle, -20) -band 8) -ne 0) {
+            throw 'Capture did not restore oversized fixture geometry and topmost state'
+        }
+    }
+    $env:APP_PROOF_SCREENSHOT = Join-Path $env:RUNNER_TEMP 'owned-window-capture-maximized.png'
+    $result = (& $capture) | ConvertFrom-Json
+    if (-not $result.maximized_for_capture -or -not $result.placement_restored) { throw 'Oversized capture did not maximize and restore' }
+    AssertRestoredPlacement
+    $bitmap = [Drawing.Bitmap]::new($env:APP_PROOF_SCREENSHOT)
+    try {
+        $pixel = $bitmap.GetPixel([int]($bitmap.Width / 2), [int]($bitmap.Height / 2))
+        if ($pixel.R -ne 255 -or $pixel.G -ne 0 -or $pixel.B -ne 0) { throw 'Oversized target did not render in the captured frame' }
+    } finally { $bitmap.Dispose() }
+    $env:APP_PROOF_SCREENSHOT = Join-Path $env:RUNNER_TEMP 'missing-capture-directory/image.png'
+    try {
+        & $capture
+        throw 'Invalid output directory unexpectedly accepted'
+    } catch {
+        if ($_.Exception.Message -notmatch 'Save') { throw }
+    }
+    AssertRestoredPlacement
+    'PASS: oversized target maximized and rendered; original placement/topmost restored on success and failed image write'
 } finally {
     foreach ($child in $children) {
         $child.Refresh()
