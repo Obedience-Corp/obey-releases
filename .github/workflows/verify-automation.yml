@@ -23,7 +23,7 @@ jobs:
         with:
           name: windows-capture-integration
           path: |
-            ${{ runner.temp }}/owned-window-capture*.png
+            ${{ runner.temp }}/owned-window-capture*
             ${{ runner.temp }}/capture-fixture-*
           if-no-files-found: ignore
   contracts:
