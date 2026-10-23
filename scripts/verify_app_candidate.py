@@ -244,7 +244,7 @@ def window_capture(process, target, output, environment):
             return json.loads(command(["pwsh", "-NoProfile", "-Command", query], environment) or "null")
         found = wait_until("owned App window", window)
         capture = command(["pwsh", "-NoProfile", "-File", Path(__file__).with_name("capture_windows_app.ps1")],
-                          dict(environment, APP_PROOF_SCREENSHOT=str(output), APP_PROOF_PID=str(process.pid),
+                          dict(environment, APP_PROOF_SCREENSHOT=str(output), APP_PROOF_DIAGNOSTICS=str(output) + ".capture.jsonl", APP_PROOF_PID=str(process.pid),
                                APP_PROOF_HANDLE=str(found["handle"]), APP_PROOF_EXE=found["path"],
                                APP_PROOF_STARTED=found["started"]), json_output=True)
         return dict(capture, screenshot=output.name)

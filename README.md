@@ -381,3 +381,15 @@ and runs only `^TestWindowsProcessObservationFS_` with the disposable guard.
 Logs, build information and a result report survive test failure. Private source
 and test source are never checked out here. This internal observer proof does
 not establish production daemon, CGO/SQLite, provider chat or release readiness.
+
+Windows capture writes flushed stage diagnostics, saves owned-window pixels and
+restores placement/topmost state before querying accessibility. The text query
+runs read-only in a separate owned process with a 15-second bound. A failed text
+query retains the PNG plus explicit `uia_verified=false`/`uia_failure`; it never
+satisfies strict licensing/setup text readiness. The disposable native fixture
+includes a real blocked accessibility provider and verifies pixels/restoration
+survive while text readiness remains false. The packaging workflow defaults to
+all four targets; `platform_scope=windows` rechecks the complete immutable draft
+inventory while executing only the outstanding Windows leg. Invalid scopes fail
+before download/execution. No candidate bytes, runtime environment, trust root,
+security policy or native acceptance are changed by this selection.

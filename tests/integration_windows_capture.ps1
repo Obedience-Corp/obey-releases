@@ -1,4 +1,4 @@
-param([string]$WindowColor, [string]$ReadyPath)
+param([string]$WindowColor, [string]$ReadyPath, [switch]$SlowUIA)
 $ErrorActionPreference = 'Stop'
 if ($env:CANDIDATE_NATIVE_DISPOSABLE -ne '1' -or $env:CANDIDATE_RUNNER_KIND -ne 'github-hosted') {
     throw 'Window integration requires a disposable hosted Windows runner'
@@ -6,7 +6,24 @@ if ($env:CANDIDATE_NATIVE_DISPOSABLE -ne '1' -or $env:CANDIDATE_RUNNER_KIND -ne 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 if ($WindowColor) {
-    $form = [Windows.Forms.Form]::new()
+    if ($SlowUIA) {
+        Add-Type -ReferencedAssemblies @([Windows.Forms.Form].Assembly.Location, [System.ComponentModel.Component].Assembly.Location) @'
+using System;
+using System.Windows.Forms;
+public class SlowAccessibleFixture : Form {
+    public string DiagnosticPath;
+    protected override void WndProc(ref Message message) {
+        if (message.Msg == 0x003D && !String.IsNullOrEmpty(DiagnosticPath)) {
+            System.IO.File.AppendAllText(DiagnosticPath, "WM_GETOBJECT entered\n");
+            System.Threading.Thread.Sleep(30000);
+        }
+        base.WndProc(ref message);
+    }
+}
+'@
+        $form = [SlowAccessibleFixture]::new()
+        $form.DiagnosticPath = "$ReadyPath.uia-blocked.log"
+    } else { $form = [Windows.Forms.Form]::new() }
     $form.Text = "FA0027 capture $WindowColor"
     $form.StartPosition = 'Manual'
     $form.Location = [Drawing.Point]::new(100, 100)
@@ -37,12 +54,15 @@ if ($WindowColor) {
     exit 0
 }
 $children = @()
-function StartFixture($color) {
-    $ready = Join-Path $env:RUNNER_TEMP "capture-fixture-$color.ready.json"
-    $stdout = Join-Path $env:RUNNER_TEMP "capture-fixture-$color.stdout.log"
-    $stderr = Join-Path $env:RUNNER_TEMP "capture-fixture-$color.stderr.log"
+function StartFixture($color, [switch]$blockUIA) {
+    $label = if ($blockUIA) { "$color-slow" } else { $color }
+    $ready = Join-Path $env:RUNNER_TEMP "capture-fixture-$label.ready.json"
+    $stdout = Join-Path $env:RUNNER_TEMP "capture-fixture-$label.stdout.log"
+    $stderr = Join-Path $env:RUNNER_TEMP "capture-fixture-$label.stderr.log"
     # This is a GUI fixture: a hidden startup window can suppress its first show.
-    $child = Start-Process (Get-Command pwsh).Source -WindowStyle Normal -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr -ArgumentList @('-NoProfile', '-STA', '-File', "`"$PSCommandPath`"", '-WindowColor', $color, '-ReadyPath', "`"$ready`"")
+    $arguments = @('-NoProfile', '-STA', '-File', "`"$PSCommandPath`"", '-WindowColor', $color, '-ReadyPath', "`"$ready`"")
+    if ($blockUIA) { $arguments += '-SlowUIA' }
+    $child = Start-Process (Get-Command pwsh).Source -WindowStyle Normal -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr -ArgumentList $arguments
     $script:children += $child
     $deadline = [DateTime]::UtcNow.AddSeconds(30)
     do {
@@ -161,6 +181,26 @@ try {
     }
     AssertRestoredPlacement
     'PASS: oversized target maximized and rendered; original placement/topmost restored on success and failed image write'
+    $slow = StartFixture 'Red' -blockUIA
+    $env:APP_PROOF_PID = $slow.Id.ToString()
+    $env:APP_PROOF_HANDLE = $slow.MainWindowHandle.ToInt64().ToString()
+    $env:APP_PROOF_EXE = $slow.Path
+    $env:APP_PROOF_STARTED = $slow.StartTime.ToUniversalTime().Ticks.ToString()
+    $env:APP_PROOF_SCREENSHOT = Join-Path $env:RUNNER_TEMP 'owned-window-capture-slow-uia.png'
+    $env:APP_PROOF_DIAGNOSTICS = "$($env:APP_PROOF_SCREENSHOT).capture.jsonl"
+    $result = (& $capture) | ConvertFrom-Json
+    if ($result.uia_verified -or $result.uia_failure -notmatch 'timed out' -or
+        -not $result.topmost_restored -or -not $result.placement_restored) { throw 'Slow accessibility did not preserve bounded failure and restoration' }
+    $marker = Join-Path $env:RUNNER_TEMP 'capture-fixture-Red-slow.ready.json.uia-blocked.log'
+    if (-not (Test-Path $marker)) { throw 'Owned accessibility fixture did not actually block' }
+    if (([AppWindowCapture]::GetWindowLong($slow.MainWindowHandle, -20) -band 8) -ne 0) { throw 'Slow UIAutomation left target topmost' }
+    $bitmap = [Drawing.Bitmap]::new($env:APP_PROOF_SCREENSHOT)
+    try {
+        $pixel = $bitmap.GetPixel([int]($bitmap.Width / 2), [int]($bitmap.Height / 2))
+        if ($pixel.R -ne 255 -or $pixel.G -ne 0 -or $pixel.B -ne 0) { throw 'Slow accessibility erased actual target pixels' }
+    } finally { $bitmap.Dispose() }
+    'PASS: pixels saved and placement restored before real blocked accessibility query; bounded worker terminated; text readiness remains false'
+
 } finally {
     foreach ($child in $children) {
         $child.Refresh()

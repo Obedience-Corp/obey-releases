@@ -3,6 +3,12 @@ $ErrorActionPreference = 'Stop'
 if ($env:CANDIDATE_NATIVE_DISPOSABLE -ne '1' -or $env:CANDIDATE_RUNNER_KIND -ne 'github-hosted') {
     throw 'Window capture requires a disposable hosted native runner'
 }
+function CaptureStage([string]$stage) {
+    $entry = @{stage=$stage; utc=[DateTime]::UtcNow.ToString('o'); helper_pid=$PID} | ConvertTo-Json -Compress
+    $path = if ($env:APP_PROOF_DIAGNOSTICS) { $env:APP_PROOF_DIAGNOSTICS } else { "$($env:APP_PROOF_SCREENSHOT).capture.jsonl" }
+    try { [IO.File]::AppendAllText($path, "$entry`n") } catch { [Console]::Error.WriteLine($entry) }
+}
+CaptureStage 'compile-win32'
 Add-Type @'
 using System;
 using System.Runtime.InteropServices;
@@ -32,8 +38,7 @@ public static class AppWindowCapture {
 [void][AppWindowCapture]::SetProcessDPIAware()
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
-Add-Type -AssemblyName UIAutomationClient
-Add-Type -AssemblyName UIAutomationTypes
+CaptureStage 'win32-ready'
 $appId = [int]$env:APP_PROOF_PID
 $handle = [IntPtr][long]$env:APP_PROOF_HANDLE
 function RequireOwnedWindow {
@@ -50,6 +55,7 @@ function RequireOwnedWindow {
     }
     return $process
 }
+CaptureStage 'validate-owned-window'
 $process = RequireOwnedWindow
 $wasTopmost = ([AppWindowCapture]::GetWindowLong($handle, -20) -band 8) -ne 0
 $placement = [AppWindowCapture+Placement]::new()
@@ -66,6 +72,7 @@ function ReadFrame {
 # Change only the owned window's ordering; do not close/minimize other windows.
 $flags = [uint32](0x0001 -bor 0x0002 -bor 0x0010) # NOSIZE, NOMOVE, NOACTIVATE
 try {
+    CaptureStage 'expose-owned-window'
     if (-not [AppWindowCapture]::SetWindowPos($handle, [IntPtr](-1), 0, 0, 0, 0, $flags)) {
         throw 'Could not expose the owned App window'
     }
@@ -94,10 +101,7 @@ try {
     $point.Y = $rect.Top + [int]($rect.Height / 2)
     $visible = [AppWindowCapture]::GetAncestor([AppWindowCapture]::WindowFromPoint($point), 2)
     if ($visible -ne $handle) { throw 'Another window obscures the owned App' }
-    $root = [System.Windows.Automation.AutomationElement]::FromHandle($handle)
-    if ($root.Current.ProcessId -ne $appId) { throw 'UI root belongs to another process' }
-    $elements = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
-    $names = @($elements | Where-Object { -not $_.Current.IsOffscreen } | ForEach-Object { $_.Current.Name } | Where-Object { $_ } | Select-Object -Unique -First 80)
+    CaptureStage 'capture-displayed-pixels'
     $bitmap = [Drawing.Bitmap]::new($rect.Width, $rect.Height)
     $graphics = [Drawing.Graphics]::FromImage($bitmap)
     try {
@@ -107,10 +111,11 @@ try {
     } finally { $graphics.Dispose(); $bitmap.Dispose() }
     $record = @{handle=$handle.ToInt64(); title=$process.MainWindowTitle; pid=$appId;
         started=$env:APP_PROOF_STARTED; path=$process.Path; method='owned-window-screen';
-        width=$rect.Width; height=$rect.Height; visible_names=$names;
+        width=$rect.Width; height=$rect.Height; visible_names=@(); uia_verified=$false;
         original_frame=$originalFrame; captured_frame=$rect.ToString(); screen=$screen.ToString();
         maximized_for_capture=$maximized}
 } finally {
+    CaptureStage 'restore-owned-window'
     [void](RequireOwnedWindow)
     try {
         if ($maximized) {
@@ -136,4 +141,38 @@ try {
 }
 $record.topmost_restored = $true
 $record.placement_restored = $true
+CaptureStage 'pixels-saved-placement-restored'
+# UIAutomation can block inside an application's accessibility provider. It
+# runs only AFTER pixels and restoration, in an owned bounded child process.
+$stdout = "$($env:APP_PROOF_SCREENSHOT).uia.stdout.log"
+$stderr = "$($env:APP_PROOF_SCREENSHOT).uia.stderr.log"
+$worker = Join-Path $PSScriptRoot 'query_windows_app.ps1'
+CaptureStage 'query-uia'
+$child = $null
+try {
+    $child = Start-Process (Get-Command pwsh).Source -WindowStyle Hidden -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr -ArgumentList @('-NoProfile', '-NonInteractive', '-File', "`"$worker`"")
+    if (-not $child.WaitForExit(15000)) {
+        $child.Kill($true)
+        if (-not $child.WaitForExit(5000)) { throw 'Owned UIAutomation worker did not exit after termination' }
+        throw 'Owned UIAutomation query timed out after 15 seconds'
+    }
+    if ($child.ExitCode -ne 0) { throw "Owned UIAutomation query failed: $(Get-Content -Raw $stderr)" }
+    $text = Get-Content -Raw $stdout | ConvertFrom-Json
+    if ($text.pid -ne $appId -or $text.handle -ne $handle.ToInt64() -or $text.started -ne $env:APP_PROOF_STARTED) { throw 'UIAutomation worker identity differs from captured window' }
+    [void](RequireOwnedWindow)
+    $record.visible_names = @($text.visible_names)
+    $record.uia_verified = $true
+    CaptureStage 'uia-complete'
+} catch {
+    $record.uia_failure = $_.Exception.Message
+    CaptureStage 'uia-failed'
+} finally {
+    if ($child) {
+        if (-not $child.HasExited) {
+            $child.Kill($true)
+            if (-not $child.WaitForExit(5000)) { throw 'Owned UIAutomation worker cleanup failed' }
+        }
+        $child.Dispose()
+    }
+}
 $record | ConvertTo-Json -Depth 4 -Compress

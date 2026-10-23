@@ -3,6 +3,11 @@ name: Verify unpublished Festival App packaging and launch
 on:
   workflow_dispatch:
     inputs:
+      platform_scope:
+        description: Full native matrix or Windows-only unchanged-byte reproof
+        type: choice
+        default: all
+        options: [all, windows]
       candidate_tag:
         description: Unpublished candidate-app-vVERSION-SOURCE8 draft
         required: true
@@ -48,7 +53,10 @@ jobs:
           TAG: ${{ inputs.candidate_tag }}
           VERSION: ${{ inputs.version }}
           SOURCE: ${{ inputs.source_revision }}
-        run: python scripts/verify_app_candidate.py --mode fetch --tag "$TAG" --version "$VERSION" --source "$SOURCE"
+          SCOPE: ${{ inputs.platform_scope || 'all' }}
+        run: |
+          case "$SCOPE" in all|windows) ;; *) echo 'Unsupported platform scope' >&2; exit 1 ;; esac
+          python scripts/verify_app_candidate.py --mode fetch --tag "$TAG" --version "$VERSION" --source "$SOURCE"
       - uses: actions/upload-artifact@v4
         with:
           name: validated-app-candidates
@@ -63,15 +71,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - runner: macos-15
-            target: aarch64-apple-darwin
-          - runner: macos-15-intel
-            target: x86_64-apple-darwin
-          - runner: ubuntu-24.04
-            target: x86_64-unknown-linux-gnu
-          - runner: windows-2025
-            target: x86_64-pc-windows-msvc
+        include: >-
+          ${{ fromJSON(inputs.platform_scope == 'windows' && '[{"runner":"windows-2025","target":"x86_64-pc-windows-msvc"}]' || '[{"runner":"macos-15","target":"aarch64-apple-darwin"},{"runner":"macos-15-intel","target":"x86_64-apple-darwin"},{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu"},{"runner":"windows-2025","target":"x86_64-pc-windows-msvc"}]') }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: ${{ matrix.target == 'x86_64-unknown-linux-gnu' && 60 || 25 }}
     defaults:
