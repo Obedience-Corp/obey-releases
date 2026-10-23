@@ -97,7 +97,7 @@ def require_clean_host(target):
             raise RuntimeError("refusing preexisting Obey supervisor files")
     if os.name == "nt":
         tasks = subprocess.check_output(["powershell", "-NoProfile", "-NonInteractive", "-Command",
-                                         "@(Get-ScheduledTask | Where-Object { $_.TaskName -like '*Obey*' }).Count"], text=True).strip()
+                                         "$ErrorActionPreference='Stop'; @(Get-ScheduledTask -ErrorAction Stop | Where-Object { $_.TaskName -like '*Obey*' }).Count"], text=True).strip()
         if tasks != "0":
             raise RuntimeError("refusing preexisting Obey scheduled tasks")
 
@@ -106,7 +106,7 @@ def trust_state(binary, environment):
     if os.name == "nt":
         env = dict(environment, PROOF_EXECUTABLE=str(binary))
         return command(["powershell", "-NoProfile", "-NonInteractive", "-Command",
-                        "$s=Get-AuthenticodeSignature -LiteralPath $env:PROOF_EXECUTABLE; "
+                        "$ErrorActionPreference='Stop'; $s=Get-AuthenticodeSignature -LiteralPath $env:PROOF_EXECUTABLE -ErrorAction Stop; "
                         "@{status=$s.Status.ToString();message=$s.StatusMessage} | ConvertTo-Json -Compress"], env, json_output=True)
     if native_platform().startswith("darwin/"):
         result = {}
@@ -156,7 +156,7 @@ def native_selected(target):
             environment.pop(credential, None)
         service_attempted = False
         try:
-            report["bootstrap_version"] = command([bootstrap, "--version"], environment)
+            report["bootstrap_version"] = command([bootstrap, "version"], environment)
             if "0.3.7" not in report["bootstrap_version"]:
                 raise ValueError("wrong bootstrap version")
             report["install"] = {}
