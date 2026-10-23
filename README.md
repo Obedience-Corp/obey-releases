@@ -295,8 +295,11 @@ packages in the fresh hosted account's normal `~/.obey/installer` directory.
 It refuses preexisting ecosystem state and tool/config environment overrides;
 it does not inject `FESTIVAL_HOME`, `OBEY_CONFIG` or a managed-bin PATH. The original
 redirected fixture remains the default for the five-format mechanism matrix.
-This additional journey checks that A, NSIS-auto-restarted B and normally reopened
-B leave setup and display the enforced licensing screen. It records the bundled
+This additional journey invokes A's actual Update ready / Restart now control,
+then checks that NSIS-auto-restarted B and normally reopened B leave setup and
+display the enforced licensing screen. A's modal hides the underlying page from
+UI Automation, so the verifier does not wait for inaccessible underlay text before
+invoking Restart now. B still requires unobscured licensing UI. It records the bundled
 installer's default-environment status, requires all selected tool versions/paths,
 and rejects rewritten current executable mtimes as well as changed hashes.
 The daemon log is retained before owned service cleanup. The hosted account is

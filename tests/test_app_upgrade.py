@@ -78,13 +78,15 @@ class UpgradeContracts(unittest.TestCase):
 
     def test_setup_window_must_leave_installation_screen(self):
         setup = {"visible_names": ["Getting this machine ready", "not found"]}
+        update_dialog = {"visible_names": ["Update ready", "Restart now"]}
         license_window = {"visible_names": ["Licenses", "License key"]}
         report = {}
         def poll(description, predicate, seconds):
             self.assertEqual(seconds, 600)
             self.assertIsNone(predicate())
+            self.assertIsNone(predicate())
             return predicate()
-        with patch.object(upgrade.app, "window_capture", side_effect=[setup, license_window]), patch.object(upgrade, "wait_until", side_effect=poll):
+        with patch.object(upgrade.app, "window_capture", side_effect=[setup, update_dialog, license_window]), patch.object(upgrade, "wait_until", side_effect=poll):
             self.assertEqual(upgrade.wait_windows_setup(Mock(), "windows", Path("/output"), {}, report, "auto_restarted_b"), license_window)
         self.assertEqual(report["auto_restarted_b_setup_window"], license_window)
 
