@@ -1,0 +1,86 @@
+name: Verify fresh default AppImage candidate
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_tag:
+        type: string
+        required: true
+      version:
+        type: string
+        required: true
+      source_revision:
+        type: string
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: fresh-appimage-${{ inputs.candidate_tag }}
+  cancel-in-progress: false
+jobs:
+  fetch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    # Authenticated draft access handles data only, never candidate execution.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Fetch and validate original draft bytes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_RUNNER_KIND: ${{ runner.environment }}
+          TAG: ${{ inputs.candidate_tag }}
+          VERSION: ${{ inputs.version }}
+          SOURCE: ${{ inputs.source_revision }}
+        run: python scripts/verify_app_candidate.py --mode fetch --tag "$TAG" --version "$VERSION" --source "$SOURCE"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: validated-fresh-appimage-inputs
+          path: app-candidate/
+          if-no-files-found: error
+          retention-days: 7
+  native:
+    needs: fetch
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Require a fresh native machine
+        env:
+          KIND: ${{ runner.environment }}
+        run: test "$KIND" = github-hosted
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Install verification and display tools only
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y minisign xvfb x11-utils xdotool imagemagick
+      - uses: actions/download-artifact@v4
+        with:
+          name: validated-fresh-appimage-inputs
+          path: app-candidate
+      - name: Run original AppImage with no Debian install or previous App state
+        env:
+          CANDIDATE_NATIVE_DISPOSABLE: '1'
+          CANDIDATE_RUNNER_KIND: ${{ runner.environment }}
+          TAG: ${{ inputs.candidate_tag }}
+          VERSION: ${{ inputs.version }}
+          SOURCE: ${{ inputs.source_revision }}
+        run: python scripts/verify_app_candidate.py --mode verify --tag "$TAG" --version "$VERSION" --source "$SOURCE" --target x86_64-unknown-linux-gnu --linux-package appimage
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fresh-default-appimage-proof
+          path: app-proof/
+          if-no-files-found: warn
+          retention-days: 14

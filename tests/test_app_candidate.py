@@ -125,6 +125,47 @@ class AppContracts(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "bad deb signature"):
                     app.verify_optional_signature(deb, root, {})
 
+    def test_fresh_appimage_never_installs_deb_or_launches_extracted_app(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            inputs = root / "inputs"
+            inputs.mkdir()
+            document = manifest()
+            image = next(item["name"] for item in document["targets"]["x86_64-unknown-linux-gnu"] if item["name"].endswith(".AppImage"))
+            (inputs / image).write_bytes(b"payload")
+            (inputs / (image + ".sig")).write_text("signature")
+            def run(arguments, **options):
+                if "--appimage-extract" in arguments:
+                    extracted = Path(options["cwd"]) / "squashfs-root"
+                    commands = extracted / "usr/bin"
+                    commands.mkdir(parents=True)
+                    for executable in ("festival", "festival-activity-engine"):
+                        path = commands / executable
+                        path.write_bytes(b"bundled executable")
+                        path.chmod(0o755)
+                    runtime = extracted / "resources/festival-activity.config.yaml"
+                    runtime.parent.mkdir()
+                    runtime.write_text("runtime fixture")
+                else:
+                    self.assertEqual(arguments[0], "xdpyinfo")
+                return Mock(returncode=0)
+            process = Mock(pid=100)
+            process.poll.return_value = None
+            def capture(process, target, output, environment, records):
+                (output / "app.png").write_bytes(b"frame")
+                return {"screenshot": "app.png"}
+            with patch.object(app, "require_clean_host"), patch.object(app, "native_platform", return_value="linux/amd64"), patch.object(app, "verify_signature"), patch.object(app.shutil, "which", return_value=None), patch.object(app.subprocess, "run", side_effect=run), patch.object(app.subprocess, "Popen", return_value=process) as started, patch.object(app, "command", return_value="bundled contract") as invoked, patch.object(app, "capture_startup", side_effect=capture), patch.object(app, "stop_owned"), patch.object(app, "appimage_proof") as fallback, patch.dict(os.environ, {"RUNNER_TEMP": str(root)}):
+                app.native(inputs, document, "x86_64-unknown-linux-gnu", root / "report", "appimage")
+            calls = [call.args[0] for call in invoked.call_args_list]
+            self.assertFalse(any(arguments[0] in ("sudo", "apt-get", "dpkg-query", "dpkg-deb") for arguments in calls))
+            self.assertTrue(any(Path(call.args[0][0]).name == image for call in started.call_args_list))
+            self.assertFalse(any(Path(call.args[0][0]).name == "AppRun" for call in started.call_args_list))
+            fallback.assert_not_called()
+            report = json.loads((root / "report/proof.json").read_text())
+            self.assertTrue(report["appimage_default_launch_verified"])
+            self.assertFalse(report["deb_install_exercised"])
+            self.assertFalse(report["appimage_extracted_app_executed"])
+
     def test_native_guard_runs_before_any_mutation_or_binary(self):
         with patch.dict(os.environ, {}, clear=True), patch.object(app, "verify_signature") as signature:
             with self.assertRaises(RuntimeError):
