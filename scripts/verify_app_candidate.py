@@ -300,15 +300,17 @@ def stop_owned(process, environment):
     process.wait(timeout=20)
 
 
-def native(directory, document, target, output):
+def native(directory, document, target, output, linux_package="both"):
     require_clean_host({"aarch64-apple-darwin": "macOS-arm64", "x86_64-apple-darwin": "macOS-x86_64", "x86_64-unknown-linux-gnu": "linux-x86_64", "x86_64-pc-windows-msvc": "windows-x86_64"}.get(target))
     if target not in TARGETS or native_platform() != TARGETS[target][0]:
         raise ValueError("App target does not match native machine")
+    if linux_package not in ("both", "appimage") or linux_package == "appimage" and not target.endswith("linux-gnu"):
+        raise ValueError("invalid fresh AppImage target/mode")
     if any(os.environ.get(name) for name in ("GH_TOKEN", "GITHUB_TOKEN")):
         raise RuntimeError("App native execution must not receive a draft credential")
     report = {"source_revision": document["source_revision"], "version": document["version"], "target": target,
               "runner_platform": native_platform(), "first_use_complete": False, "license_access_verified": False,
-              "reboot_verified": False, "consumer_trust_verified": False, "two_version_update_verified": False, "native_packaging_launch_verified": False}
+              "reboot_verified": False, "consumer_trust_verified": False, "two_version_update_verified": False, "native_packaging_launch_verified": False, "linux_package_mode": linux_package}
     output.mkdir()
     process = xvfb = None
     installed = None
@@ -353,30 +355,41 @@ def native(directory, document, target, output):
                 raise ValueError("installed Windows App version mismatch")
             report["installed_version"] = binary_version
         else:
-            deb = directory / next(item["name"] for item in entries if item["name"].endswith(".deb"))
-            report["deb_signature_verified"] = verify_optional_signature(deb, temporary, environment)
             if shutil.which("festival-app"):
                 raise RuntimeError("refusing a preexisting App command")
-            package = command(["dpkg-deb", "-f", deb, "Package"], environment).strip()
-            deb_version = command(["dpkg-deb", "-f", deb, "Version"], environment).strip()
-            if package != "festival-app" or deb_version != report["version"]:
-                raise ValueError("deb package/version differs from candidate identity")
-            state = subprocess.run(["dpkg-query", "-W", "-f=${db:Status-Status}", package], capture_output=True, text=True, env=environment)
-            if state.returncode == 0 and state.stdout.strip() != "not-installed":
-                raise RuntimeError("refusing preexisting App package state")
-            owned_deb = True
-            command(["sudo", "apt-get", "install", "-y", deb], environment, timeout=300)
-            installed_version = command(["dpkg-query", "-W", "-f=${Version}", package], environment).strip()
-            if installed_version != report["version"]:
-                raise ValueError("installed deb version mismatch")
-            report["deb_installed_version"] = installed_version
-            report["deb_install_with_dependency_resolution"] = True
+            if linux_package == "both":
+                deb = directory / next(item["name"] for item in entries if item["name"].endswith(".deb"))
+                report["deb_signature_verified"] = verify_optional_signature(deb, temporary, environment)
+                package = command(["dpkg-deb", "-f", deb, "Package"], environment).strip()
+                deb_version = command(["dpkg-deb", "-f", deb, "Version"], environment).strip()
+                if package != "festival-app" or deb_version != report["version"]:
+                    raise ValueError("deb package/version differs from candidate identity")
+                state = subprocess.run(["dpkg-query", "-W", "-f=${db:Status-Status}", package], capture_output=True, text=True, env=environment)
+                if state.returncode == 0 and state.stdout.strip() != "not-installed":
+                    raise RuntimeError("refusing preexisting App package state")
+                owned_deb = True
+                command(["sudo", "apt-get", "install", "-y", deb], environment, timeout=300)
+                installed_version = command(["dpkg-query", "-W", "-f=${Version}", package], environment).strip()
+                if installed_version != report["version"]:
+                    raise ValueError("installed deb version mismatch")
+                report["deb_installed_version"] = installed_version
+                report["deb_install_with_dependency_resolution"] = True
             appimage = temporary / updater
             shutil.copyfile(directory / updater, appimage)
             appimage.chmod(0o755)
             subprocess.run([str(appimage), "--appimage-extract"], cwd=temporary, env=environment, check=True, stdout=subprocess.DEVNULL, timeout=60)
             extracted_appimage = temporary / "squashfs-root/AppRun"
-            binary, commands, resources = Path("/usr/bin/festival-app"), Path("/usr/bin"), Path("/usr/lib")
+            if linux_package == "appimage":
+                # Extract only to inspect/probe the authenticated bundled CLI
+                # resources; the App itself launches the original image below.
+                extracted_root = temporary / "squashfs-root"
+                installers = [path for path in extracted_root.rglob("festival") if path.is_file() and os.access(path, os.X_OK)]
+                if len(installers) != 1:
+                    raise ValueError("AppImage must bundle exactly one installer executable")
+                binary, commands, resources = appimage, installers[0].parent, extracted_root
+                report["deb_install_exercised"] = False
+            else:
+                binary, commands, resources = Path("/usr/bin/festival-app"), Path("/usr/bin"), Path("/usr/lib")
             if Path("/tmp/.X11-unix/X99").exists():
                 raise RuntimeError("refusing a preexisting display")
             xvfb = subprocess.Popen(["Xvfb", ":99", "-screen", "0", "1280x900x24"], env=environment, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -407,10 +420,13 @@ def native(directory, document, target, output):
             if process.poll() is not None or not (output / "app.png").is_file() or (output / "app.png").stat().st_size == 0:
                 raise RuntimeError("App did not retain a live captured window")
             report["primary_packaged_app_launch_verified"] = True
+            if linux_package == "appimage":
+                report["appimage_default_launch_verified"] = True
+                report["appimage_extracted_app_executed"] = False
         # Stop only the process created by this proof, before uninstall/temp cleanup.
         stop_owned(process, environment)
         process = None
-        if appimage is not None:
+        if appimage is not None and linux_package == "both":
             appimage_proof(appimage, extracted_appimage, target, output, environment, report)
         if installed is not None:
             uninstall_windows()
@@ -454,6 +470,7 @@ def main():
     for name in ("tag", "version", "source"):
         parser.add_argument("--" + name, required=True)
     parser.add_argument("--target")
+    parser.add_argument("--linux-package", choices=("both", "appimage"), default="both")
     parser.add_argument("--directory", type=Path, default=Path("app-candidate"))
     parser.add_argument("--output", type=Path, default=Path("app-proof"))
     args = parser.parse_args()
@@ -464,7 +481,7 @@ def main():
         fetch(args.tag, args.version, args.source, args.directory)
     else:
         document = checked_downloads(args.directory, args.version, args.source)
-        native(args.directory.resolve(), document, args.target, args.output.resolve())
+        native(args.directory.resolve(), document, args.target, args.output.resolve(), args.linux_package)
 
 
 if __name__ == "__main__":

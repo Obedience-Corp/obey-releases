@@ -202,3 +202,13 @@ mutation or provider/test backdoor is involved. Licensing, useful first use,
 reboot, consumer trust and native failure-recovery journeys remain unverified by
 this mechanism check. No native upgrade result is claimed until actual published
 A/B inputs have run successfully and the artifacts have been inspected.
+
+`verify-appimage-candidate.yml` isolates default AppImage startup on a fresh
+Ubuntu runner without first installing Debian or carrying prior App state. It
+uses the original draft inventory and production signature, and installs only
+verification/display tools. Extraction probes the authenticated bundled CLI and
+resource paths; the App launches the original image, never extracted AppRun.
+Real delayed frames and logs require inspection: a live captured window alone
+cannot establish healthy rendering. No rendering/security override or extracted
+fallback qualifies this lane. The previous combined Debian/AppImage white frames
+remain separate evidence.
