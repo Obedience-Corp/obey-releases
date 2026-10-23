@@ -1,0 +1,123 @@
+name: Verify published immutable App upgrade
+on:
+  workflow_dispatch:
+    inputs:
+      a_source:
+        description: Full reviewed source of published app-test A (compiled endpoint already points to B)
+        type: string
+        required: true
+      a_version:
+        type: string
+        default: '0.1.0'
+      b_source:
+        description: Full reviewed source of published immutable app-test B
+        type: string
+        required: true
+      b_version:
+        type: string
+        default: '0.1.1'
+permissions:
+  contents: read
+concurrency:
+  group: app-upgrade-${{ inputs.a_source }}-${{ inputs.b_source }}
+  cancel-in-progress: false
+jobs:
+  anonymous-inputs:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Fetch and check anonymous immutable releases without executing payloads
+        env:
+          A_SOURCE: ${{ inputs.a_source }}
+          A_VERSION: ${{ inputs.a_version }}
+          B_SOURCE: ${{ inputs.b_source }}
+          B_VERSION: ${{ inputs.b_version }}
+        run: python scripts/verify_app_upgrade.py --mode fetch --a-source "$A_SOURCE" --a-version "$A_VERSION" --b-source "$B_SOURCE" --b-version "$B_VERSION"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: anonymous-upgrade-inputs
+          path: upgrade-candidates/
+          if-no-files-found: error
+          retention-days: 7
+  native:
+    needs: anonymous-inputs
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            format: dmg
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            format: dmg
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            format: deb
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            format: appimage
+          - runner: windows-2025
+            target: x86_64-pc-windows-msvc
+            format: nsis
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Require a fresh native machine
+        env:
+          KIND: ${{ runner.environment }}
+        run: test "$KIND" = github-hosted
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Install Linux verification and normal window-manager dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y minisign xvfb x11-utils xdotool imagemagick openbox wmctrl
+      - name: Install macOS signature verifier
+        if: runner.os == 'macOS'
+        run: command -v minisign >/dev/null || brew install minisign
+      - name: Stage pinned Windows signature verifier
+        if: runner.os == 'Windows'
+        run: |
+          archive="$RUNNER_TEMP/minisign.zip"
+          curl -fsSL -o "$archive" https://github.com/jedisct1/minisign/releases/download/0.12/minisign-0.12-win64.zip
+          echo "37b600344e20c19314b2e82813db2bfdcc408b77b876f7727889dbd46d539479  $archive" | sha256sum -c -
+          unzip -q "$archive" -d "$RUNNER_TEMP/app-minisign"
+          cygpath -w "$RUNNER_TEMP/app-minisign/minisign-win64/x86_64" >> "$GITHUB_PATH"
+          command -v 7z
+      - uses: actions/download-artifact@v4
+        with:
+          name: anonymous-upgrade-inputs
+          path: upgrade-candidates
+      - name: Exercise real App updater and persisted readback
+        env:
+          CANDIDATE_NATIVE_DISPOSABLE: '1'
+          CANDIDATE_RUNNER_KIND: ${{ runner.environment }}
+          A_SOURCE: ${{ inputs.a_source }}
+          A_VERSION: ${{ inputs.a_version }}
+          B_SOURCE: ${{ inputs.b_source }}
+          B_VERSION: ${{ inputs.b_version }}
+          TARGET: ${{ matrix.target }}
+          FORMAT: ${{ matrix.format }}
+        run: python scripts/verify_app_upgrade.py --mode verify --a-source "$A_SOURCE" --a-version "$A_VERSION" --b-source "$B_SOURCE" --b-version "$B_VERSION" --target "$TARGET" --format "$FORMAT"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: app-upgrade-proof-${{ matrix.target }}-${{ matrix.format }}
+          path: upgrade-proof/
+          if-no-files-found: warn
+          retention-days: 14
