@@ -102,7 +102,8 @@ def default_home_layout(home, environment):
 
 def default_home_readback(binary, managed, environment):
     """Read public sidecar resolution with the unchanged default environment."""
-    status = command([binary.parent / "festival.exe", "--managed", "status", "--plugin", "obedience-corp/camp-app", "--json"], environment, json_output=True)
+    suffix = ".exe" if os.name == "nt" else ""
+    status = command([binary.parent / ("festival" + suffix), "--managed", "status", "--plugin", "obedience-corp/camp-app", "--json"], environment, json_output=True)
     checked_status(status, managed)
     return {"installer_status": status, "selected_mtime_ns": {
         row["path"]: Path(row["path"]).stat().st_mtime_ns for row in checked_receipts(managed)["files"]}}
