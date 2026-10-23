@@ -7,7 +7,13 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 if ($WindowColor) {
     if ($SlowUIA) {
-        Add-Type -ReferencedAssemblies @([Windows.Forms.Form].Assembly.Location, [Windows.Forms.Message].Assembly.Location, [System.ComponentModel.Component].Assembly.Location) @'
+        # Supplying explicit references replaces Add-Type's normal framework
+        # set. Preserve the installed PowerShell reference assemblies as well
+        # as WinForms' runtime-only forwarded Message assembly.
+        $references = @(Get-ChildItem -LiteralPath (Join-Path $PSHOME 'ref') -Filter '*.dll' | ForEach-Object FullName)
+        if ($references.Count -eq 0) { throw 'Installed PowerShell compiler reference set is missing' }
+        $references += @([Windows.Forms.Form].Assembly.Location, [Windows.Forms.Message].Assembly.Location)
+        Add-Type -ReferencedAssemblies $references @'
 using System;
 using System.Windows.Forms;
 public class SlowAccessibleFixture : Form {
