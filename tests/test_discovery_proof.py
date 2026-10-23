@@ -51,3 +51,11 @@ class DiscoveryProofTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 proof.checked_build_info(document(), SOURCE)
             settings[key] = old
+
+    def test_every_substantive_case_must_pass_without_skips(self):
+        lines = ['--- PASS: TestWindowsProcessObservationFS_' + name + ' (0.01s)' for name in sorted(proof.REQUIRED_CASES)]
+        complete = '\n'.join(lines)
+        self.assertEqual(proof.checked_test_output(complete), sorted(proof.REQUIRED_CASES))
+        for result in ['--- PASS: TestWindowsProcessObservationFS_Helper (0.01s)', '\n'.join(lines[:-1]), complete + '\n    --- SKIP: TestWindowsProcessObservationFS_CodexIdentity/owned (0.01s)', complete + '\n    --- FAIL: TestWindowsProcessObservationFS_DirectoryIdentity/alias (0.01s)']:
+            with self.assertRaises(RuntimeError):
+                proof.checked_test_output(result)

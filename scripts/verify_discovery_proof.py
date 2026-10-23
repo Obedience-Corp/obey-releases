@@ -12,6 +12,17 @@ from verify_candidate import REPOSITORY, command, native_platform, require_dispo
 EXECUTABLE = 'sessiondiscovery.test.exe'
 MANIFEST = 'sessiondiscovery-proof.json'
 FILTER = '^TestWindowsProcessObservationFS_'
+REQUIRED_CASES = {'CodexIdentity', 'GrokAndSharedCodex', 'AbsenceCancellationAndMissingPID',
+                  'InaccessibleEvidenceIsReported', 'DirectoryIdentity', 'CaseSensitiveDirectoriesStayDistinct'}
+
+def checked_test_output(result):
+    if re.search(r'^\s*--- (?:FAIL|SKIP): TestWindowsProcessObservationFS_', result, re.MULTILINE):
+        raise RuntimeError('selected native observer case failed or skipped')
+    passed = set(re.findall(r'^--- PASS: TestWindowsProcessObservationFS_([A-Za-z0-9_]+) \(', result, re.MULTILINE))
+    if not REQUIRED_CASES <= passed:
+        raise RuntimeError('required native observer cases did not all execute successfully')
+    return sorted(passed)
+
 
 
 def checked_request(tag, source, digest):
@@ -91,8 +102,7 @@ def native(directory, source, digest, output):
         print(result + completed.stderr, flush=True)
         if completed.returncode:
             raise RuntimeError('internal observer tests failed')
-        if not re.search(r'^--- PASS: TestWindowsProcessObservationFS_', result, re.MULTILINE) or re.search(r'^--- (?:FAIL|SKIP): TestWindowsProcessObservationFS_', result, re.MULTILINE):
-            raise RuntimeError('selected native observer tests did not all execute successfully')
+        report['passed_cases'] = checked_test_output(result)
         report['internal_observer_proof'] = True
     except Exception as error:
         report['failure'] = str(error)
