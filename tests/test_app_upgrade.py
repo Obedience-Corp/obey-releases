@@ -126,6 +126,10 @@ class UpgradeContracts(unittest.TestCase):
             (home / ".config").symlink_to(home / "foreign")
             with self.assertRaisesRegex(RuntimeError, "XDG_CONFIG_HOME"):
                 upgrade.default_home_layout(home, expected)
+            (home / ".config").unlink()
+            (home / ".local").symlink_to(home / "foreign")
+            with self.assertRaisesRegex(RuntimeError, "XDG_DATA_HOME"):
+                upgrade.default_home_layout(home, expected)
 
     def test_setup_window_must_leave_installation_screen(self):
         setup = {"visible_names": ["Getting this machine ready", "not found"]}

@@ -97,7 +97,8 @@ def default_home_layout(home, environment):
     for name, suffix in (("XDG_CONFIG_HOME", ".config"), ("XDG_DATA_HOME", ".local/share"), ("XDG_STATE_HOME", ".local/state")):
         value = environment.get(name)
         expected = home / suffix
-        if value and (not Path(value).is_absolute() or Path(value) != expected or expected.is_symlink()):
+        redirected = any(path.is_symlink() for path in (expected, *expected.parents) if path != home and path.is_relative_to(home))
+        if value and (not Path(value).is_absolute() or Path(value) != expected or redirected):
             invalid.append(name)
     if invalid:
         raise RuntimeError("default-home proof refuses inherited tool/config overrides: " + ", ".join(invalid))
