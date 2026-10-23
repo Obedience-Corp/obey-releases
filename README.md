@@ -253,3 +253,17 @@ flags. The first five-leg run failed before App installation because description
 and mission were omitted; those failures are retained, not treated as updater
 failures. The corrected invocation was verified with the public suite's actual
 Camp binary in a disposable container and the registry/config read back afterward.
+
+Debian's no-download local archive handling can fail on a renamed downloaded Deb.
+After dependency download, the verifier now runs exact-byte `dpkg --unpack` and
+checked `apt-get --no-download --no-remove --fix-broken install` in one owned
+300-second group. Failed unpack cannot proceed to apt; missing cached dependencies
+fail without silently removing the partial App. The isolated root-container
+integration installs a real local package/dependency through loopback HTTP (Docker
+blocks external network), then proves missing-cache failure, unpacked state and
+owned purge. Root privilege is confined to that disposable package database.
+
+The existing upgrade workflow defaults to all five declared formats. Optional
+`package_format=deb` verifies only the remaining Debian leg after the four other
+formats already qualified; unsupported input fails before native execution. This
+does not narrow supported platforms or replace their preserved native evidence.

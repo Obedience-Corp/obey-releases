@@ -52,13 +52,23 @@ def apt_command(arguments, environment, seconds, check=True):
                    timeout=seconds + APT_KILL_GRACE_SECONDS + 30, check=check)
 
 
+def install_cached_deb(deb, environment):
+    # apt --no-download cannot install a renamed local Deb absent from its
+    # canonical archive cache. Unpack those exact authenticated bytes first,
+    # then configure using downloaded dependencies only. Never let fix-broken
+    # remove the unpacked App and report apparent success.
+    script = 'dpkg --unpack -- "$1" && apt-get --no-download --no-remove --fix-broken install -y'
+    return command(["sudo", *owned_timeout(["bash", "-euc", script, "fa0027-owned-deb", Path(deb).resolve()], APT_INSTALL_SECONDS)],
+                   environment, timeout=APT_INSTALL_SECONDS + APT_KILL_GRACE_SECONDS + 30)
+
+
 def install_deb(deb, environment):
     deb = Path(deb).resolve()
     # Simulation cannot install even when the hosted apt configuration forces
     # Assume-Yes. The subsequent real download logs its exact transfer size.
     apt_command(["--simulate", "install", deb], environment, 60)
     apt_command(["install", "--download-only", "-y", deb], environment, APT_DOWNLOAD_SECONDS)
-    apt_command(["install", "--no-download", "-y", deb], environment, APT_INSTALL_SECONDS)
+    install_cached_deb(deb, environment)
 
 
 def identity(tag, version, source):
