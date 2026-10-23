@@ -1,5 +1,8 @@
 """Malformed candidate tests run only in the disposable container harness."""
 import copy
+import contextlib
+import json
+import shutil
 import hashlib
 import io
 import os
@@ -13,6 +16,7 @@ from unittest.mock import patch
 if os.environ.get("CANDIDATE_TEST_CONTAINER") != "1" or not Path("/.dockerenv").exists():
     raise RuntimeError("filesystem candidate tests require the Docker harness")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+import verify_candidate
 from verify_candidate import TARGETS, checked_build_info, checked_manifest, checked_payloads, checked_request, require_disposable
 
 SOURCE = "a" * 40
@@ -89,6 +93,59 @@ class CandidateContracts(unittest.TestCase):
                     checked_payloads(archive, digest, False)
             archive, digest = self.archive(root, ("obey.exe", "ob.exe", "LICENSE"), executable=False)
             self.assertEqual(set(checked_payloads(archive, digest, True)), {"obey.exe", "ob.exe", "LICENSE"})
+
+    def bundle(self, directory):
+        artifacts = []
+        for target in TARGETS:
+            suffix = ".exe" if target.startswith("windows-") else ""
+            archive, digest = self.archive(directory, ("obey" + suffix, "ob" + suffix, "LICENSE"))
+            filename = f"obey-{VERSION}-{target}.tar.gz"
+            archive.rename(directory / filename)
+            artifacts.append({"filename": filename, "sha256": digest})
+        (directory / "candidate.json").write_text(json.dumps({"schema": "obey-candidate/v1", "version": VERSION, "source_revision": SOURCE, "artifacts": artifacts}))
+        (directory / "checksums.txt").write_text("".join(item["sha256"] + "  " + item["filename"] + "\n" for item in artifacts))
+
+    def test_privileged_fetch_validates_data_without_native_execution(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fixtures = root / "fixtures"
+            fixtures.mkdir()
+            self.bundle(fixtures)
+            expected = {path.name for path in fixtures.iterdir()}
+            metadata = {"isDraft": True, "assets": [{"name": name} for name in expected]}
+            def inspect(arguments, **kwargs):
+                self.assertEqual(arguments[:3], ["gh", "release", "view"])
+                return json.dumps(metadata)
+            def download(arguments, **kwargs):
+                self.assertEqual(arguments[:3], ["gh", "release", "download"])
+                wanted = {arguments[index + 1] for index, value in enumerate(arguments) if value == "--pattern"}
+                self.assertEqual(wanted, expected)
+                destination = Path(arguments[arguments.index("--dir") + 1])
+                for filename in wanted:
+                    shutil.copy2(fixtures / filename, destination / filename)
+            environment = {"CANDIDATE_RUNNER_KIND": "github-hosted", "GITHUB_REPOSITORY": verify_candidate.REPOSITORY, "GH_TOKEN": "test-download-only-token"}
+            arguments = ["verify_candidate.py", "--mode", "fetch", "--tag", "candidate-obey-v0.2.2-aaaaaaaa", "--version", VERSION, "--source", SOURCE, "--directory", str(root / "download")]
+            with patch.dict(os.environ, environment, clear=True), patch.object(sys, "argv", arguments), patch("verify_candidate.subprocess.check_output", side_effect=inspect), patch("verify_candidate.subprocess.run", side_effect=download), patch("verify_candidate.native_proof", side_effect=AssertionError("fetch must not execute candidates")) as native:
+                verify_candidate.main()
+                native.assert_not_called()
+            self.assertEqual({path.name for path in (root / "download").iterdir()}, expected)
+
+    def test_native_mode_uses_artifacts_without_download_authority(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            data = root / "candidate"
+            data.mkdir()
+            self.bundle(data)
+            environment = {"CANDIDATE_RUNNER_KIND": "github-hosted", "CANDIDATE_NATIVE_DISPOSABLE": "1", "GITHUB_REPOSITORY": verify_candidate.REPOSITORY}
+            arguments = ["verify_candidate.py", "--mode", "verify", "--tag", "candidate-obey-v0.2.2-aaaaaaaa", "--version", VERSION, "--source", SOURCE, "--target", "windows-arm64", "--directory", str(data)]
+            with contextlib.chdir(root), patch.dict(os.environ, environment, clear=True), patch.object(sys, "argv", arguments), patch("verify_candidate.subprocess.check_output", side_effect=AssertionError("native must not fetch draft")) as github, patch("verify_candidate.native_proof", return_value={"test_transport_only": True}) as native:
+                verify_candidate.main()
+                github.assert_not_called()
+                native.assert_called_once()
+            for token in ("GH_TOKEN", "GITHUB_TOKEN"):
+                with patch.dict(os.environ, dict(environment, **{token: "test-download-only-token"}), clear=True), patch.object(sys, "argv", arguments), patch("verify_candidate.native_proof") as native, self.assertRaisesRegex(RuntimeError, "download credential"):
+                    verify_candidate.main()
+                native.assert_not_called()
 
     def test_no_native_mutation_on_an_unproven_runner(self):
         for environment in ({}, {"CANDIDATE_NATIVE_DISPOSABLE": "1", "CANDIDATE_RUNNER_KIND": "self-hosted"}):

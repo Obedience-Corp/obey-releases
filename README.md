@@ -30,9 +30,11 @@ gh workflow run verify-candidates.yml --repo Obedience-Corp/obey-releases \
 ```
 
 Every leg uses a disposable GitHub-hosted machine matching the actual target.
-Its repository-scoped GITHUB_TOKEN reads authenticated draft assets. No publisher
-credential is used; workflow permissions are read-only and there is no publication
-step. A published tag, partial inventory, bad digest, unsafe archive, wrong binary
+GitHub hides drafts from read-only tokens. A separate data-only fetch job therefore
+has contents:write solely to authenticate draft reads. It validates all eight files
+without executing candidates, then uploads a same-run artifact. There is no
+publication call. Native jobs explicitly retain contents:read, have no draft
+download credential, and revalidate artifact hashes/identity before execution. A published tag, partial inventory, bad digest, unsafe archive, wrong binary
 identity or wrong runner fails closed.
 
 Before executing either binary, each native job uses Go's build-info reader to
@@ -63,6 +65,7 @@ docker run --rm --user 10001:10001 \
   python -m unittest discover -s tests -v
 ```
 
-The tests cover identity/inventory/hash/path/link/mode failures and refusal to run
-native mutation proofs on an unproven machine. They do not substitute for the six
+The tests cover identity/inventory/hash/path/link/mode failures, refusal to run
+native mutation proofs on an unproven machine, and the privileged-fetch/read-only
+execution boundary. Native mode rejects download credentials and never fetches drafts. They do not substitute for the six
 real native candidate jobs.
