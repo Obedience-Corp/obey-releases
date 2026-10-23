@@ -1,0 +1,77 @@
+name: Verify unpublished Obey binary candidates
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_tag:
+        description: Authenticated draft candidate-obey-vVERSION-SOURCE8 tag
+        required: true
+        type: string
+      version:
+        description: Candidate version without v
+        required: true
+        type: string
+      source_revision:
+        description: Full reviewed private source revision (never source content)
+        required: true
+        type: string
+
+# This workflow can read draft binaries and cannot publish a release.
+permissions:
+  contents: read
+
+concurrency:
+  group: candidate-proof-${{ inputs.candidate_tag }}
+  cancel-in-progress: false
+
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: linux-x86_64
+          - runner: ubuntu-24.04-arm
+            target: linux-arm64
+          - runner: macos-15
+            target: macOS-arm64
+          - runner: macos-15-intel
+            target: macOS-x86_64
+          - runner: windows-2025
+            target: windows-x86_64
+          - runner: windows-11-arm
+            target: windows-arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    steps:
+      - name: Require a disposable native machine
+        shell: bash
+        env:
+          RUNNER_KIND: ${{ runner.environment }}
+        run: test "$RUNNER_KIND" = github-hosted
+      # Only this public distribution automation is checked out. Never clone
+      # private Obey implementation, modules or private test scripts here.
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Verify authenticated draft bytes and native contracts
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_NATIVE_DISPOSABLE: '1'
+          CANDIDATE_RUNNER_KIND: ${{ runner.environment }}
+          CANDIDATE_TAG: ${{ inputs.candidate_tag }}
+          CANDIDATE_VERSION: ${{ inputs.version }}
+          SOURCE_REVISION: ${{ inputs.source_revision }}
+          CANDIDATE_TARGET: ${{ matrix.target }}
+        run: |
+          python scripts/verify_candidate.py --tag "$CANDIDATE_TAG" \
+            --version "$CANDIDATE_VERSION" --source "$SOURCE_REVISION" \
+            --target "$CANDIDATE_TARGET"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-proof-${{ matrix.target }}
+          path: proof-*.json
+          if-no-files-found: error
