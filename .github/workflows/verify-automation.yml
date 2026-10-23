@@ -5,6 +5,25 @@ on:
 permissions:
   contents: read
 jobs:
+  windows-capture:
+    runs-on: windows-2025
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Verify owned window capture behind another window
+        shell: pwsh
+        env:
+          CANDIDATE_NATIVE_DISPOSABLE: '1'
+          CANDIDATE_RUNNER_KIND: ${{ runner.environment }}
+        run: ./tests/integration_windows_capture.ps1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-capture-integration
+          path: ${{ runner.temp }}/owned-window-capture.png
+          if-no-files-found: ignore
   contracts:
     runs-on: ubuntu-24.04
     steps:

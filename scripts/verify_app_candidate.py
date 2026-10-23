@@ -237,14 +237,16 @@ def window_capture(process, target, output, environment):
         command(["screencapture", "-x", "-l", str(found["kCGWindowNumber"]), output], environment)
         return {"window_id": found["kCGWindowNumber"], "title": found.get("kCGWindowName"), "screenshot": output.name}
     if target.endswith("windows-msvc"):
-        query = f'$p=Get-Process -Id {process.pid} -ErrorAction Stop; if($p.MainWindowHandle -ne 0){{@{{handle=$p.MainWindowHandle.ToInt64();title=$p.MainWindowTitle}}|ConvertTo-Json -Compress}}'
+        query = f'$p=Get-Process -Id {process.pid} -ErrorAction Stop; if($p.MainWindowHandle -ne 0){{@{{handle=$p.MainWindowHandle.ToInt64();title=$p.MainWindowTitle;path=$p.Path;started=$p.StartTime.ToUniversalTime().Ticks.ToString()}}|ConvertTo-Json -Compress}}'
         def window():
             require_alive()
             return json.loads(command(["pwsh", "-NoProfile", "-Command", query], environment) or "null")
         found = wait_until("owned App window", window)
-        capture = 'Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing; $r=[Windows.Forms.SystemInformation]::VirtualScreen; $b=New-Object Drawing.Bitmap $r.Width,$r.Height; $g=[Drawing.Graphics]::FromImage($b); try {$g.CopyFromScreen($r.Left,$r.Top,0,0,$b.Size); $b.Save($env:APP_PROOF_SCREENSHOT)} finally {$g.Dispose();$b.Dispose()}'
-        command(["pwsh", "-NoProfile", "-Command", capture], dict(environment, APP_PROOF_SCREENSHOT=str(output)))
-        return dict(found, screenshot=output.name)
+        capture = command(["pwsh", "-NoProfile", "-File", Path(__file__).with_name("capture_windows_app.ps1")],
+                          dict(environment, APP_PROOF_SCREENSHOT=str(output), APP_PROOF_PID=str(process.pid),
+                               APP_PROOF_HANDLE=str(found["handle"]), APP_PROOF_EXE=found["path"],
+                               APP_PROOF_STARTED=found["started"]), json_output=True)
+        return dict(capture, screenshot=output.name)
     def window():
         require_alive()
         result = subprocess.run(["xdotool", "search", "--onlyvisible", "--pid", str(process.pid)], env=environment, text=True, capture_output=True)
