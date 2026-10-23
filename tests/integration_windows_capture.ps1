@@ -139,6 +139,7 @@ try {
     $env:APP_PROOF_STARTED = $target.StartTime.ToUniversalTime().Ticks.ToString()
     $result = (& $capture) | ConvertFrom-Json
     if (-not $result.topmost_restored -or $result.pid -ne $target.Id) { throw 'Capture ownership/topmost restoration did not verify' }
+    if (-not $result.uia_verified -or $result.visible_names -notcontains 'App') { throw 'Normal accessibility did not return the actual visible App menu' }
     $bitmap = [Drawing.Bitmap]::new($env:APP_PROOF_SCREENSHOT)
     try {
         $pixel = $bitmap.GetPixel([int]($bitmap.Width / 2), [int]($bitmap.Height / 2))
