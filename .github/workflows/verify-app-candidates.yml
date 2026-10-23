@@ -1,0 +1,122 @@
+name: Verify unpublished Festival App packaging and launch
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_tag:
+        description: Unpublished candidate-app-vVERSION-SOURCE8 draft
+        required: true
+        type: string
+      version:
+        description: Exact App version
+        required: true
+        type: string
+      source_revision:
+        description: Full reviewed App source revision, never private source
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: app-native-${{ inputs.candidate_tag }}
+  cancel-in-progress: false
+
+jobs:
+  fetch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    # GitHub requires push access to read drafts. This job handles data only.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Fetch exact draft inventory without executing payloads
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_RUNNER_KIND: ${{ runner.environment }}
+          TAG: ${{ inputs.candidate_tag }}
+          VERSION: ${{ inputs.version }}
+          SOURCE: ${{ inputs.source_revision }}
+        run: python scripts/verify_app_candidate.py --mode fetch --tag "$TAG" --version "$VERSION" --source "$SOURCE"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: validated-app-candidates
+          path: app-candidate/
+          if-no-files-found: error
+          retention-days: 7
+
+  native:
+    needs: fetch
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: aarch64-apple-darwin
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - runner: windows-2025
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Require a fresh native machine
+        env:
+          KIND: ${{ runner.environment }}
+        run: test "$KIND" = github-hosted
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Install Linux verification and display dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y minisign xvfb x11-utils xdotool imagemagick libwebkit2gtk-4.1-0 libayatana-appindicator3-1 libxdo3
+      - name: Install macOS signature verifier
+        if: runner.os == 'macOS'
+        run: command -v minisign >/dev/null || brew install minisign
+      - name: Stage pinned Windows signature verifier
+        if: runner.os == 'Windows'
+        run: |
+          archive="$RUNNER_TEMP/minisign.zip"
+          curl -fsSL -o "$archive" https://github.com/jedisct1/minisign/releases/download/0.12/minisign-0.12-win64.zip
+          echo "37b600344e20c19314b2e82813db2bfdcc408b77b876f7727889dbd46d539479  $archive" | sha256sum -c -
+          unzip -q "$archive" -d "$RUNNER_TEMP/app-minisign"
+          cygpath -w "$RUNNER_TEMP/app-minisign/minisign-win64/x86_64" >> "$GITHUB_PATH"
+      - uses: actions/download-artifact@v4
+        with:
+          name: validated-app-candidates
+          path: app-candidate
+      - name: Verify signatures and actual native package launch
+        env:
+          CANDIDATE_NATIVE_DISPOSABLE: '1'
+          CANDIDATE_RUNNER_KIND: ${{ runner.environment }}
+          TAG: ${{ inputs.candidate_tag }}
+          VERSION: ${{ inputs.version }}
+          SOURCE: ${{ inputs.source_revision }}
+          TARGET: ${{ matrix.target }}
+        run: python scripts/verify_app_candidate.py --mode verify --tag "$TAG" --version "$VERSION" --source "$SOURCE" --target "$TARGET"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: app-native-proof-${{ matrix.target }}
+          path: app-proof/
+          if-no-files-found: warn
+          retention-days: 14
