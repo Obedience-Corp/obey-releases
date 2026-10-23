@@ -82,7 +82,7 @@ class CommandLifecycle(unittest.TestCase):
             self.assertTrue(calls[0].kwargs["check"])
             self.assertIn("--download-only", calls[1].args[0])
             self.assertIn("1800s", calls[1].args[0])
-            self.assertIn("--no-download", calls[2].args[0])
+            self.assertIn("--no-download --no-remove --fix-broken", calls[2].args[0][-3])
             self.assertIn("300s", calls[2].args[0])
             for call in calls[1:]:
                 self.assertEqual(call.args[0][:2], ["sudo", "timeout"])

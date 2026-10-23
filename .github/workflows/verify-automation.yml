@@ -16,3 +16,9 @@ jobs:
             -e CANDIDATE_TEST_CONTAINER=1 -e PYTHONDONTWRITEBYTECODE=1 \
             -v "$PWD:/src:ro" -w /src python:3.13-slim \
             python -m unittest discover -s tests -v
+      - name: Test real offline Debian dependency installation and partial cleanup
+        run: |
+          docker run --rm --network none \
+            -e CANDIDATE_TEST_CONTAINER=1 -e PYTHONDONTWRITEBYTECODE=1 \
+            -v "$PWD:/src:ro" -w /src python:3.13-slim \
+            python -W error::ResourceWarning tests/integration_deb_install.py
