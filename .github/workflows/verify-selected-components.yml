@@ -38,6 +38,7 @@ jobs:
           CANDIDATE_RUNNER_KIND: github-hosted
         run: python scripts/verify_selected_components.py --target ${{ matrix.target }}
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: selected-component-proof-${{ matrix.target }}
           path: proof-selected-*.json

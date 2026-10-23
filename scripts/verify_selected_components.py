@@ -9,6 +9,7 @@ import re
 import shutil
 import sqlite3
 import subprocess
+import sys
 import tempfile
 import urllib.request
 
@@ -96,7 +97,7 @@ def require_clean_host(target):
         if directory.exists() and any("obey" in path.name.lower() for path in directory.iterdir()):
             raise RuntimeError("refusing preexisting Obey supervisor files")
     if os.name == "nt":
-        tasks = subprocess.check_output(["powershell", "-NoProfile", "-NonInteractive", "-Command",
+        tasks = subprocess.check_output(["pwsh", "-NoProfile", "-NonInteractive", "-Command",
                                          "$ErrorActionPreference='Stop'; @(Get-ScheduledTask -ErrorAction Stop | Where-Object { $_.TaskName -like '*Obey*' }).Count"], text=True).strip()
         if tasks != "0":
             raise RuntimeError("refusing preexisting Obey scheduled tasks")
@@ -105,7 +106,7 @@ def require_clean_host(target):
 def trust_state(binary, environment):
     if os.name == "nt":
         env = dict(environment, PROOF_EXECUTABLE=str(binary))
-        return command(["powershell", "-NoProfile", "-NonInteractive", "-Command",
+        return command(["pwsh", "-NoProfile", "-NonInteractive", "-Command",
                         "$ErrorActionPreference='Stop'; $s=Get-AuthenticodeSignature -LiteralPath $env:PROOF_EXECUTABLE -ErrorAction Stop; "
                         "@{status=$s.Status.ToString();message=$s.StatusMessage} | ConvertTo-Json -Compress"], env, json_output=True)
     if native_platform().startswith("darwin/"):
@@ -122,7 +123,7 @@ def windows_policy(environment):
     if os.name != "nt":
         return None
     # Read only. An absent/inaccessible value is unknown, never interpreted as Off.
-    return command(["powershell", "-NoProfile", "-NonInteractive", "-Command",
+    return command(["pwsh", "-NoProfile", "-NonInteractive", "-Command",
                     "$o=Get-CimInstance Win32_OperatingSystem; $s=$null; $e=$null; "
                     "try { $s=(Get-ItemProperty -LiteralPath 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\CI\\Policy' "
                     "-Name VerifiedAndReputablePolicyState -ErrorAction Stop).VerifiedAndReputablePolicyState } "
@@ -134,6 +135,7 @@ def windows_policy(environment):
 def native_selected(target):
     require_clean_host(target)
     report = {"target": target, "platform": native_platform(), "anonymous": True,
+              "native_component_execution": False, "trust_complete": False,
               "scope": "selected component execution/receipts; no App UI, reboot or consumer SmartScreen claim"}
     with tempfile.TemporaryDirectory(prefix="scp-", dir=os.environ["RUNNER_TEMP"]) as temporary:
         root = Path(temporary)
@@ -181,18 +183,30 @@ def native_selected(target):
             companion = json.loads(report["versions"]["camp-app"])
             if obey.get("version") != PACKAGES["obedience-corp/obey"] or companion.get("data", {}).get("version") != PACKAGES["obedience-corp/camp-app"]:
                 raise ValueError("live version differs from selected receipt")
+            report["native_component_execution"] = True
             report["trust"] = {str(path.relative_to(root)): trust_state(path, environment)
                                for path in [bootstrap, *(home / "bin" / (name + suffix) for name in ("camp", "fest", "camp-app", "obey", "ob"))]}
             report["windows_policy"] = windows_policy(environment)
-            report["native_component_execution"] = True
+            report["trust_complete"] = True
         finally:
-            if service_attempted and (home / "bin" / ("obey" + suffix)).exists():
-                executable = home / "bin" / ("obey" + suffix)
-                report["service_cleanup"] = command([executable, "service", "uninstall"], environment, timeout=120, check=False)
-                report["service_after_cleanup"] = command([executable, "service", "status", "--json"], environment, json_output=True)
-                state = report["service_after_cleanup"]
-                if state.get("loaded") or state.get("socket_reachable"):
-                    raise RuntimeError("owned service remained live after cleanup")
+            failure = sys.exc_info()[1]
+            if failure:
+                report["failure"] = str(failure)
+            try:
+                if service_attempted and (home / "bin" / ("obey" + suffix)).exists():
+                    executable = home / "bin" / ("obey" + suffix)
+                    report["service_cleanup"] = command([executable, "service", "uninstall"], environment, timeout=120, check=False)
+                    report["service_after_cleanup"] = command([executable, "service", "status", "--json"], environment, json_output=True)
+                    state = report["service_after_cleanup"]
+                    if state.get("loaded") or state.get("socket_reachable"):
+                        raise RuntimeError("owned service remained live after cleanup")
+            finally:
+                # Keep successful earlier checks and the original error even
+                # when a later query or cleanup fails. The job still fails.
+                cleanup_failure = sys.exc_info()[1]
+                if cleanup_failure is not None and cleanup_failure is not failure:
+                    report["cleanup_failure"] = str(cleanup_failure)
+                Path(f"proof-selected-{target}.json").write_text(json.dumps(report, indent=2) + "\n")
     return report
 
 
