@@ -17,7 +17,9 @@ jobs:
         env:
           CANDIDATE_NATIVE_DISPOSABLE: '1'
           CANDIDATE_RUNNER_KIND: ${{ runner.environment }}
-        run: ./tests/integration_windows_capture.ps1
+        run: |
+          ./scripts/windows_packaging_service.ps1 -SelfTest
+          ./tests/integration_windows_capture.ps1
       - uses: actions/upload-artifact@v4
         if: always()
         with:
