@@ -53,6 +53,35 @@ still requires producer approval, immutable final bytes/checksums, anonymous
 post-publication verification and authenticated Installer acceptance. Draft
 verification does not grant publication authority or waive any failed festival gate.
 
+## Published selected-component native proof
+
+`verify-selected-components.yml` uses the actual public Installer0.3.7 and its
+official signed marketplace source to install only the App's selected suite,
+Camp App companion and Obey packages. The expected receipts are suite0.3.24,
+CampApp0.1.0 and Obey0.2.2. Producer URLs/checksums remain in the existing release
+and marketplace machinery, rather than a second install catalog.
+
+```sh
+gh workflow run verify-selected-components.yml --repo Obedience-Corp/obey-releases
+```
+
+The four jobs run on fresh hosted macOS ARM/Intel, Linux x64 and Windows x64
+machines with read-only repository permissions and no download credentials. No
+private source is checked out. The verifier refuses preexisting ecosystem tools
+or Obey supervisor entries, uses an owned temporary managed bin/config/data/socket,
+and uninstalls only the service it attempted to register. The fresh disposable
+account's real home is retained for native supervisor lookup; this must never run
+on an operator account. Receipt/file hashes and exact live versions are checked.
+
+Reports record actual codesign/spctl or Authenticode results without changing
+security settings. Windows reports include the read-only raw Smart App Control
+policy value, OS version and any query error. Microsoft documents the raw values
+and current-policy inspection in its [Smart App Control testing guide](https://learn.microsoft.com/en-us/windows/apps/develop/smart-app-control/test-your-app-with-smart-app-control).
+An absent/inaccessible value remains unknown. Successful native execution under
+that runner's policy does not prove consumer SmartScreen UI, reboot, a published
+App journey or a signature trust claim. Supervisor warnings and cleanup state
+remain explicit in the report.
+
 ## Automation checks
 
 Filesystem mutation tests run only in Docker:
