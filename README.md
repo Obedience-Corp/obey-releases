@@ -212,3 +212,16 @@ Real delayed frames and logs require inspection: a live captured window alone
 cannot establish healthy rendering. No rendering/security override or extracted
 fallback qualifies this lane. The previous combined Debian/AppImage white frames
 remain separate evidence.
+
+The Linux native GUI lanes provision a normal Ubuntu desktop graphics baseline:
+`libegl1`, `libegl-mesa0`, `libgles2`, `libgl1` and `libgl1-mesa-dri`, with actual
+versions recorded in job logs. The minimal hosted server/Xvfb image can lack EGL;
+original fresh run39995756136 failed before a window with missing `libEGL.so.1`.
+That failure remains preserved. The normal desktop baseline is justified by
+[AppImage's host-resource contract](https://docs.appimage.org/introduction/concepts.html),
+its [graphics-driver exclusion policy](https://github.com/AppImageCommunity/pkg2appimage/blob/master/excludelist),
+and [Ubuntu24's Mutter desktop dependencies](https://packages.ubuntu.com/noble/libmutter-14-0).
+Do not bundle graphics-driver libraries to hide that fixture omission. This lane
+still installs no Festival App Debian package and uses no rendering or security
+environment override; it does not claim a graphical App works on an unprovisioned
+headless server or prove every desktop/GPU combination.

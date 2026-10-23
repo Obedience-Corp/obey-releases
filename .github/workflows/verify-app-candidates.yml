@@ -92,7 +92,9 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y minisign xvfb x11-utils xdotool imagemagick
+          # AppImage intentionally relies on the host desktop graphics stack.
+          sudo apt-get install -y minisign xvfb x11-utils xdotool imagemagick libegl1 libegl-mesa0 libgles2 libgl1 libgl1-mesa-dri
+          dpkg-query -W libegl1 libegl-mesa0 libgles2 libgl1 libgl1-mesa-dri
       - name: Install macOS signature verifier
         if: runner.os == 'macOS'
         run: command -v minisign >/dev/null || brew install minisign
