@@ -56,7 +56,7 @@ class CommandLifecycle(unittest.TestCase):
             deb = Path(root) / "candidate.deb"
             app.install_deb(deb, {})
             calls = invoked.call_args_list
-            self.assertEqual(calls[0].args[0], ["apt-get", "--assume-no", "install", deb.resolve()])
+            self.assertEqual(calls[0].args[0], ["sudo", *app.owned_timeout(["apt-get", "--assume-no", "install", deb.resolve()], 60)])
             self.assertFalse(calls[0].kwargs["check"])
             self.assertIn("--download-only", calls[1].args[0])
             self.assertIn("1800s", calls[1].args[0])

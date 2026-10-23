@@ -47,9 +47,9 @@ def owned_timeout(arguments, seconds):
     return ["timeout", "--signal=TERM", f"--kill-after={APT_KILL_GRACE_SECONDS}s", f"{seconds}s", *arguments]
 
 
-def apt_command(arguments, environment, seconds):
+def apt_command(arguments, environment, seconds, check=True):
     return command(["sudo", *owned_timeout(["apt-get", *arguments], seconds)], environment,
-                   timeout=seconds + APT_KILL_GRACE_SECONDS + 30)
+                   timeout=seconds + APT_KILL_GRACE_SECONDS + 30, check=check)
 
 
 def install_deb(deb, environment):
@@ -57,7 +57,7 @@ def install_deb(deb, environment):
     # This prints exact dependency/download planning even if transfer later
     # fails. --assume-no intentionally exits1; errors remain in the same log,
     # and the following checked download/install commands still fail closed.
-    command(["apt-get", "--assume-no", "install", deb], environment, check=False)
+    apt_command(["--assume-no", "install", deb], environment, 60, check=False)
     apt_command(["install", "--download-only", "-y", deb], environment, APT_DOWNLOAD_SECONDS)
     apt_command(["install", "--no-download", "-y", deb], environment, APT_INSTALL_SECONDS)
 
