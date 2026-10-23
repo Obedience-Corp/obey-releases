@@ -63,7 +63,7 @@ class UpgradeContracts(unittest.TestCase):
             env = {"PATH": "/system/bin"}
             self.assertEqual(upgrade.default_home_layout(home, env), home / ".obey/installer")
             self.assertEqual(env, {"PATH": "/system/bin"})
-            for key in ("FESTIVAL_HOME", "OBEY_INSTALLER_HOME", "OBEY_CONFIG", "OBEY_SOCKET", "CAMP_HOME", "CAMP_APP_CONTROL_ROOT", "XDG_CONFIG_HOME"):
+            for key in ("FESTIVAL_HOME", "OBEY_INSTALLER_HOME", "OBEY_CONFIG", "OBEY_SOCKET", "OBEY_GRPC_SOCKET", "CAMP_HOME", "CAMP_APP_CONTROL_ROOT", "XDG_CONFIG_HOME"):
                 with self.assertRaisesRegex(RuntimeError, "overrides"):
                     upgrade.default_home_layout(home, dict(env, **{key: "/foreign"}))
             for suffix in (".obey", ".local/share/obey", ".config/camp"):
