@@ -257,7 +257,7 @@ def native(directory, document, target, output):
         raise RuntimeError("App native execution must not receive a draft credential")
     report = {"source_revision": document["source_revision"], "version": document["version"], "target": target,
               "runner_platform": native_platform(), "first_use_complete": False, "license_access_verified": False,
-              "reboot_verified": False, "consumer_trust_verified": False, "two_version_update_verified": False}
+              "reboot_verified": False, "consumer_trust_verified": False, "two_version_update_verified": False, "native_packaging_launch_verified": False}
     output.mkdir()
     process = xvfb = None
     installed = None
@@ -354,7 +354,7 @@ def native(directory, document, target, output):
             report["window"] = window_capture(process, target, output / "app.png", environment)
             if process.poll() is not None or not (output / "app.png").is_file() or (output / "app.png").stat().st_size == 0:
                 raise RuntimeError("App did not retain a live captured window")
-            report["native_packaging_launch_verified"] = True
+            report["primary_packaged_app_launch_verified"] = True
         # Stop only the process created by this proof, before uninstall/temp cleanup.
         stop_owned(process, environment)
         process = None
@@ -388,6 +388,7 @@ def native(directory, document, target, output):
                 cleanup_errors.append(str(error))
         if cleanup_errors:
             report["cleanup_failure"] = cleanup_errors
+        report["native_packaging_launch_verified"] = "failure" not in report and not cleanup_errors
         (output / "proof.json").write_text(json.dumps(report, indent=2) + "\n")
         if cleanup_errors:
             raise RuntimeError("owned App cleanup failed: " + "; ".join(cleanup_errors))

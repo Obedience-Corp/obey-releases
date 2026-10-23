@@ -125,7 +125,7 @@ class AppContracts(unittest.TestCase):
             report = json.loads((root / "report/proof.json").read_text())
             self.assertEqual(report["failure"], "foreign key")
             self.assertFalse(report["first_use_complete"])
-            self.assertNotIn("native_packaging_launch_verified", report)
+            self.assertFalse(report["native_packaging_launch_verified"])
             self.assertEqual(list(root.glob("app-proof-*")), [])
 
     def test_preexisting_windows_install_is_never_uninstalled(self):
