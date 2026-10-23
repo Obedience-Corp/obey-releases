@@ -333,3 +333,11 @@ image inspection. Receipt/service readiness alone does not prove rendered UI.
 These lanes do not establish licensing,
 useful first work, provider control, reboot, consumer trust or failure recovery.
 A Licenses window alone cannot satisfy the setup result.
+
+The fresh verifier accepts explicitly declared XDG paths only when they equal the
+account's normal `.config`, `.local/share` or `.local/state` path. It retains those
+values unchanged in the report; foreign, relative and symlink redirects fail. The
+official Ubuntu24 image explicitly declares its normal XDG config path in
+[configure-environment.sh](https://github.com/actions/runner-images/blob/ubuntu24/20261012.334/images/ubuntu/scripts/build/configure-environment.sh).
+`platform_scope=linux` targets only the two Linux packages when repairing that
+baseline; the default remains all five native legs, and invalid scope fails.
