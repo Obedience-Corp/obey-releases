@@ -90,7 +90,7 @@ def normal_quit(process, binary, bundle, target, environment, output):
 def default_home_layout(home, environment):
     """Refuse existing state; never redirect the account or installer environment."""
     overrides = ("FESTIVAL_HOME", "OBEY_INSTALLER_HOME", "OBEY_CONFIG", "OBEY_SOCKET", "OBEY_GRPC_SOCKET",
-                 "CAMP_HOME", "CAMP_CONFIG", "CAMP_APP_CONTROL_ROOT",
+                 "CAMP_HOME", "CAMP_CONFIG", "CAMP_REGISTRY_PATH", "CAMP_APP_CONTROL_ROOT",
                  "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME")
     if any(environment.get(name) for name in overrides):
         raise RuntimeError("default-home proof refuses inherited tool/config overrides")
