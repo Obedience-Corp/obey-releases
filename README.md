@@ -81,6 +81,10 @@ An absent/inaccessible value remains unknown. Successful native execution under
 that runner's policy does not prove consumer SmartScreen UI, reboot, a published
 App journey or a signature trust claim. Supervisor warnings and cleanup state
 remain explicit in the report.
+Read-only Windows queries use the runner's PowerShell7, avoiding cross-edition
+module loading from nested Windows PowerShell5.1. A failed query still fails the
+job and retains a partial report showing which installation/execution checks
+actually completed; partial reports are not successful native acceptance.
 
 ## Automation checks
 
