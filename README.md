@@ -393,3 +393,13 @@ all four targets; `platform_scope=windows` rechecks the complete immutable draft
 inventory while executing only the outstanding Windows leg. Invalid scopes fail
 before download/execution. No candidate bytes, runtime environment, trust root,
 security policy or native acceptance are changed by this selection.
+
+Redirected Windows packaging writes a real owned daemon config/data/socket before
+App startup. A read-only task/script-AST/process snapshot must establish the
+current user's exact task wrapper, literal executable and config ownership before
+calling the owning CLI's service uninstall. Preexisting, foreign, partial or
+ambiguous supervisor artifacts are refused. Task/files/socket/process readback
+must be empty before temporary files are deleted. A detached instance receives
+only normal stop through its unique fixture config. No arbitrary PID/name kill
+or default-home service acceptance is inferred. The existing fresh-default
+service lifecycle checks remain strict and unchanged.

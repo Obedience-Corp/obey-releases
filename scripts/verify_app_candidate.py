@@ -400,6 +400,7 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
         if key.endswith(("_TOKEN", "_PASSWORD", "_PRIVATE_KEY")):
             environment.pop(key, None)
     default_managed = None
+    packaging_root = None
     if fresh_setup:
         # Runtime import reuses the existing default-home/normal-quit contracts;
         # upgrade verification itself imports this packaging module.
@@ -426,6 +427,13 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
             default_managed = upgrade.default_home_layout(Path.home(), environment)
         if not fresh_setup:
             environment.update(FESTIVAL_HOME=str(temporary / "managed"), OBEY_CONFIG=str(temporary / "obey.yaml"))
+            # Make the already-declared redirected context real. An absent
+            # config otherwise falls back to the account's default data/socket.
+            (temporary / 'obey.yaml').write_text('data_dir: ' + json.dumps((temporary / 'data').as_posix()) + '\ngrpc:\n  socket: ' + json.dumps((temporary / 'daemon.sock').as_posix()) + '\nnetwork:\n  enabled: false\nwatcher:\n  enabled: false\n')
+            if os.name == 'nt':
+                import packaging_service
+                report['packaging_service_baseline'] = packaging_service.baseline(temporary, environment)
+                packaging_root = temporary
         # The machine/account itself is disposable. Native OS lookup retains
         # its real HOME, unlike redirected-home tests that miss supervisors.
         if public_root is not None:
@@ -552,6 +560,8 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
         actions = []
         if process is not None and process.poll() is None:
             actions.append(lambda: stop_owned(process, environment))
+        if packaging_root is not None:
+            actions.append(lambda: packaging_service.cleanup(packaging_root, environment, report))
         if default_managed is not None:
             daemon_log = Path.home() / ".local/share/obey/daemon.log"
             if daemon_log.is_file():
