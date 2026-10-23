@@ -307,3 +307,20 @@ with process-only overrides. It does not prove that environment inheritance was
 the cause, inspect another process's environment, or claim license access, chat,
 fresh component setup, reboot or consumer Windows trust. Actual native results
 and original screenshots must still be reviewed before accepting the journey.
+
+## Fresh public default-home setup
+
+`verify-app-fresh-setup.yml` exercises the published App on a fresh disposable
+Windows account, using anonymous immutable `app-test-SOURCE` bytes and the pinned
+production updater key. It installs no selected component fixture and makes no
+installer/config/PATH override: the App must provision its selected three packages.
+The proof waits for setup to leave the package screen, validates official receipts,
+file hashes, sidecar status paths/capabilities and a loaded responsive default Obey
+service, then normally quits and reopens the App and repeats readback. It preserves
+the default daemon log before uninstalling only the service/App it created.
+The uploaded proof retains original public release metadata, inventory, both
+checksum documents and updater manifest, plus the selected payload name/hash.
+
+This initial Windows lane does not establish other-platform fresh setup, licensing,
+useful first work, provider control, reboot, consumer trust or failure recovery.
+A Licenses window alone cannot satisfy the setup result.
