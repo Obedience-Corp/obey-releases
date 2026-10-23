@@ -110,6 +110,18 @@ def fetch_public(directory, source, version):
     return checked_public(directory, source, version)
 
 
+def checked_upgrade_pair(a, b):
+    release_identity(a["source_revision"], a["version"])
+    release_identity(b["source_revision"], b["version"])
+    if a["source_revision"] == b["source_revision"] or tuple(map(int, a["version"].split("."))) >= tuple(map(int, b["version"].split("."))):
+        raise ValueError("upgrade requires distinct sources and increasing versions")
+    for target, suffix in PLATFORMS.values():
+        old = next(item for item in a["targets"][target] if item["name"].endswith(suffix))
+        new = next(item for item in b["targets"][target] if item["name"].endswith(suffix))
+        if old["sha256"] == new["sha256"]:
+            raise ValueError("A/B must contain distinct updater payload bytes for every format")
+
+
 def persisted_snapshot(paths):
     result = {}
     for path in paths:

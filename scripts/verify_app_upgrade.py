@@ -14,7 +14,7 @@ import tempfile
 import time
 
 import verify_app_candidate as app
-from app_upgrade_contract import checked_public, fetch_public, persisted_snapshot, sha256, verify_persisted
+from app_upgrade_contract import checked_upgrade_pair, checked_public, fetch_public, persisted_snapshot, sha256, verify_persisted
 from verify_candidate import command, native_platform, wait_until
 from verify_selected_components import TARGETS as COMPONENT_TARGETS, checked_bootstrap, checked_receipts, fetch, require_clean_host
 
@@ -213,6 +213,7 @@ def native(root, target, package_format, a_source, a_version, b_source, b_versio
     root, output = root.resolve(), output.resolve()
     a = checked_public(root / "a", a_source, a_version)
     b = checked_public(root / "b", b_source, b_version)
+    checked_upgrade_pair(a, b)
     output.mkdir()
     report = {"a_source": a_source, "a_version": a_version, "b_source": b_source, "b_version": b_version,
               "target": target, "package_format": package_format, "two_version_update_verified": False,
@@ -233,6 +234,7 @@ def native(root, target, package_format, a_source, a_version, b_source, b_versio
                     payload = directory / "assets" / item["name"]
                     app.verify_signature(payload, payload.with_name(payload.name + ".sig"), work, environment)
         report["production_signatures_verified"] = True
+        report["original_a_payload_sha256"] = sha256(artifact(root / "a", a, target, FORMATS[package_format]))
         fixture = bootstrap_fixture(work, environment, MACHINES[target])
         report["before"] = retained_state(fixture, environment)
         bundle = reference = None
@@ -250,6 +252,10 @@ def native(root, target, package_format, a_source, a_version, b_source, b_versio
             owned_nsis = True
             app.windows_silent(artifact(root / "a", a, target, "-setup.exe"), environment)
             binary = installed / "festival-app.exe"
+            initial_version = command(["pwsh", "-NoProfile", "-Command", "(Get-Item -LiteralPath $env:APP_PROOF_EXE).VersionInfo.ProductVersion"], dict(environment, APP_PROOF_EXE=str(binary))).strip()
+            if initial_version not in (a_version, a_version + ".0"):
+                raise ValueError("actual initial Windows version is not A")
+            report["installed_a_version"] = initial_version
             reference = nsis_reference(artifact(root / "b", b, target, "-setup.exe"), work / "reference-b", environment)
         else:
             if shutil.which("festival-app"):
@@ -264,8 +270,15 @@ def native(root, target, package_format, a_source, a_version, b_source, b_versio
                 state = subprocess.run(["dpkg-query", "-W", "-f=${db:Status-Status}", "festival-app"], capture_output=True, text=True, env=environment)
                 if state.returncode == 0 and state.stdout.strip() != "not-installed":
                     raise RuntimeError("refusing preexisting App package state")
+                deb_a = artifact(root / "a", a, target, ".deb")
+                if command(["dpkg-deb", "-f", deb_a, "Package"], environment).strip() != "festival-app" or command(["dpkg-deb", "-f", deb_a, "Version"], environment).strip() != a_version:
+                    raise ValueError("initial Debian package identity is not A")
                 owned_deb = True
                 command(["sudo", "apt-get", "install", "-y", artifact(root / "a", a, target, ".deb")], environment, timeout=300)
+                initial_version = command(["dpkg-query", "-W", "-f=${Version}", "festival-app"], environment).strip()
+                if initial_version != a_version:
+                    raise ValueError("actual initial Debian version is not A")
+                report["installed_a_version"] = initial_version
                 binary = Path("/usr/bin/festival-app")
                 reference = work / "reference-b"
                 command(["dpkg-deb", "-x", artifact(root / "b", b, target, ".deb"), reference], environment)
@@ -363,7 +376,8 @@ if __name__ == "__main__":
     root = Path("upgrade-candidates").resolve()
     if args.mode == "fetch":
         root.mkdir()
-        fetch_public(root / "a", args.a_source, args.a_version)
-        fetch_public(root / "b", args.b_source, args.b_version)
+        a = fetch_public(root / "a", args.a_source, args.a_version)
+        b = fetch_public(root / "b", args.b_source, args.b_version)
+        checked_upgrade_pair(a, b)
     else:
         native(root, args.target, args.format, args.a_source, args.a_version, args.b_source, args.b_version, Path("upgrade-proof").resolve())

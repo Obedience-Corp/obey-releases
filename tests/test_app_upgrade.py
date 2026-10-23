@@ -77,6 +77,26 @@ class UpgradeContracts(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "original producer payloads"):
                 contract.checked_public(root, SOURCE, VERSION)
 
+    def test_renamed_identical_payloads_cannot_prove_an_upgrade(self):
+        a = manifest()
+        linux = a["targets"]["x86_64-unknown-linux-gnu"]
+        linux.append(dict(next(item for item in linux if item["name"].endswith(".deb"))))
+        linux[-1]["name"] += ".sig"
+        b = copy.deepcopy(a)
+        b.update(source_revision="b" * 40, version="0.1.1")
+        for entries in b["targets"].values():
+            for item in entries:
+                item["name"] = item["name"].replace("0.1.0", "0.1.1")
+        with self.assertRaisesRegex(ValueError, "distinct updater payload"):
+            contract.checked_upgrade_pair(a, b)
+        for entries in b["targets"].values():
+            for item in entries:
+                item["sha256"] = hashlib.sha256(b"new B bytes").hexdigest()
+        contract.checked_upgrade_pair(a, b)
+        b["version"] = a["version"]
+        with self.assertRaisesRegex(ValueError, "increasing versions"):
+            contract.checked_upgrade_pair(a, b)
+
     def test_public_source_draft_url_and_server_digest_fail_closed(self):
         with tempfile.TemporaryDirectory() as name:
             root = Path(name)
