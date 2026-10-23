@@ -329,8 +329,9 @@ def native(root, target, package_format, a_source, a_version, b_source, b_versio
                 report["default_before"] = default_home_readback(binary, managed, environment)
             process = subprocess.Popen([str(binary)], env=environment, stdout=log, stderr=subprocess.STDOUT, start_new_session=os.name != "nt")
             report["a_window"] = app.window_capture(process, target, output / "a.png", environment)
-            if default_managed is not None:
-                wait_windows_setup(process, target, output, environment, report, "a")
+            # A's real Update ready modal hides the underlying licensing screen
+            # from UIA. Invoke its authenticated Restart now control below;
+            # require unobscured setup completion in auto-restarted/reopened B.
             if package_format == "nsis":
                 initial = windows_query("identity", environment, APP_UPGRADE_PID=str(process.pid))
                 report["restart_control"] = wait_until("real Restart now control", lambda: (value if (value := windows_query("restart", environment, APP_UPGRADE_PID=str(process.pid), APP_UPGRADE_EXE=str(binary), APP_UPGRADE_STARTED=initial["started"], APP_UPGRADE_VERSION=b_version)).get("invoked") else None), seconds=600)
