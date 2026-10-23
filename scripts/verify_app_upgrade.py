@@ -16,7 +16,7 @@ import time
 import verify_app_candidate as app
 from app_upgrade_contract import checked_upgrade_pair, checked_public, fetch_public, persisted_snapshot, sha256, verify_persisted
 from verify_candidate import command, native_platform, wait_until
-from verify_selected_components import TARGETS as COMPONENT_TARGETS, checked_bootstrap, checked_receipts, fetch, require_clean_host
+from verify_selected_components import TARGETS as COMPONENT_TARGETS, checked_bootstrap, checked_receipts, checked_status, fetch, require_clean_host
 
 SCRIPT = Path(__file__).resolve().parent
 MACHINES = {"aarch64-apple-darwin": "macOS-arm64", "x86_64-apple-darwin": "macOS-x86_64",
@@ -87,8 +87,39 @@ def normal_quit(process, binary, bundle, target, environment, output):
     process.wait(timeout=45)
 
 
-def bootstrap_fixture(root, environment, machine):
-    managed = root / "managed"
+def default_home_layout(home, environment):
+    """Refuse existing state; never redirect the account or installer environment."""
+    overrides = ("FESTIVAL_HOME", "OBEY_INSTALLER_HOME", "OBEY_CONFIG", "OBEY_SOCKET", "OBEY_GRPC_SOCKET",
+                 "CAMP_HOME", "CAMP_CONFIG", "CAMP_APP_CONTROL_ROOT",
+                 "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME")
+    if any(environment.get(name) for name in overrides):
+        raise RuntimeError("default-home proof refuses inherited tool/config overrides")
+    for path in (home / ".obey", home / ".local/share/obey", home / ".config/camp"):
+        if path.exists() or path.is_symlink():
+            raise RuntimeError("default-home proof refuses preexisting ecosystem state: " + str(path))
+    return home / ".obey/installer"
+
+
+def default_home_readback(binary, managed, environment):
+    """Read public sidecar resolution with the unchanged default environment."""
+    status = command([binary.parent / "festival.exe", "--managed", "status", "--plugin", "obedience-corp/camp-app", "--json"], environment, json_output=True)
+    checked_status(status, managed)
+    return {"installer_status": status, "selected_mtime_ns": {
+        row["path"]: Path(row["path"]).stat().st_mtime_ns for row in checked_receipts(managed)["files"]}}
+
+
+def wait_windows_setup(process, target, output, environment, report, stage):
+    """License UI proves setup settled, not license entitlement or useful work."""
+    def capture():
+        window = app.window_capture(process, target, output / (stage + "-setup.png"), environment)
+        report[stage + "_setup_window"] = window
+        names = window.get("visible_names", [])
+        return window if "Licenses" in names and "License key" in names else None
+    return wait_until("default-home setup reaches licensing after " + stage, capture, seconds=600)
+
+
+def bootstrap_fixture(root, environment, machine, managed=None):
+    managed = managed if managed is not None else root / "managed"
     suffix = ".exe" if os.name == "nt" else ""
     bootstrap = root / ("festival" + suffix)
     name = "festival-" + COMPONENT_TARGETS[machine][1]
@@ -199,13 +230,15 @@ def check_installed_b(package_format, binary, bundle, reference, expected_image,
     return {"appimage_sha256": sha256(binary)}
 
 
-def native(root, target, package_format, a_source, a_version, b_source, b_version, output):
+def native(root, target, package_format, a_source, a_version, b_source, b_version, output, installation_context="redirected"):
     require_clean_host(MACHINES.get(target))
     if target not in MACHINES or native_platform() != app.TARGETS[target][0] or package_format not in FORMATS:
         raise ValueError("upgrade target/format does not match native machine")
     allowed = "dmg" if target.endswith("apple-darwin") else "nsis" if target.endswith("windows-msvc") else None
     if allowed and package_format != allowed or allowed is None and package_format not in ("deb", "appimage"):
         raise ValueError("unsupported native package format")
+    if installation_context not in ("redirected", "default-home") or installation_context == "default-home" and package_format != "nsis":
+        raise ValueError("default-home acceptance currently requires the native NSIS leg")
     if any(os.environ.get(key) for key in ("GH_TOKEN", "GITHUB_TOKEN")):
         raise RuntimeError("native upgrade must not receive GitHub credentials")
     if tuple(map(int, a_version.split("."))) >= tuple(map(int, b_version.split("."))):
@@ -216,18 +249,22 @@ def native(root, target, package_format, a_source, a_version, b_source, b_versio
     checked_upgrade_pair(a, b)
     output.mkdir()
     report = {"a_source": a_source, "a_version": a_version, "b_source": b_source, "b_version": b_version,
-              "target": target, "package_format": package_format, "two_version_update_verified": False,
+              "target": target, "package_format": package_format, "installation_context": installation_context,
+              "default_home_relaunch_verified": False, "two_version_update_verified": False,
               "license_access_verified": False, "useful_first_use_verified": False, "consumer_trust_verified": False, "reboot_verified": False, "native_failure_recovery_verified": False}
     environment = {key: value for key, value in os.environ.items() if not key.endswith(("_TOKEN", "_PASSWORD", "_PRIVATE_KEY"))}
+    default_managed = default_home_layout(Path.home(), environment) if installation_context == "default-home" else None
     process = display = manager = None
     owned_deb = owned_nsis = False
     temporary = tempfile.TemporaryDirectory(prefix="app-upgrade-", dir=os.environ["RUNNER_TEMP"])
     work = Path(temporary.name)
     try:
-        managed = work / "managed"
-        config = work / "obey.yaml"
-        config.write_text("data_dir: " + json.dumps((work / "data").as_posix()) + "\ngrpc:\n  socket: " + json.dumps((work / "a.sock").as_posix()) + "\nnetwork:\n  enabled: false\nwatcher:\n  enabled: false\n")
-        environment.update(FESTIVAL_HOME=str(managed), OBEY_CONFIG=str(config), PATH=str(managed / "bin") + os.pathsep + environment["PATH"])
+        managed = default_managed if default_managed is not None else work / "managed"
+        if default_managed is None:
+            config = work / "obey.yaml"
+            config.write_text("data_dir: " + json.dumps((work / "data").as_posix()) + "\ngrpc:\n  socket: " + json.dumps((work / "a.sock").as_posix()) + "\nnetwork:\n  enabled: false\nwatcher:\n  enabled: false\n")
+            environment.update(FESTIVAL_HOME=str(managed), OBEY_CONFIG=str(config), PATH=str(managed / "bin") + os.pathsep + environment["PATH"])
+        report["managed_home"] = str(managed)
         for directory, document in ((root / "a", a), (root / "b", b)):
             for item in document["targets"][target]:
                 if item["name"].endswith(tuple(FORMATS.values())):
@@ -235,7 +272,7 @@ def native(root, target, package_format, a_source, a_version, b_source, b_versio
                     app.verify_signature(payload, payload.with_name(payload.name + ".sig"), work, environment)
         report["production_signatures_verified"] = True
         report["original_a_payload_sha256"] = sha256(artifact(root / "a", a, target, FORMATS[package_format]))
-        fixture = bootstrap_fixture(work, environment, MACHINES[target])
+        fixture = bootstrap_fixture(work, environment, MACHINES[target], managed)
         report["before"] = retained_state(fixture, environment)
         bundle = reference = None
         if package_format == "dmg":
@@ -288,8 +325,12 @@ def native(root, target, package_format, a_source, a_version, b_source, b_versio
                 binary.chmod(0o755)
         log = (output / "app.log").open("w")
         try:
+            if default_managed is not None:
+                report["default_before"] = default_home_readback(binary, managed, environment)
             process = subprocess.Popen([str(binary)], env=environment, stdout=log, stderr=subprocess.STDOUT, start_new_session=os.name != "nt")
             report["a_window"] = app.window_capture(process, target, output / "a.png", environment)
+            if default_managed is not None:
+                wait_windows_setup(process, target, output, environment, report, "a")
             if package_format == "nsis":
                 initial = windows_query("identity", environment, APP_UPGRADE_PID=str(process.pid))
                 report["restart_control"] = wait_until("real Restart now control", lambda: (value if (value := windows_query("restart", environment, APP_UPGRADE_PID=str(process.pid), APP_UPGRADE_EXE=str(binary), APP_UPGRADE_STARTED=initial["started"], APP_UPGRADE_VERSION=b_version)).get("invoked") else None), seconds=600)
@@ -312,6 +353,9 @@ def native(root, target, package_format, a_source, a_version, b_source, b_versio
             report["installed_b_version"] = b_version
             report["after_install"] = retained_state(fixture, environment)
             report["installed_payload_window"] = app.window_capture(process, target, output / "installed-before-quit.png", environment)
+            if default_managed is not None:
+                wait_windows_setup(process, target, output, environment, report, "auto_restarted_b")
+                report["default_after_auto_restart"] = default_home_readback(binary, managed, environment)
             report["running_version_before_quit"] = b_version if package_format == "nsis" else a_version
             normal_quit(process, binary, bundle, target, environment, output)
             process = None
@@ -321,6 +365,13 @@ def native(root, target, package_format, a_source, a_version, b_source, b_versio
             report["reopened_b_window"] = app.capture_startup(process, target, output, environment, report["reopened_captures"], "b-reopened")
             report["reopened_b_payload"] = check_installed_b(package_format, binary, bundle, reference, artifact(root / "b", b, target, ".AppImage") if package_format == "appimage" else None, b_version, environment)
             report["after_reopen"] = retained_state(fixture, environment)
+            if default_managed is not None:
+                wait_windows_setup(process, target, output, environment, report, "reopened_b")
+                report["default_after_reopen"] = default_home_readback(binary, managed, environment)
+                initial_mtimes = report["default_before"]["selected_mtime_ns"]
+                if any(report[key]["selected_mtime_ns"] != initial_mtimes for key in ("default_after_auto_restart", "default_after_reopen")):
+                    raise ValueError("current selected executables were needlessly rewritten")
+                report["default_home_relaunch_verified"] = True
             report["two_version_update_verified"] = True
         finally:
             log.close()
@@ -333,7 +384,14 @@ def native(root, target, package_format, a_source, a_version, b_source, b_versio
         actions = []
         if process is not None:
             actions.append(lambda: app.stop_owned(process, environment))
-        obey = work / "managed/bin" / ("obey.exe" if os.name == "nt" else "obey")
+        if default_managed is not None:
+            daemon_log = Path.home() / ".local/share/obey/daemon.log"
+            if daemon_log.is_file():
+                try:
+                    shutil.copyfile(daemon_log, output / "default-daemon.log")
+                except OSError as error:
+                    errors.append("cannot retain default daemon log: " + str(error))
+        obey = managed / "bin" / ("obey.exe" if os.name == "nt" else "obey")
         if obey.exists():
             actions.append(lambda: command([obey, "service", "uninstall"], environment, timeout=120))
         if owned_nsis:
@@ -359,6 +417,7 @@ def native(root, target, package_format, a_source, a_version, b_source, b_versio
         if errors:
             report["cleanup_failure"] = errors
             report["two_version_update_verified"] = False
+            report["default_home_relaunch_verified"] = False
         (output / "proof.json").write_text(json.dumps(report, indent=2) + "\n")
         if errors:
             raise RuntimeError("owned upgrade cleanup failed: " + "; ".join(errors))
@@ -372,6 +431,7 @@ if __name__ == "__main__":
         parser.add_argument("--" + label + "-version", required=True)
     parser.add_argument("--target")
     parser.add_argument("--format", choices=tuple(FORMATS))
+    parser.add_argument("--installation-context", choices=("redirected", "default-home"), default="redirected")
     args = parser.parse_args()
     root = Path("upgrade-candidates").resolve()
     if args.mode == "fetch":
@@ -380,4 +440,4 @@ if __name__ == "__main__":
         b = fetch_public(root / "b", args.b_source, args.b_version)
         checked_upgrade_pair(a, b)
     else:
-        native(root, args.target, args.format, args.a_source, args.a_version, args.b_source, args.b_version, Path("upgrade-proof").resolve())
+        native(root, args.target, args.format, args.a_source, args.a_version, args.b_source, args.b_version, Path("upgrade-proof").resolve(), args.installation_context)

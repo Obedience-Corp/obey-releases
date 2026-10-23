@@ -57,6 +57,43 @@ def refresh_metadata(root, filename):
 
 
 class UpgradeContracts(unittest.TestCase):
+    def test_default_home_refuses_existing_state_or_environment_override(self):
+        with tempfile.TemporaryDirectory() as name:
+            home = Path(name)
+            env = {"PATH": "/system/bin"}
+            self.assertEqual(upgrade.default_home_layout(home, env), home / ".obey/installer")
+            self.assertEqual(env, {"PATH": "/system/bin"})
+            for key in ("FESTIVAL_HOME", "OBEY_INSTALLER_HOME", "OBEY_CONFIG", "OBEY_SOCKET", "OBEY_GRPC_SOCKET", "CAMP_HOME", "CAMP_APP_CONTROL_ROOT", "XDG_CONFIG_HOME"):
+                with self.assertRaisesRegex(RuntimeError, "overrides"):
+                    upgrade.default_home_layout(home, dict(env, **{key: "/foreign"}))
+            for suffix in (".obey", ".local/share/obey", ".config/camp"):
+                existing = home / suffix
+                existing.mkdir(parents=True)
+                with self.assertRaisesRegex(RuntimeError, "preexisting"):
+                    upgrade.default_home_layout(home, env)
+                existing.rmdir()
+            (home / ".obey").symlink_to(home / "absent")
+            with self.assertRaisesRegex(RuntimeError, "preexisting"):
+                upgrade.default_home_layout(home, env)
+
+    def test_setup_window_must_leave_installation_screen(self):
+        setup = {"visible_names": ["Getting this machine ready", "not found"]}
+        license_window = {"visible_names": ["Licenses", "License key"]}
+        report = {}
+        def poll(description, predicate, seconds):
+            self.assertEqual(seconds, 600)
+            self.assertIsNone(predicate())
+            return predicate()
+        with patch.object(upgrade.app, "window_capture", side_effect=[setup, license_window]), patch.object(upgrade, "wait_until", side_effect=poll):
+            self.assertEqual(upgrade.wait_windows_setup(Mock(), "windows", Path("/output"), {}, report, "auto_restarted_b"), license_window)
+        self.assertEqual(report["auto_restarted_b_setup_window"], license_window)
+
+    def test_default_home_readback_rejects_missing_or_external_selected_tools(self):
+        with patch.object(upgrade, "command", return_value={"ok": False}), patch.object(upgrade, "checked_receipts") as receipts:
+            with self.assertRaisesRegex(ValueError, "status failed"):
+                upgrade.default_home_readback(Path("/app/festival-app.exe"), Path("/home/.obey/installer"), {})
+            receipts.assert_not_called()
+
     def test_public_inputs_require_five_formats_and_both_checksum_contracts(self):
         with tempfile.TemporaryDirectory() as name:
             root = Path(name)

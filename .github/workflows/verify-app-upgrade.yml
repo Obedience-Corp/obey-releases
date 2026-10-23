@@ -2,6 +2,11 @@ name: Verify published immutable App upgrade
 on:
   workflow_dispatch:
     inputs:
+      installation_context:
+        description: Redirected mechanism fixture, or Windows default-home relaunch acceptance
+        type: choice
+        options: [redirected, default-home]
+        default: redirected
       package_format:
         description: Verify all declared formats, or one format needing additional proof
         type: choice
@@ -34,10 +39,15 @@ jobs:
       - name: Validate requested package format
         env:
           PACKAGE_FORMAT: ${{ inputs.package_format || 'all' }}
+          INSTALLATION_CONTEXT: ${{ inputs.installation_context || 'redirected' }}
         run: |
           case "$PACKAGE_FORMAT" in
             all|deb|nsis) ;;
             *) echo "unsupported package format selection" >&2; exit 64 ;;
+          esac
+          case "$INSTALLATION_CONTEXT:$PACKAGE_FORMAT" in
+            redirected:*|default-home:nsis) ;;
+            *) echo "default-home acceptance requires package_format=nsis" >&2; exit 64 ;;
           esac
       - uses: actions/checkout@v4
         with:
@@ -114,7 +124,8 @@ jobs:
           B_VERSION: ${{ inputs.b_version }}
           TARGET: ${{ matrix.target }}
           FORMAT: ${{ matrix.format }}
-        run: python scripts/verify_app_upgrade.py --mode verify --a-source "$A_SOURCE" --a-version "$A_VERSION" --b-source "$B_SOURCE" --b-version "$B_VERSION" --target "$TARGET" --format "$FORMAT"
+          INSTALLATION_CONTEXT: ${{ inputs.installation_context || 'redirected' }}
+        run: python scripts/verify_app_upgrade.py --mode verify --a-source "$A_SOURCE" --a-version "$A_VERSION" --b-source "$B_SOURCE" --b-version "$B_VERSION" --target "$TARGET" --format "$FORMAT" --installation-context "$INSTALLATION_CONTEXT"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
