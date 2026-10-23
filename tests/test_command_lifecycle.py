@@ -51,13 +51,35 @@ class CommandLifecycle(unittest.TestCase):
             outsider.terminate()
             outsider.wait(timeout=5)
 
+    def test_simulation_cannot_install_with_assume_yes_configuration(self):
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            control = root / "payload/DEBIAN"
+            control.mkdir(parents=True)
+            (control / "control").write_text("Package: fa0027-simulation-probe\nVersion: 1.0\nArchitecture: all\nMaintainer: Test <test@example.invalid>\nDescription: Disposable simulation proof\n")
+            deb = root / "probe.deb"
+            subprocess.run(["dpkg-deb", "--build", "--root-owner-group", control.parent, deb], check=True, capture_output=True)
+            configured = dict(os.environ, APT_CONFIG=str(root / "apt.conf"))
+            (root / "apt.conf").write_text('APT::Get::Assume-Yes "true";\n')
+            original = command
+            def without_sudo(arguments, environment, **kwargs):
+                self.assertEqual(arguments[:2], ["sudo", "timeout"])
+                return original(arguments[1:], environment, **kwargs)
+            # Keep the exact owned command/apt options, dropping only sudo to
+            # exercise genuine apt simulation as this normal container UID.
+            with patch.object(app, "command", side_effect=without_sudo):
+                plan = app.apt_command(["--simulate", "install", deb], configured, 60)
+            self.assertIn("Inst fa0027-simulation-probe", plan)
+            installed = subprocess.run(["dpkg-query", "-W", "-f=${Status}", "fa0027-simulation-probe"], capture_output=True, text=True)
+            self.assertNotEqual(installed.returncode, 0)
+
     def test_apt_separates_network_from_no_download_install(self):
         with tempfile.TemporaryDirectory() as root, patch.object(app, "command") as invoked:
             deb = Path(root) / "candidate.deb"
             app.install_deb(deb, {})
             calls = invoked.call_args_list
-            self.assertEqual(calls[0].args[0], ["sudo", *app.owned_timeout(["apt-get", "--assume-no", "install", deb.resolve()], 60)])
-            self.assertFalse(calls[0].kwargs["check"])
+            self.assertEqual(calls[0].args[0], ["sudo", *app.owned_timeout(["apt-get", "--simulate", "install", deb.resolve()], 60)])
+            self.assertTrue(calls[0].kwargs["check"])
             self.assertIn("--download-only", calls[1].args[0])
             self.assertIn("1800s", calls[1].args[0])
             self.assertIn("--no-download", calls[2].args[0])

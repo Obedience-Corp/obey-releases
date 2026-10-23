@@ -226,7 +226,7 @@ still installs no Festival App Debian package and uses no rendering or security
 environment override; it does not claim a graphical App works on an unprovisioned
 headless server or prove every desktop/GPU combination.
 
-Linux Debian verification logs the exact apt transaction before dependency transfer.
+Linux Debian verification logs a checked `--simulate` apt transaction before dependency transfer. Simulation cannot install even if host configuration forces Assume-Yes; the real download logs its exact size.
 Network preparation is a separate, bounded 30-minute `--download-only` operation;
 the actual `--no-download` install retains its five-minute budget. These are fresh
 hosted machines, with GNU `timeout` running under the same sudo scope as apt: TERM
