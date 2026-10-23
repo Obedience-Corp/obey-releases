@@ -1,0 +1,87 @@
+name: Verify unpublished internal Windows observer proof
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_tag:
+        description: candidate-sessiondiscovery-FULL_SOURCE_SHA draft
+        required: true
+        type: string
+      source_revision:
+        description: Frozen private source SHA (no source content)
+        required: true
+        type: string
+      executable_sha256:
+        description: Independently recorded internal test EXE SHA256
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: discovery-proof-${{ inputs.source_revision }}
+  cancel-in-progress: false
+jobs:
+  fetch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Fetch exact unpublished data without execution
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          CANDIDATE_RUNNER_KIND: ${{ runner.environment }}
+          TAG: ${{ inputs.candidate_tag }}
+          SOURCE: ${{ inputs.source_revision }}
+          DIGEST: ${{ inputs.executable_sha256 }}
+        run: python scripts/verify_discovery_proof.py --mode fetch --tag "$TAG" --source "$SOURCE" --sha256 "$DIGEST"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: internal-discovery-inputs
+          path: discovery-candidate/
+          if-no-files-found: error
+          retention-days: 7
+  native:
+    needs: fetch
+    runs-on: windows-2025
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.0'
+          cache: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: internal-discovery-inputs
+          path: discovery-candidate
+      - name: Verify exact internal observer tests on disposable Windows
+        shell: bash
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          CANDIDATE_NATIVE_DISPOSABLE: '1'
+          CANDIDATE_RUNNER_KIND: ${{ runner.environment }}
+          OBEY_NATIVE_DISCOVERY_DISPOSABLE: '1'
+          TAG: ${{ inputs.candidate_tag }}
+          SOURCE: ${{ inputs.source_revision }}
+          DIGEST: ${{ inputs.executable_sha256 }}
+        run: python scripts/verify_discovery_proof.py --mode verify --tag "$TAG" --source "$SOURCE" --sha256 "$DIGEST"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-internal-observer-proof
+          path: discovery-proof/
+          if-no-files-found: warn

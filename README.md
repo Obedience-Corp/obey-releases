@@ -366,3 +366,18 @@ missing/effectless proxy, changed A state, wrong PID, absent real menu, wrong B
 payload or incomplete owned cleanup fails the run. The normal hosted WinForms
 fixture exercises actual menu invocation and stale-identity refusal before native
 candidate evidence may rely on it. No new native run is accepted from unit tests.
+
+### Internal Windows observer proof (not a product release)
+
+`verify-discovery-proof.yml` is manual-only. It accepts an unpublished
+`candidate-sessiondiscovery-FULL_SOURCE_SHA` draft containing exactly
+`sessiondiscovery.test.exe` and `sessiondiscovery-proof.json`. The v1 manifest
+binds the frozen source, SHA256, Go 1.26.0, Windows amd64 and CGO=0 to an
+`internal-observer-test-only` purpose. The data-only draft fetch has write
+permission solely to read drafts; the disposable Windows execution job receives
+no draft credential. Both jobs validate the fixed inventory and digest. Native
+execution additionally checks embedded clean Git provenance, package/build tag,
+and runs only `^TestWindowsProcessObservationFS_` with the disposable guard.
+Logs, build information and a result report survive test failure. Private source
+and test source are never checked out here. This internal observer proof does
+not establish production daemon, CGO/SQLite, provider chat or release readiness.
