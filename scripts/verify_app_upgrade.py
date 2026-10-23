@@ -274,7 +274,7 @@ def native(root, target, package_format, a_source, a_version, b_source, b_versio
                 if command(["dpkg-deb", "-f", deb_a, "Package"], environment).strip() != "festival-app" or command(["dpkg-deb", "-f", deb_a, "Version"], environment).strip() != a_version:
                     raise ValueError("initial Debian package identity is not A")
                 owned_deb = True
-                command(["sudo", "apt-get", "install", "-y", artifact(root / "a", a, target, ".deb")], environment, timeout=300)
+                app.install_deb(artifact(root / "a", a, target, ".deb"), environment)
                 initial_version = command(["dpkg-query", "-W", "-f=${Version}", "festival-app"], environment).strip()
                 if initial_version != a_version:
                     raise ValueError("actual initial Debian version is not A")
@@ -339,7 +339,7 @@ def native(root, target, package_format, a_source, a_version, b_source, b_versio
         if owned_nsis:
             actions.append(lambda: app.windows_silent(Path(os.environ["LOCALAPPDATA"]) / "Festival App/uninstall.exe", environment))
         if owned_deb:
-            actions.append(lambda: command(["sudo", "apt-get", "remove", "--purge", "-y", "festival-app"], environment, timeout=120))
+            actions.append(lambda: app.apt_command(["remove", "--purge", "-y", "festival-app"], environment, 120))
         for child in (manager, display):
             if child is not None:
                 def stop_child(child=child):

@@ -225,3 +225,23 @@ Do not bundle graphics-driver libraries to hide that fixture omission. This lane
 still installs no Festival App Debian package and uses no rendering or security
 environment override; it does not claim a graphical App works on an unprovisioned
 headless server or prove every desktop/GPU combination.
+
+Linux Debian verification logs the exact apt transaction before dependency transfer.
+Network preparation is a separate, bounded 30-minute `--download-only` operation;
+the actual `--no-download` install retains its five-minute budget. These are fresh
+hosted machines, with GNU `timeout` running under the same sudo scope as apt: TERM
+and a 15-second KILL grace apply to the owned process group, rather than killing
+only a sudo wrapper and leaving a package lock holder. Cleanup uses the same
+bounded group ownership. A timeout remains a failure, with partial stdout/stderr
+retained; there is no retry or global process cleanup.
+
+This network allowance follows A run40001857008: the desktop prerequisite step
+fetched26.6MB in638seconds, while the later five-minute apt invocation timed out
+without retained partial output. The cause of that later delay was not established.
+A minimal Ubuntu24 container's dependency plan needs163MB of downloads; the actual
+hosted plan is logged because its installed baseline differs. The 30-minute bound
+can still fail on a slow mirror; it is not a guarantee or a product startup budget.
+Linux packaging/upgrade jobs allow60minutes for prerequisite setup, dependency
+transfer, the original installation budget, native proof and owned cleanup. Other
+OS budgets are unchanged. No producer artifact bytes or runtime/security settings
+change for this harness repair.
