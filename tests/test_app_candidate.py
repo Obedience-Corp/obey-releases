@@ -190,7 +190,7 @@ class AppContracts(unittest.TestCase):
             default, extracted = Mock(), Mock()
             default.poll.return_value = 1
             report = {}
-            with patch.object(app.subprocess, "Popen", side_effect=[default, extracted]), patch.object(app, "window_capture", side_effect=[RuntimeError("libfuse missing"), {"window_id": "owned"}]), patch.object(app, "stop_owned") as cleanup:
+            with patch.object(app.subprocess, "Popen", side_effect=[default, extracted]), patch.object(app, "capture_startup", side_effect=[RuntimeError("libfuse missing"), {"window_id": "owned"}]), patch.object(app, "stop_owned") as cleanup:
                 with self.assertRaisesRegex(RuntimeError, "diagnostic only"):
                     app.appimage_proof(root / "download.AppImage", root / "AppRun", "x86_64-unknown-linux-gnu", root, {}, report)
             self.assertFalse(report["appimage_default_launch_verified"])

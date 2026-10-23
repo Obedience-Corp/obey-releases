@@ -129,8 +129,10 @@ installed version/layout, and launches it on its own Xvfb. It separately records
 the authenticated downloaded AppImage's default launch. If that fails (including
 unavailable FUSE), extracted startup is diagnostic only and the proof fails; it
 never substitutes extracted success for normal AppImage launch.
-The proof requires a live owned window and saves a screenshot, logs and partial
-JSON on failures. It changes no global security settings or existing installation.
+The proof requires a live owned window and retains initial,5second and15second
+startup captures with alive checks, logs and partial JSON on failures. The primary
+PNG points at the late frame. Inspect the images: a blank/error window does not
+establish rendered App readiness. It changes no global security settings or existing installation.
 
 This is packaging/launch acceptance only. A license screen/window is not license
 access, useful first use, a configured provider, a reboot, consumer SmartScreen/
@@ -139,6 +141,18 @@ and notarization are optional; per-app Open Anyway remains the supported unsigne
 macOS path. An unavailable GUI or failed launch remains an explicit failed proof,
 not an inferred success from signatures/builds. Never run native mode on an operator
 account. Unit/negative filesystem tests run only in the Docker harness below.
+
+Mac failures retain original entitlements, xattr names/hashes/quarantine, execution
+policy assessment/logs and matching crash reports. Optional workflow input
+`mac_entitlement_diagnostic=true` additionally copies only the owned bundled CLI
+into a separately labeled temporary diagnostic directory. It preserves a same-byte
+copy control, and ad-hoc signs another copy after removing only
+`com.apple.developer.web-browser` and
+`com.apple.developer.web-browser.public-key-credential`, preserving every other
+entitlement. It never changes original bundle/archive bytes, removes quarantine,
+or changes global security policy. A successful modified-copy version probe is
+**diagnostic only**; the original candidate remains failed. This option is off by
+default and never supplies a release trust root or publication authority.
 
 ## Automation checks
 

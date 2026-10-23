@@ -16,9 +16,11 @@ import signal
 import subprocess
 import tarfile
 import tempfile
+import time
 
 from verify_candidate import REPOSITORY, command, native_platform, wait_until
 from verify_selected_components import require_clean_host
+from mac_candidate_diagnostics import diagnose as diagnose_mac_failure
 
 TARGETS = {
     "aarch64-apple-darwin": ("darwin/arm64", {".dmg", ".app.tar.gz", ".app.tar.gz.sig"}),
@@ -214,13 +216,33 @@ def window_capture(process, target, output, environment):
     return {"window_id": found, "title": title, "screenshot": output.name}
 
 
+def capture_startup(process, target, output, environment, captures, stem="app"):
+    start = time.monotonic()
+    latest = None
+    for delay, label in ((0, "initial"), (5, "5s"), (15, "15s")):
+        remaining = delay - (time.monotonic() - start)
+        if remaining > 0:
+            time.sleep(remaining)
+        if process.poll() is not None:
+            raise RuntimeError("owned App exited before delayed startup capture")
+        screenshot = output / f"{stem}-{label}.png"
+        latest = window_capture(process, target, screenshot, environment)
+        if process.poll() is not None or not screenshot.is_file() or screenshot.stat().st_size == 0:
+            raise RuntimeError("owned App did not retain a live delayed screenshot")
+        captures.append({"requested_seconds": delay, "elapsed_seconds": round(time.monotonic() - start, 3), "window": latest})
+    # Keep the existing primary artifact name, now pointing at the late frame.
+    primary = output / f"{stem}.png"
+    shutil.copyfile(output / latest["screenshot"], primary)
+    return dict(latest, screenshot=primary.name)
+
+
 def appimage_proof(appimage, extracted, target, output, environment, report):
     process = None
     try:
         with (output / "appimage-default.log").open("w") as log:
             process = subprocess.Popen([str(appimage)], env=environment, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
             try:
-                report["appimage_default_window"] = window_capture(process, target, output / "appimage-default.png", environment)
+                report["appimage_default_window"] = capture_startup(process, target, output, environment, report.setdefault("appimage_default_captures", []), "appimage-default")
                 if process.poll() is not None:
                     raise RuntimeError("default AppImage exited during launch")
                 report["appimage_default_launch_verified"] = True
@@ -234,7 +256,7 @@ def appimage_proof(appimage, extracted, target, output, environment, report):
             # This diagnostic never replaces the original default launch result.
             with (output / "appimage-extracted-diagnostic.log").open("w") as log:
                 process = subprocess.Popen([str(extracted)], env=environment, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
-                report["appimage_extracted_diagnostic_window"] = window_capture(process, target, output / "appimage-extracted-diagnostic.png", environment)
+                report["appimage_extracted_diagnostic_window"] = capture_startup(process, target, output, environment, report.setdefault("appimage_extracted_diagnostic_captures", []), "appimage-extracted-diagnostic")
                 report["appimage_extracted_diagnostic_only"] = True
             raise RuntimeError("default AppImage launch failed; extracted startup is diagnostic only")
     finally:
@@ -360,7 +382,7 @@ def native(directory, document, target, output):
                     raise RuntimeError("App exited before window capture: " + (output / "app.log").read_text())
                 return True
             alive_window()
-            report["window"] = window_capture(process, target, output / "app.png", environment)
+            report["window"] = capture_startup(process, target, output, environment, report.setdefault("startup_captures", []))
             if process.poll() is not None or not (output / "app.png").is_file() or (output / "app.png").stat().st_size == 0:
                 raise RuntimeError("App did not retain a live captured window")
             report["primary_packaged_app_launch_verified"] = True
@@ -374,6 +396,8 @@ def native(directory, document, target, output):
             installed = None
     except BaseException as error:
         report["failure"] = str(error)
+        if target.endswith("apple-darwin"):
+            report["mac_diagnostics"] = diagnose_mac_failure(temporary / "installed/Festival App.app", temporary, output, environment, allow_modified_copy=os.environ.get("APP_PROOF_MAC_ENTITLEMENT_DIAGNOSTIC") == "true")
         raise
     finally:
         cleanup_errors = []
