@@ -15,7 +15,7 @@ on:
       package_format:
         description: Verify all declared formats, or one format needing additional proof
         type: choice
-        options: [all, deb, nsis]
+        options: [all, deb, nsis, appimage]
         default: all
       a_source:
         description: Full reviewed source of published app-test A (compiled endpoint already points to B)
@@ -48,7 +48,7 @@ jobs:
           FAILURE_MODE: ${{ inputs.failure_mode || 'none' }}
         run: |
           case "$PACKAGE_FORMAT" in
-            all|deb|nsis) ;;
+            all|deb|nsis|appimage) ;;
             *) echo "unsupported package format selection" >&2; exit 64 ;;
           esac
           case "$INSTALLATION_CONTEXT:$PACKAGE_FORMAT" in
@@ -85,7 +85,7 @@ jobs:
       fail-fast: false
       matrix:
         include: >-
-          ${{ fromJSON(inputs.package_format == 'deb' && '[{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu","format":"deb"}]' || inputs.package_format == 'nsis' && '[{"runner":"windows-2025","target":"x86_64-pc-windows-msvc","format":"nsis"}]' || '[{"runner":"macos-15","target":"aarch64-apple-darwin","format":"dmg"},{"runner":"macos-15-intel","target":"x86_64-apple-darwin","format":"dmg"},{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu","format":"deb"},{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu","format":"appimage"},{"runner":"windows-2025","target":"x86_64-pc-windows-msvc","format":"nsis"}]') }}
+          ${{ fromJSON(inputs.package_format == 'deb' && '[{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu","format":"deb"}]' || inputs.package_format == 'appimage' && '[{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu","format":"appimage"}]' || inputs.package_format == 'nsis' && '[{"runner":"windows-2025","target":"x86_64-pc-windows-msvc","format":"nsis"}]' || '[{"runner":"macos-15","target":"aarch64-apple-darwin","format":"dmg"},{"runner":"macos-15-intel","target":"x86_64-apple-darwin","format":"dmg"},{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu","format":"deb"},{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu","format":"appimage"},{"runner":"windows-2025","target":"x86_64-pc-windows-msvc","format":"nsis"}]') }}
     runs-on: ${{ matrix.runner }}
     defaults:
       run:
