@@ -22,7 +22,9 @@ jobs:
         if: always()
         with:
           name: windows-capture-integration
-          path: ${{ runner.temp }}/owned-window-capture.png
+          path: |
+            ${{ runner.temp }}/owned-window-capture.png
+            ${{ runner.temp }}/capture-fixture-*
           if-no-files-found: ignore
   contracts:
     runs-on: ubuntu-24.04

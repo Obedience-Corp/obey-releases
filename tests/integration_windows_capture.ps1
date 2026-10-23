@@ -1,4 +1,4 @@
-param([string]$WindowColor)
+param([string]$WindowColor, [string]$ReadyPath)
 $ErrorActionPreference = 'Stop'
 if ($env:CANDIDATE_NATIVE_DISPOSABLE -ne '1' -or $env:CANDIDATE_RUNNER_KIND -ne 'github-hosted') {
     throw 'Window integration requires a disposable hosted Windows runner'
@@ -13,21 +13,38 @@ if ($WindowColor) {
     $form.Size = [Drawing.Size]::new(500, 400)
     $form.BackColor = [Drawing.Color]::FromName($WindowColor)
     $form.TopMost = $WindowColor -eq 'Blue'
+    $form.Add_Shown({
+        $state = @{pid=$PID; handle=$form.Handle.ToInt64(); visible=$form.Visible;
+            apartment=[Threading.Thread]::CurrentThread.ApartmentState.ToString()} | ConvertTo-Json -Compress
+        [IO.File]::WriteAllText("$ReadyPath.tmp", $state)
+        [IO.File]::Move("$ReadyPath.tmp", $ReadyPath)
+    })
     [Windows.Forms.Application]::Run($form)
     exit 0
 }
 $children = @()
 function StartFixture($color) {
-    $child = Start-Process (Get-Command pwsh).Source -WindowStyle Hidden -PassThru -ArgumentList @('-NoProfile', '-File', "`"$PSCommandPath`"", '-WindowColor', $color)
+    $ready = Join-Path $env:RUNNER_TEMP "capture-fixture-$color.ready.json"
+    $stdout = Join-Path $env:RUNNER_TEMP "capture-fixture-$color.stdout.log"
+    $stderr = Join-Path $env:RUNNER_TEMP "capture-fixture-$color.stderr.log"
+    # This is a GUI fixture: a hidden startup window can suppress its first show.
+    $child = Start-Process (Get-Command pwsh).Source -WindowStyle Normal -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr -ArgumentList @('-NoProfile', '-STA', '-File', "`"$PSCommandPath`"", '-WindowColor', $color, '-ReadyPath', "`"$ready`"")
     $script:children += $child
     $deadline = [DateTime]::UtcNow.AddSeconds(30)
     do {
         $child.Refresh()
-        if ($child.HasExited) { throw 'Fixture exited before displaying its window' }
-        if ($child.MainWindowHandle -ne 0) { return $child }
+        if ($child.HasExited) { throw "Fixture $color exited before displaying its window; stderr: $(Get-Content -Raw $stderr)" }
+        if ((Test-Path $ready) -and $child.MainWindowHandle -ne 0) {
+            $state = Get-Content -Raw $ready | ConvertFrom-Json
+            if (-not $state.visible -or $state.pid -ne $child.Id -or $state.handle -ne $child.MainWindowHandle.ToInt64()) {
+                throw "Fixture $color visible window differs from its owned main window: $(Get-Content -Raw $ready)"
+            }
+            Write-Host "Fixture $color displayed: $(Get-Content -Raw $ready)"
+            return $child
+        }
         Start-Sleep -Milliseconds 100
     } while ([DateTime]::UtcNow -lt $deadline)
-    throw 'Fixture window timed out'
+    throw "Fixture $color window timed out: pid=$($child.Id), handle=$($child.MainWindowHandle), title=$($child.MainWindowTitle); stderr: $(Get-Content -Raw $stderr)"
 }
 try {
     $target = StartFixture 'Red'
