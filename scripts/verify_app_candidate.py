@@ -427,10 +427,10 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
             default_managed = upgrade.default_home_layout(Path.home(), environment)
         if not fresh_setup:
             environment.update(FESTIVAL_HOME=str(temporary / "managed"), OBEY_CONFIG=str(temporary / "obey.yaml"))
-            # Make the already-declared redirected context real. An absent
-            # config otherwise falls back to the account's default data/socket.
-            (temporary / 'obey.yaml').write_text('data_dir: ' + json.dumps((temporary / 'data').as_posix()) + '\ngrpc:\n  socket: ' + json.dumps((temporary / 'daemon.sock').as_posix()) + '\nnetwork:\n  enabled: false\nwatcher:\n  enabled: false\n')
             if os.name == 'nt':
+                # Make this Windows packaging fixture's declared isolation real;
+                # accepted Mac/Linux packaging contexts stay unchanged.
+                (temporary / 'obey.yaml').write_text('data_dir: ' + json.dumps((temporary / 'data').as_posix()) + '\ngrpc:\n  socket: ' + json.dumps((temporary / 'daemon.sock').as_posix()) + '\nnetwork:\n  enabled: false\nwatcher:\n  enabled: false\n')
                 import packaging_service
                 report['packaging_service_baseline'] = packaging_service.baseline(temporary, environment)
                 packaging_root = temporary
