@@ -76,6 +76,17 @@ def checked_windows_discovery_log(data):
             'provider_discovery_failure_messages_absent': True}
 
 
+def record_windows_discovery_snapshot(source, output, report):
+    data = source.read_bytes()
+    snapshot = output / 'windows-discovery-after-reopen.log'
+    snapshot.write_bytes(data)
+    evidence = {'snapshot': snapshot.name, 'sha256': hashlib.sha256(data).hexdigest(),
+                'bytes': len(data), 'verified': False}
+    report['windows_default_discovery_log'] = evidence
+    evidence.update(checked_windows_discovery_log(data))
+    evidence['verified'] = True
+
+
 def checked_status(document, home):
     if not document.get("ok"):
         raise ValueError("status failed")

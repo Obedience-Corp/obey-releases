@@ -405,8 +405,9 @@ or default-home service acceptance is inferred. The existing fresh-default
 service lifecycle checks remain strict and unchanged.
 
 
-Fresh Windows setup additionally retains and checks the actual default daemon log
-for nonempty runtime evidence and absence of the prior Unix-utility/provider
+Fresh Windows setup retains the exact checked `windows-discovery-after-reopen.log`
+snapshot and its digest separately from the later full default daemon log, requiring
+nonempty runtime evidence and absence of the prior Unix-utility/provider
 session-discovery failure messages after normal reopen. Exact Obey0.2.3 receipts
 and resolved executable versions are required; this does not prove provider chat
 or licensed useful work. Historical0.2.2 packets remain unchanged.
