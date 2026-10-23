@@ -170,3 +170,35 @@ The tests cover identity/inventory/hash/path/link/mode failures, refusal to run
 native mutation proofs on an unproven machine, and the privileged-fetch/read-only
 execution boundary. Native mode rejects download credentials and never fetches drafts. They do not substitute for the six
 real native candidate jobs.
+
+### Published App A-to-B upgrade proof
+
+`verify-app-upgrade.yml` accepts two full reviewed sources whose immutable public
+releases are `app-test-SOURCE`. A must already be compiled with B's immutable
+`latest.json` endpoint; this harness never replaces an endpoint or trust root.
+Both releases retain `app-candidate.json`, `checksums.txt`, production
+`SHA256SUMS`, `latest.json` and every declared original artifact/signature.
+Anonymous download checks source/version, server digests, both checksum sets and
+all five updater keys, including distinct Debian and AppImage payloads.
+
+Five fresh hosted native legs exercise both Macs, Debian, default AppImage and
+Windows NSIS. They verify the pinned production updater signatures before install.
+A uses its actual automatic updater. Windows invokes the real owned-window
+**Update ready → Restart now** button through UIAutomation and requires a new B
+process after NSIS installation. Mac/Linux require the installed B payload, a
+normal OS quit request and reopening B; extracted AppImage startup cannot qualify.
+Signed NSIS reference extraction is compared with installed App/Installer/Activity
+files; Mac compares the entire authenticated bundle, Debian its package files and
+AppImage the entire authenticated image. B payload checks repeat after reopening.
+
+The fixture provisions the existing three selected public packages, initializes
+and registers a real owned Camp with its released CLI, and seeds valid settings
+at `~/.obey/festival-app/settings.json`. Readback after install and reopen checks
+settings, Camp registration, selected package receipts/file hashes and foreign-file
+sentinels. Normal quit and owned cleanup remain distinct; forced cleanup cannot
+prove the normal quit step. Always-retained reports/screenshots/logs preserve
+failures. No credentials, private checkout, global security changes, stable-feed
+mutation or provider/test backdoor is involved. Licensing, useful first use,
+reboot, consumer trust and native failure-recovery journeys remain unverified by
+this mechanism check. No native upgrade result is claimed until actual published
+A/B inputs have run successfully and the artifacts have been inspected.
