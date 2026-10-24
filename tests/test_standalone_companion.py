@@ -92,3 +92,9 @@ class StandaloneCompanionContracts(unittest.TestCase):
             target=options.pop('target')
             with patch.object(app,'require_clean_host'):
                 with self.assertRaises(ValueError):app.native(self.root,{},target,self.root/'out',fresh_setup=True,existing_user='standalone-companion',**options)
+
+    def test_published_camp_configuration_path_matches_default_and_xdg_contract(self):
+        with patch.object(Path, 'home', return_value=self.root):
+            self.assertEqual(standalone.camp_config_directory({}), self.root/'.obey/campaign')
+            self.assertEqual(standalone.camp_config_directory({'XDG_CONFIG_HOME': ''}), self.root/'.obey/campaign')
+            self.assertEqual(standalone.camp_config_directory({'XDG_CONFIG_HOME': str(self.root/'xdg')}), self.root/'xdg/obey/campaign')
