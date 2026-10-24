@@ -87,6 +87,14 @@ class CorruptIntegrationContracts(unittest.TestCase):
             self.assertFalse(integrations.error_window({'visible_names': [x for x in window['visible_names'] if x != missing]}))
         self.assertFalse(integrations.error_window({'visible_names': ['Licenses', 'License key']}))
 
+    def test_windows_filetime_conversion_preserves_ticks_and_refuses_rounding(self):
+        low, high = integrations.windows_filetime(0)
+        self.assertEqual((high << 32) | low, 116444736000000000)
+        low, high = integrations.windows_filetime(100)
+        self.assertEqual((high << 32) | low, 116444736000000001)
+        for value in (1, True, 1.0, -11644473600000000000, 2**80):
+            with self.assertRaises(ValueError): integrations.windows_filetime(value)
+
     def test_wrong_native_scope_refused_before_artifact_or_package_changes(self):
         with patch.object(app, 'require_clean_host'):
             with self.assertRaisesRegex(ValueError, 'native Windows'):

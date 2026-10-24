@@ -19,6 +19,38 @@ def sha(data):
     return hashlib.sha256(data).hexdigest()
 
 
+def windows_filetime(nanoseconds):
+    # Windows FILETIME is 100ns ticks since1601; stat_ns preserves NTFS precision.
+    if type(nanoseconds) is not int or nanoseconds % 100:
+        raise ValueError('Windows file timestamp is not an exact 100ns value')
+    ticks = nanoseconds // 100 + 116444736000000000
+    if not 0 < ticks < 2**64 - 1:
+        raise ValueError('Windows timestamp is outside the explicit FILETIME range')
+    return ticks & 0xffffffff, ticks >> 32
+
+
+def restore_times(descriptor, info):
+    if os.name != 'nt':
+        os.utime(descriptor, ns=(info.st_atime_ns, info.st_mtime_ns))
+        return
+    # os.utime(fd) is unavailable on the qualified Windows Python build. Operate
+    # on the same verified open file handle, never resolve a replacement path.
+    import ctypes
+    from ctypes import wintypes
+    import msvcrt
+    handle = msvcrt.get_osfhandle(descriptor)
+    if handle == -1:
+        raise OSError('invalid held preference file handle')
+    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+    kernel.SetFileTime.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.FILETIME),
+                                  ctypes.POINTER(wintypes.FILETIME), ctypes.POINTER(wintypes.FILETIME)]
+    kernel.SetFileTime.restype = wintypes.BOOL
+    accessed = wintypes.FILETIME(*windows_filetime(info.st_atime_ns))
+    modified = wintypes.FILETIME(*windows_filetime(info.st_mtime_ns))
+    if not kernel.SetFileTime(wintypes.HANDLE(handle), None, ctypes.byref(accessed), ctypes.byref(modified)):
+        raise ctypes.WinError(ctypes.get_last_error())
+
+
 def identity(info):
     return {key: getattr(info, key) for key in ('st_dev', 'st_ino', 'st_mode', 'st_uid', 'st_gid', 'st_nlink')}
 
@@ -73,7 +105,7 @@ class Fixture:
         self.corrupted = True
         self.replace(self.original, self.broken)
 
-    def replace(self, expected, replacement, restore_times=False):
+    def replace(self, expected, replacement, preserve_times=False):
         current = regular(self.path)
         if identity(current) != identity(self.info):
             raise ValueError('owned integration preferences identity or metadata changed')
@@ -90,8 +122,8 @@ class Fixture:
                 stream.truncate()
                 stream.flush()
                 os.fsync(stream.fileno())
-            if restore_times:
-                os.utime(descriptor, ns=(self.info.st_atime_ns, self.info.st_mtime_ns))
+            if preserve_times:
+                restore_times(descriptor, self.info)
             if identity(os.fstat(descriptor)) != identity(self.info):
                 raise ValueError('integration preferences identity changed during fixture write')
         finally:
@@ -107,10 +139,11 @@ class Fixture:
             return
         if identity(regular(self.backup)) != self.backup_identity or self.backup.read_bytes() != self.original:
             raise ValueError('integration rollback backup identity or digest changed')
-        self.replace(self.broken, self.original, restore_times=True)
+        self.replace(self.broken, self.original, preserve_times=True)
         self.restored = True
         self.report.update(restored=True, restored_sha256=sha(self.path.read_bytes()),
-                           original_mtime_restored=self.path.stat().st_mtime_ns == self.info.st_mtime_ns)
+                           original_mtime_restored=self.path.stat().st_mtime_ns == self.info.st_mtime_ns,
+                           timestamp_method='SetFileTime on verified held handle' if os.name == 'nt' else 'os.utime on verified descriptor')
         if self.report['restored_sha256'] != self.report['original_sha256'] or not self.report['original_mtime_restored']:
             raise ValueError('integration rollback did not restore exact bytes and mtime')
 
