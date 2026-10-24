@@ -543,3 +543,14 @@ record retains debugger errors and post-attach process identity/state/tracer
 checks. Native isolated fixtures exercise normal detach and debugger timeout,
 including a heartbeat proving that the child resumes. None of this changes the
 original launch failure to success or counts as useful first-use evidence.
+
+macOS query and normal-quit helpers are compiled once after artifact/sidecar
+checks and before launching the App. Every capture executes the prepared native
+helper, with no `swift -e` fallback. Build evidence records compiler invocation
+and resolved identity, source/binary hashes and bounded preparation separately
+from App startup; helper hashes are checked again before use. The `swiftc` alias
+is preserved because resolving it to `swift-frontend` changes driver behavior.
+Disposable ARM/Intel native controls require a real owned window, PID filtering,
+wrong-bundle refusal without termination, a retained screenshot, and normal quit.
+The fresh workflow also permits `intel` or `appimage` diagnostic replay while
+keeping `all` as the unchanged full matrix and validating complete public inputs.

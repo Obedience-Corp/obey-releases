@@ -37,6 +37,31 @@ jobs:
             ${{ runner.temp }}/capture-fixture-*
             ${{ runner.temp }}/ordinary-console-proof/
           if-no-files-found: ignore
+  mac-window-tools:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-15-intel]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Verify compiled owned Mac window and normal-quit helpers
+        env:
+          CANDIDATE_NATIVE_DISPOSABLE: '1'
+          CANDIDATE_RUNNER_KIND: ${{ runner.environment }}
+        run: python tests/integration_mac_window_tools.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mac-window-tools-${{ matrix.runner }}
+          path: ${{ runner.temp }}/mac-window-tools-proof/
+          if-no-files-found: warn
   contracts:
     runs-on: ubuntu-24.04
     steps:

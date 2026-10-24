@@ -225,15 +225,16 @@ def mac_install(directory, entries, temporary, environment, report):
     return app / "Contents/MacOS/festival-app", app / "Contents/MacOS", app / "Contents/Resources"
 
 
-def window_capture(process, target, output, environment):
+def window_capture(process, target, output, environment, mac_tools=None):
     def require_alive():
         if process.poll() is not None:
             raise RuntimeError("owned App process exited before its window appeared")
     if target.endswith("apple-darwin"):
-        script = 'import CoreGraphics; import Foundation; let ws = CGWindowListCopyWindowInfo([.optionOnScreenOnly,.excludeDesktopElements], kCGNullWindowID) as! [[String:Any]]; print(String(data:try! JSONSerialization.data(withJSONObject:ws.filter { ($0["kCGWindowOwnerPID"] as? Int) == Int(CommandLine.arguments[1]) }),encoding:.utf8)!)'
+        if mac_tools is None:
+            raise RuntimeError('macOS window tools must be prepared before App launch')
         def window():
             require_alive()
-            windows = json.loads(command(["swift", "-e", script, str(process.pid)], environment))
+            windows = mac_tools.query(process.pid, environment)
             return next((w for w in windows if w.get("kCGWindowLayer") == 0 and w.get("kCGWindowBounds", {}).get("Width", 0) > 100), None)
         found = wait_until("owned App window", window)
         command(["screencapture", "-x", "-l", str(found["kCGWindowNumber"]), output], environment)
@@ -266,7 +267,7 @@ def window_capture(process, target, output, environment):
     return {"window_id": found, "title": title, "screenshot": output.name}
 
 
-def capture_startup(process, target, output, environment, captures, stem="app"):
+def capture_startup(process, target, output, environment, captures, stem="app", mac_tools=None):
     launch_started = time.monotonic()
     first_capture = None
     latest = None
@@ -281,7 +282,7 @@ def capture_startup(process, target, output, environment, captures, stem="app"):
         if process.poll() is not None:
             raise RuntimeError("owned App exited before delayed startup capture")
         screenshot = output / f"{stem}-{label}.png"
-        latest = window_capture(process, target, screenshot, environment)
+        latest = window_capture(process, target, screenshot, environment, **({"mac_tools": mac_tools} if mac_tools else {}))
         if process.poll() is not None or not screenshot.is_file() or screenshot.stat().st_size == 0:
             raise RuntimeError("owned App did not retain a live delayed screenshot")
         captured = time.monotonic()
@@ -363,7 +364,7 @@ def fresh_setup_readback(installer, managed, environment):
     return status
 
 
-def wait_fresh_setup(process, installer, managed, target, output, environment, report, stage):
+def wait_fresh_setup(process, installer, managed, target, output, environment, report, stage, mac_tools=None):
     import verify_app_upgrade as upgrade
     if target.endswith("windows-msvc"):
         upgrade.wait_windows_setup(process, target, output, environment, report, stage)
@@ -382,7 +383,7 @@ def wait_fresh_setup(process, installer, managed, target, output, environment, r
     capture_dir = output / stage
     capture_dir.mkdir()
     report[stage + "_capture_directory"] = stage
-    report[stage + "_window"] = capture_startup(process, target, capture_dir, environment, report.setdefault(stage + "_captures", []))
+    report[stage + "_window"] = capture_startup(process, target, capture_dir, environment, report.setdefault(stage + "_captures", []), **({"mac_tools": mac_tools} if mac_tools else {}))
     report["rendered_setup_requires_image_review"] = True
     return result
 
@@ -440,6 +441,7 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
     temporary_context = tempfile.TemporaryDirectory(prefix="app-proof-", dir=os.environ["RUNNER_TEMP"])
     try:
         temporary = Path(temporary_context.name)
+        mac_options = {}
         if fresh_setup:
             report["default_xdg_environment"] = {name: environment[name] for name in ("XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME") if environment.get(name)}
             default_managed = upgrade.default_home_layout(Path.home(), environment)
@@ -541,6 +543,11 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
         if existing_user != "none":
             import existing_obey
             existing_fixture = existing_obey.seed(temporary, installer, default_managed, target, environment, output, report, existing_user)
+        if target.endswith('apple-darwin'):
+            import mac_window_tools
+            tools = mac_window_tools.prepare(temporary, output, environment)
+            report['mac_window_tools'] = tools.identity
+            mac_options['mac_tools'] = tools
         with (output / "app.log").open("w") as log:
             process = subprocess.Popen([str(binary)], env=environment, stdout=log, stderr=subprocess.STDOUT, start_new_session=os.name != "nt")
             report["pid"] = process.pid
@@ -549,11 +556,11 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
                     raise RuntimeError("App exited before window capture: " + (output / "app.log").read_text())
                 return True
             alive_window()
-            report["window"] = capture_startup(process, target, output, environment, report.setdefault("startup_captures", []))
+            report["window"] = capture_startup(process, target, output, environment, report.setdefault("startup_captures", []), **mac_options)
             if process.poll() is not None or not (output / "app.png").is_file() or (output / "app.png").stat().st_size == 0:
                 raise RuntimeError("App did not retain a live captured window")
             if fresh_setup:
-                report["default_after_setup"] = wait_fresh_setup(process, installer, default_managed, target, output, environment, report, "fresh")
+                report["default_after_setup"] = wait_fresh_setup(process, installer, default_managed, target, output, environment, report, "fresh", **mac_options)
                 if login_fixture is not None:
                     report["login_after_setup"] = login_shell.verify(login_fixture, default_managed, installer, environment, output, "after-setup")
                 if existing_fixture is not None:
@@ -561,10 +568,10 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
                     if report["existing_after_setup"] is None:
                         raise RuntimeError("updated existing-user service was not ready")
                     existing_obey.compare(report["existing_before"], report["existing_after_setup"], existing_user)
-                upgrade.normal_quit(process, binary, binary.parent.parent.parent if target.endswith("apple-darwin") else None, target, environment, output)
+                upgrade.normal_quit(process, binary, binary.parent.parent.parent if target.endswith("apple-darwin") else None, target, environment, output, **mac_options)
                 process = subprocess.Popen([str(binary)], env=environment, stdout=log, stderr=subprocess.STDOUT, start_new_session=os.name != "nt")
                 report["reopened_pid"] = process.pid
-                report["default_after_reopen"] = wait_fresh_setup(process, installer, default_managed, target, output, environment, report, "reopened")
+                report["default_after_reopen"] = wait_fresh_setup(process, installer, default_managed, target, output, environment, report, "reopened", **mac_options)
                 if login_fixture is not None:
                     report["login_after_reopen"] = login_shell.verify(login_fixture, default_managed, installer, environment, output, "after-reopen")
                     if report["login_after_setup"] != report["login_after_reopen"]:

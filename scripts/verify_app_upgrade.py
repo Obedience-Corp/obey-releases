@@ -69,11 +69,13 @@ class ObservedWindowsProcess:
         return 0
 
 
-def normal_quit(process, binary, bundle, target, environment, output):
+def normal_quit(process, binary, bundle, target, environment, output, mac_tools=None):
     if process.poll() is not None:
         raise RuntimeError("App exited before normal quit request")
     if target.endswith("apple-darwin"):
-        command(["swift", SCRIPT / "quit_owned_mac.swift", str(process.pid), bundle], environment)
+        if mac_tools is None:
+            raise RuntimeError('macOS normal-quit helper must be prepared before App launch')
+        mac_tools.quit(process.pid, bundle, environment)
     elif target.endswith("windows-msvc"):
         identities = command(["pwsh", "-NoProfile", "-File", SCRIPT / "windows_owned_processes.ps1"],
                              dict(environment, APP_PROOF_PROCESS_MODE="snapshot", APP_PROOF_PROCESS_PID=str(process.pid)), json_output=True)
@@ -305,6 +307,7 @@ def native(root, target, package_format, a_source, a_version, b_source, b_versio
     temporary = tempfile.TemporaryDirectory(prefix="app-upgrade-", dir=os.environ["RUNNER_TEMP"])
     work = Path(temporary.name)
     try:
+        mac_options = {}
         managed = default_managed if default_managed is not None else work / "managed"
         if default_managed is None:
             config = work / "obey.yaml"
@@ -376,13 +379,18 @@ def native(root, target, package_format, a_source, a_version, b_source, b_versio
             proxy = UpdateProxy()
             environment.update(HTTPS_PROXY=proxy.url, HTTP_PROXY=proxy.url, NO_PROXY="127.0.0.1,localhost")
             report["owned_proxy_url"] = proxy.url
+        if target.endswith('apple-darwin'):
+            import mac_window_tools
+            tools = mac_window_tools.prepare(work, output, environment)
+            report['mac_window_tools'] = tools.identity
+            mac_options['mac_tools'] = tools
         log = (output / "app.log").open("w")
         try:
             if default_managed is not None:
                 report["default_before"] = default_home_readback(binary, managed, environment)
             process = subprocess.Popen([str(binary)], env=environment, stdout=log, stderr=subprocess.STDOUT, start_new_session=os.name != "nt")
             report["a_pid"] = process.pid
-            report["a_window"] = app.window_capture(process, target, output / "a.png", environment)
+            report["a_window"] = app.window_capture(process, target, output / "a.png", environment, **mac_options)
             # A's real Update ready modal hides the underlying licensing screen
             # from UIA. Invoke its authenticated Restart now control below;
             # require unobscured setup completion in auto-restarted/reopened B.
@@ -409,18 +417,18 @@ def native(root, target, package_format, a_source, a_version, b_source, b_versio
             report["b_payload"] = wait_until("real B installation and exact payload", installed_b, seconds=600)
             report["installed_b_version"] = b_version
             report["after_install"] = retained_state(fixture, environment)
-            report["installed_payload_window"] = app.window_capture(process, target, output / "installed-before-quit.png", environment)
+            report["installed_payload_window"] = app.window_capture(process, target, output / "installed-before-quit.png", environment, **mac_options)
             if default_managed is not None:
                 wait_windows_setup(process, target, output, environment, report, "auto_restarted_b")
                 report["default_after_auto_restart"] = default_home_readback(binary, managed, environment)
             report["running_version_before_quit"] = b_version if package_format == "nsis" else a_version
-            normal_quit(process, binary, bundle, target, environment, output)
+            normal_quit(process, binary, bundle, target, environment, output, **mac_options)
             process = None
             report["normal_quit_verified"] = True
             process = subprocess.Popen([str(binary)], env=environment, stdout=log, stderr=subprocess.STDOUT, start_new_session=os.name != "nt")
             report["reopened_pid"] = process.pid
             report["reopened_captures"] = []
-            report["reopened_b_window"] = app.capture_startup(process, target, output, environment, report["reopened_captures"], "b-reopened")
+            report["reopened_b_window"] = app.capture_startup(process, target, output, environment, report["reopened_captures"], "b-reopened", **mac_options)
             report["reopened_b_payload"] = check_installed_b(package_format, binary, bundle, reference, artifact(root / "b", b, target, ".AppImage") if package_format == "appimage" else None, b_version, environment)
             report["after_reopen"] = retained_state(fixture, environment)
             if default_managed is not None:
