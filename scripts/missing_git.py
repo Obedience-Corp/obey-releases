@@ -9,6 +9,7 @@ import time
 
 from verify_candidate import command
 import git_rollback
+from linux_accessibility import ToolkitSetting
 
 # Exact reverse-dependency closure observed on the disposable hosted image.
 # No autoremove or arbitrary additional package removal is permitted.
@@ -88,6 +89,7 @@ class Fixture:
         self.attempted_removal = False
         self.restored = False
         self.accessibility_original = None
+        self.accessibility_setting = None
         self.git = Path(shutil.which('git', path=environment.get('PATH')) or '')
         if not self.git.is_absolute() or self.git.resolve() != Path('/usr/bin/git').resolve():
             raise RuntimeError('refusing foreign Git executable')
@@ -136,19 +138,15 @@ class Fixture:
                         'fa0027-git-rollback', self.cache, name], self.environment, timeout=165)
 
     def enable_accessibility(self):
-        value = command(['gsettings', 'get', 'org.gnome.desktop.interface', 'toolkit-accessibility'], self.environment).strip()
-        if value not in ('true', 'false'):
-            raise RuntimeError('desktop accessibility setting is not a boolean')
-        self.accessibility_original = value
-        command(['gsettings', 'set', 'org.gnome.desktop.interface', 'toolkit-accessibility', 'true'], self.environment)
-        if command(['gsettings', 'get', 'org.gnome.desktop.interface', 'toolkit-accessibility'], self.environment).strip() != 'true':
-            raise RuntimeError('normal desktop accessibility activation failed')
+        self.accessibility_setting = ToolkitSetting(self.environment)
+        try:
+            self.accessibility_setting.enable()
+        finally:
+            self.accessibility_original = self.accessibility_setting.original
 
     def restore_accessibility(self):
-        if self.accessibility_original is not None:
-            command(['gsettings', 'set', 'org.gnome.desktop.interface', 'toolkit-accessibility', self.accessibility_original], self.environment)
-            if command(['gsettings', 'get', 'org.gnome.desktop.interface', 'toolkit-accessibility'], self.environment).strip() != self.accessibility_original:
-                raise RuntimeError('desktop accessibility setting restoration failed')
+        if self.accessibility_setting is not None:
+            self.accessibility_setting.restore()
 
     def record(self, stage):
         record = {'stage': stage, 'removed_packages': self.removed, 'original_git_sha256': self.git_sha,

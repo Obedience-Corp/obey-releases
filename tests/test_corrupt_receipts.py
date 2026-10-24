@@ -155,8 +155,18 @@ class ReceiptCorruptionContracts(unittest.TestCase):
         self.assertFalse(receipts.error_window({'uia_verified':False,'visible_names':names}))
 
     def test_corrupt_receipt_mode_rejects_other_platform_before_execution(self):
-        with patch.object(app,'require_clean_host'),self.assertRaisesRegex(ValueError,'native Windows'):
-            app.native(Path('/unused'),{},'x86_64-unknown-linux-gnu',Path('/unused'),fresh_setup=True,existing_user='corrupt-receipts')
+        for target, package in [('aarch64-apple-darwin', 'both'), ('x86_64-unknown-linux-gnu', 'appimage')]:
+            with self.subTest(target=target), patch.object(app,'require_clean_host'),self.assertRaisesRegex(ValueError,'Windows or Linux Deb'):
+                app.native(Path('/unused'),{},target,Path('/unused'),linux_package=package,fresh_setup=True,existing_user='corrupt-receipts')
+
+    def test_linux_diagnostic_requires_owned_visible_specific_text(self):
+        evidence={'owned_accessibility_verified':True,'visible_text':[
+            'Getting this machine ready','Installed tool versions are unknown',receipts.MESSAGE,receipts.CODE]}
+        self.assertTrue(receipts.error_window({'receipt_accessibility':evidence}))
+        for changed in ({**evidence,'owned_accessibility_verified':False},
+                        {**evidence,'visible_text':evidence['visible_text'][:-1]},
+                        {**evidence,'visible_text':['Getting this machine ready','Something failed',receipts.CODE]}):
+            self.assertFalse(receipts.error_window({'receipt_accessibility':changed}))
 
     def test_unreadable_database_still_requires_other_physical_user_and_service_preservation(self):
         import existing_obey

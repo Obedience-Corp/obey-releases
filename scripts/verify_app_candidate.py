@@ -423,8 +423,11 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
     require_clean_host({"aarch64-apple-darwin": "macOS-arm64", "x86_64-apple-darwin": "macOS-x86_64", "x86_64-unknown-linux-gnu": "linux-x86_64", "x86_64-pc-windows-msvc": "windows-x86_64"}.get(target))
     if existing_user not in ("none", "older-idle", "current", "missing-companion", "corrupt-integrations", "foreign-companion", "corrupt-receipts") or existing_user != "none" and not fresh_setup:
         raise ValueError("existing-user scenario requires public default-home proof")
-    if existing_user in ("corrupt-integrations", "foreign-companion", "corrupt-receipts") and target != "x86_64-pc-windows-msvc":
+    if existing_user in ("corrupt-integrations", "foreign-companion") and target != "x86_64-pc-windows-msvc":
         raise ValueError("manual existing-user diagnostic/recovery currently requires native Windows")
+    if existing_user == 'corrupt-receipts' and not (target == 'x86_64-pc-windows-msvc' or
+            target == 'x86_64-unknown-linux-gnu' and linux_package == 'both'):
+        raise ValueError('receipt recovery requires native Windows or Linux Deb')
     if login_shell_proof and (not fresh_setup or existing_user != "none"):
         raise ValueError("new login shell proof requires unseeded public fresh setup")
     if missing_git_manual and (not fresh_setup or existing_user != 'none' or login_shell_proof or target != 'x86_64-unknown-linux-gnu' or linux_package != 'both'):
@@ -461,6 +464,7 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
     integration_fixture = None
     foreign_fixture = None
     receipt_fixture = None
+    receipt_accessibility = None
     report["corrupt_receipt_manual_recovery_verified"] = False
     report["foreign_companion_manual_recovery_verified"] = False
     report["corrupt_integration_manual_recovery_verified"] = False
@@ -615,6 +619,10 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
                 report["foreign_companion_probe"] = foreign_companion.probe(installer, foreign_fixture, environment, output)
         if existing_user == "corrupt-receipts":
             import corrupt_receipts
+            if target.endswith('linux-gnu'):
+                from linux_accessibility import ToolkitSetting
+                receipt_accessibility = ToolkitSetting(environment)
+                receipt_accessibility.enable()
             receipt_fixture = corrupt_receipts.Fixture(default_managed, temporary / "receipt-rollback", report.setdefault("corrupt_receipt_fixture", {}), environment)
             receipt_fixture.corrupt()
             report["corrupt_receipt_installer_status"] = corrupt_receipts.probe(installer, receipt_fixture, report["existing_before"], environment, output)
@@ -678,13 +686,15 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
                         if process.poll() is not None:
                             raise RuntimeError("App exited instead of reporting unreadable receipt state")
                         frame = window_capture(process, target, output / "corrupt-receipt.png", environment)
+                        if target.endswith('linux-gnu'):
+                            frame['receipt_accessibility'] = corrupt_receipts.linux_observation(process, binary, environment)
                         report["corrupt_receipt_window"] = frame
                         return frame if corrupt_receipts.error_window(frame) else None
                     wait_until("actual App reports unreadable installer state", receipt_diagnosed, seconds=180)
                     report["corrupt_receipt_preserved_user"] = corrupt_receipts.preserved_user(existing_fixture, report["existing_before"], receipt_fixture, environment)
                     upgrade.normal_quit(process, binary, None, target, environment, output)
                     receipt_fixture.restore()
-                    process = subprocess.Popen([str(binary)], env=environment, stdout=log, stderr=subprocess.STDOUT)
+                    process = subprocess.Popen([str(binary)], env=environment, stdout=log, stderr=subprocess.STDOUT, start_new_session=os.name != 'nt')
                     report["receipt_recovery_pid"] = process.pid
                 if git_fixture is not None:
                     report['git_missing_ui'] = missing_git.interact(process, binary, environment, 'inspect')
@@ -787,6 +797,14 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
                     raise RuntimeError("refusing receipt rollback while owned App remains live")
                 receipt_fixture.restore()
             actions.append(restore_owned_receipts)
+        if receipt_accessibility is not None:
+            def restore_receipt_accessibility():
+                receipt_accessibility.restore()
+                report['receipt_accessibility_restored'] = {
+                    'original': receipt_accessibility.original,
+                    'after': receipt_accessibility.read(),
+                }
+            actions.append(restore_receipt_accessibility)
         if account_fixture is not None:
             actions.append(account_fixture.restore)
         if git_fixture is not None:
