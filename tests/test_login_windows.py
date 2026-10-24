@@ -150,3 +150,19 @@ class WindowsLoginContracts(unittest.TestCase):
             windows_console.read_terminal(terminal,ReadFailure,records.append,
                 windows_console.time.monotonic()-1)
         self.assertFalse(records[-1]['iseof'])
+
+        # Enter the pending state, then advance the deterministic clock beyond
+        # the deadline while authoritative EOF stays false.
+        terminal=Terminal();terminal.iseof=lambda:False;records=[]
+        failure=ReadFailure('')
+        def pending(blocking):raise failure
+        terminal.read=pending
+        with patch.object(windows_console.time,'monotonic',side_effect=[0,2]), \
+                patch.object(windows_console.time,'sleep') as sleep:
+            with self.assertRaises(ReadFailure) as raised:
+                windows_console.read_terminal(terminal,ReadFailure,records.append,1)
+        self.assertIs(raised.exception,failure)
+        sleep.assert_called_once_with(0.01)
+        self.assertFalse(records[0]['iseof'])
+        self.assertFalse(records[-1]['iseof'])
+        self.assertEqual(records[-1]['event'],'post-error-eof-readback')
