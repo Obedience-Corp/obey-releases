@@ -8,6 +8,13 @@ on:
       - 'scripts/linux_guest_session.py'
       - 'scripts/verify_candidate.py'
   workflow_dispatch:
+    inputs:
+      app_source:
+        description: 'Optional immutable public App source; empty qualifies desktop only'
+        type: string
+      app_version:
+        description: 'Public App version; required with app_source'
+        type: string
 permissions:
   contents: read
 jobs:
@@ -44,7 +51,7 @@ jobs:
   clean-desktop-baseline:
     needs: native-kvm
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
         with:
@@ -57,17 +64,24 @@ jobs:
           sudo -n apt-get update
           sudo -n apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils \
             ovmf cloud-image-utils python3-pil gnupg curl openssh-client openssl
-      - name: Boot clean desktop, cold clone and reboot with normal password sudo
+      - name: Boot clean desktop and optional public App journey through actual reboot
         shell: bash
         env:
           RUNNER_KIND: ${{ runner.environment }}
+          APP_SOURCE: ${{ inputs.app_source }}
+          APP_VERSION: ${{ inputs.app_version }}
         run: |
+          flags=()
+          if [[ -n "$APP_SOURCE" || -n "$APP_VERSION" ]]; then
+            [[ "$APP_SOURCE" =~ ^[a-f0-9]{40}$ && "$APP_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+            flags=(--app-source "$APP_SOURCE" --app-version "$APP_VERSION")
+          fi
           sudo -n /usr/bin/setpriv --reuid="$(id -u)" \
             --regid="$(getent group kvm | cut -d: -f3)" --clear-groups --no-new-privs \
             /usr/bin/env -i PATH=/usr/bin:/bin PYTHONDONTWRITEBYTECODE=1 \
             RUNNER_TEMP="$RUNNER_TEMP" CANDIDATE_NATIVE_DISPOSABLE=1 \
             CANDIDATE_RUNNER_KIND="$RUNNER_KIND" \
-            /usr/bin/python3 scripts/linux_guest.py --output "$RUNNER_TEMP/linux-clean-guest-proof"
+            /usr/bin/python3 scripts/linux_guest.py --output "$RUNNER_TEMP/linux-clean-guest-proof" "${flags[@]}"
       - uses: actions/upload-artifact@v4
         if: always()
         with:

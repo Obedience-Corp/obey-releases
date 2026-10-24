@@ -725,6 +725,22 @@ Xfwm4 window manager and existing owned user bus. It does not enable autologin o
 replace the desktop with Xvfb. Public App installation/use, authorization dialogs
 and service recovery after App installation still require their separate journeys.
 
+The clean Linux workflow also accepts paired `app_source` / `app_version` inputs
+for the unchanged public App test release. It installs observation utilities on
+the disposable clone, rechecks that Git and ecosystem state are absent, and runs
+the existing App verifier as a real Xfce autostart child. The Deb uses ordinary
+password sudo. Missing Git is installed through the App's real button and the
+normal polkit password dialog, bound to the App-descended apt request and owned
+OS authentication agent. Fixture passwords stay private and never enter App
+arguments or environment. No authorization policy or passwordless sudo is added.
+
+That optional journey retains the installed App and user service across a real
+VM reboot and local login, then checks service response before reopening the App,
+selected receipts/file mtimes and persisted settings. The enclosing VM is the
+cleanup boundary; this mode does not claim App/service uninstallation. Original
+screens and readbacks still require review. It does not grant a license, prove
+useful first work or establish macOS/Windows consumer trust.
+
 ### Foreign companion: preserve and recover the original selected command
 
 `existing_user=foreign-companion` is Windows-only with default shell, no login

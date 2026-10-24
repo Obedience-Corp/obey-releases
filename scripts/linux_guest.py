@@ -101,13 +101,15 @@ def credentials(root, password):
 READBACK = r'''
 import hashlib,json,os,pathlib,shutil,subprocess
 home=pathlib.Path.home()
+clean=True
 packages=subprocess.check_output(['dpkg-query','-W','-f','${Package}\t${Version}\n'],text=True)
 tools={name:shutil.which(name) for name in ('git','camp','fest','obey','ob','camp-app','festival')}
 state={name:(home/name).exists() for name in ('.obey','.local/share/obey','.config/obey','.config/camp','.config/fest')}
 assert os.getuid()!=0
-assert not any(tools.values()),tools
-assert not any(state.values()),state
-assert not any(row.split('\t')[0] in ('git','git-lfs') for row in packages.splitlines())
+if clean:
+ assert not any(tools.values()),tools
+ assert not any(state.values()),state
+ assert not any(row.split('\t')[0] in ('git','git-lfs') for row in packages.splitlines())
 sudo=subprocess.run(['sudo','-n','true'],capture_output=True)
 assert sudo.returncode!=0,'test user unexpectedly has passwordless sudo'
 desktop=subprocess.check_output(['systemctl','is-active','lightdm'],text=True).strip()
@@ -155,7 +157,7 @@ class Guest:
                     '-i', self.root / 'client', '-p', str(self.port), 'tester@127.0.0.1', command],
                    timeout=timeout, input=input, check=check)
 
-    def wait(self, old_boot=None):
+    def wait(self, old_boot=None, *, clean=True):
         deadline = time.monotonic() + 600
         last_error = ''
         while time.monotonic() < deadline:
@@ -166,7 +168,7 @@ class Guest:
                 result = self.ssh('cat /proc/sys/kernel/random/boot_id', timeout=15, check=False)
                 if result.returncode == 0 and (old_boot is None or result.stdout.strip() != old_boot):
                     self.ssh('cloud-init status --wait', timeout=900)
-                    return json.loads(self.ssh('python3 -c ' + shlex.quote(READBACK)).stdout)
+                    return json.loads(self.ssh('python3 -c ' + shlex.quote(READBACK.replace('clean=True', 'clean=' + repr(clean)))).stdout)
                 last_error = result.stderr[-1000:]
             except subprocess.TimeoutExpired:
                 last_error = 'SSH connection timed out'
@@ -281,7 +283,12 @@ class Guest:
                 'forced_stop': forced}
 
 
-def prove(output, report):
+def prove(output, report, app_source=None, app_version=None):
+    if (app_source is None) != (app_version is None):
+        raise ValueError("App journey requires both immutable source and version")
+    if app_source is not None:
+        from app_upgrade_contract import release_identity
+        release_identity(app_source, app_version)
     linux_kvm.probe(report.setdefault('kvm', {}))
     output.mkdir(parents=True, exist_ok=False)
     report.update(guest_baseline_verified=False, guest_clone_verified=False,
@@ -292,6 +299,7 @@ def prove(output, report):
     report['host_tools'] = run(['dpkg-query', '-W', '-f', '${Package}\t${Version}\n',
                                 'qemu-system-x86', 'qemu-utils', 'ovmf', 'cloud-image-utils']).stdout
     guest = None
+    app_prepared = app_retained = False
     with tempfile.TemporaryDirectory(prefix='clean-linux-', dir=os.environ['RUNNER_TEMP']) as temporary:
         root = Path(temporary)
         try:
@@ -320,21 +328,37 @@ def prove(output, report):
             if report['clone']['package_sha256'] != report['baseline']['package_sha256']:
                 raise ValueError('cold clone changed the baseline package inventory')
             report['guest_clone_verified'] = True
+            if app_source is not None:
+                import linux_guest_journey as journey
+                app_prepared = True
+                journey.prepare(guest, password, app_source, app_version, report)
             report['clone_login'] = guest.login(password)
             report['clone_desktop_capture'] = guest.capture_desktop(output, 'clone-logged-in', report['clone_login'])
+            if app_source is not None:
+                journey.execute(guest, 'install', output, report)
+                journey.prepare_reboot(guest)
             guest.power('reboot', password)
-            report['reboot'] = guest.wait(old_boot=report['clone']['boot_id'])
+            report['reboot'] = guest.wait(old_boot=report['clone']['boot_id'], clean=app_source is None)
             guest.screenshot(output / 'reboot-desktop.png')
-            if report['reboot']['package_sha256'] != report['clone']['package_sha256']:
+            if app_source is None and report['reboot']['package_sha256'] != report['clone']['package_sha256']:
                 raise ValueError('reboot changed the baseline package inventory')
             report['reboot_login'] = guest.login(password)
             report['reboot_desktop_capture'] = guest.capture_desktop(output, 'reboot-logged-in', report['reboot_login'])
+            if app_source is not None:
+                journey.execute(guest, 'reboot', output, report)
+                journey.retain(guest, output); app_retained = True
+                report['app_install_reopen_reboot_verified'] = True
             guest.power('poweroff', password)
             report['clone_cleanup'] = guest.close(); guest = None
             if digest(disk) != baseline_hash or digest(variables) != variables_hash:
                 raise ValueError('clone execution modified the powered-off baseline')
             report.update(guest_reboot_verified=True, graphical_login_verified=True, baseline_unchanged=True)
         finally:
+            if guest is not None and app_prepared and not app_retained:
+                try:
+                    journey.retain(guest, output)
+                except Exception as error:
+                    report['app_evidence_retention_error'] = str(error)
             if guest is not None:
                 report['failure_cleanup'] = guest.close()
             # Serial logs/configuration can contain provisioning details. Retain
@@ -349,10 +373,12 @@ def prove(output, report):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--app-source')
+    parser.add_argument('--app-version')
     args = parser.parse_args()
     report = {'schema': 'linux-clean-guest/v1'}
     try:
-        prove(args.output, report)
+        prove(args.output, report, args.app_source, args.app_version)
     except Exception as error:
         report['failure'] = str(error)
         raise

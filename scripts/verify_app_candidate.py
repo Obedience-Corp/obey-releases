@@ -49,28 +49,34 @@ def owned_timeout(arguments, seconds):
     return ["timeout", "--signal=TERM", f"--kill-after={APT_KILL_GRACE_SECONDS}s", f"{seconds}s", *arguments]
 
 
-def apt_command(arguments, environment, seconds, check=True):
+def apt_command(arguments, environment, seconds, check=True, authorization=None):
+    if authorization is not None:
+        return authorization.sudo(owned_timeout(["apt-get", *arguments], seconds), environment,
+                                  seconds + APT_KILL_GRACE_SECONDS + 30, check=check)
     return command(["sudo", *owned_timeout(["apt-get", *arguments], seconds)], environment,
                    timeout=seconds + APT_KILL_GRACE_SECONDS + 30, check=check)
 
 
-def install_cached_deb(deb, environment):
+def install_cached_deb(deb, environment, authorization=None):
     # apt --no-download cannot install a renamed local Deb absent from its
     # canonical archive cache. Unpack those exact authenticated bytes first,
     # then configure using downloaded dependencies only. Never let fix-broken
     # remove the unpacked App and report apparent success.
     script = 'dpkg --unpack -- "$1" && apt-get --no-download --no-remove --fix-broken install -y'
+    if authorization is not None:
+        return authorization.sudo(owned_timeout(["bash", "-euc", script, "fa0027-owned-deb", Path(deb).resolve()], APT_INSTALL_SECONDS),
+                                  environment, APT_INSTALL_SECONDS + APT_KILL_GRACE_SECONDS + 30)
     return command(["sudo", *owned_timeout(["bash", "-euc", script, "fa0027-owned-deb", Path(deb).resolve()], APT_INSTALL_SECONDS)],
                    environment, timeout=APT_INSTALL_SECONDS + APT_KILL_GRACE_SECONDS + 30)
 
 
-def install_deb(deb, environment):
+def install_deb(deb, environment, authorization=None):
     deb = Path(deb).resolve()
     # Simulation cannot install even when the hosted apt configuration forces
     # Assume-Yes. The subsequent real download logs its exact transfer size.
-    apt_command(["--simulate", "install", deb], environment, 60)
-    apt_command(["install", "--download-only", "-y", deb], environment, APT_DOWNLOAD_SECONDS)
-    install_cached_deb(deb, environment)
+    apt_command(["--simulate", "install", deb], environment, 60, authorization=authorization)
+    apt_command(["install", "--download-only", "-y", deb], environment, APT_DOWNLOAD_SECONDS, authorization=authorization)
+    install_cached_deb(deb, environment, authorization=authorization)
 
 
 def identity(tag, version, source):
@@ -388,7 +394,7 @@ def wait_fresh_setup(process, installer, managed, target, output, environment, r
     return result
 
 
-def native(directory, document, target, output, linux_package="both", fresh_setup=False, public_root=None, existing_user="none", login_shell_proof=False, missing_git_manual=False, login_shell_kind='default'):
+def native(directory, document, target, output, linux_package="both", fresh_setup=False, public_root=None, existing_user="none", login_shell_proof=False, missing_git_manual=False, login_shell_kind='default', guest_context=None):
     require_clean_host({"aarch64-apple-darwin": "macOS-arm64", "x86_64-apple-darwin": "macOS-x86_64", "x86_64-unknown-linux-gnu": "linux-x86_64", "x86_64-pc-windows-msvc": "windows-x86_64"}.get(target))
     if existing_user not in ("none", "older-idle", "current", "missing-companion", "corrupt-integrations", "foreign-companion") or existing_user != "none" and not fresh_setup:
         raise ValueError("existing-user scenario requires public default-home proof")
@@ -405,6 +411,10 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
         raise ValueError("invalid fresh AppImage target/mode")
     if any(os.environ.get(name) for name in ("GH_TOKEN", "GITHUB_TOKEN")):
         raise RuntimeError("App native execution must not receive a draft credential")
+    if guest_context is not None:
+        if not fresh_setup or public_root is None or existing_user != 'none' or login_shell_proof or missing_git_manual or target != 'x86_64-unknown-linux-gnu' or linux_package != 'both':
+            raise ValueError('local guest requires the unseeded public Linux Deb journey')
+        guest_context.validate()
     report = {"source_revision": document["source_revision"], "version": document["version"], "target": target,
               "runner_platform": native_platform(), "first_use_complete": False, "useful_first_use_verified": False, "native_failure_recovery_verified": False, "license_access_verified": False,
               "reboot_verified": False, "consumer_trust_verified": False, "two_version_update_verified": False, "native_packaging_launch_verified": False, "linux_package_mode": linux_package}
@@ -447,7 +457,7 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
         report["uninstalled"] = True
 
     def uninstall_deb():
-        apt_command(["remove", "--purge", "-y", "festival-app"], environment, 120)
+        apt_command(["remove", "--purge", "-y", "festival-app"], environment, 120, authorization=guest_context)
         if Path("/usr/bin/festival-app").exists():
             raise RuntimeError("owned deb uninstall left App executable")
         report["deb_uninstalled"] = True
@@ -515,7 +525,7 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
                 if state.returncode == 0 and state.stdout.strip() != "not-installed":
                     raise RuntimeError("refusing preexisting App package state")
                 owned_deb = True
-                install_deb(deb, environment)
+                install_deb(deb, environment, authorization=guest_context)
                 installed_version = command(["dpkg-query", "-W", "-f=${Version}", package], environment).strip()
                 if installed_version != report["version"]:
                     raise ValueError("installed deb version mismatch")
@@ -537,17 +547,20 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
                 report["deb_install_exercised"] = False
             else:
                 binary, commands, resources = Path("/usr/bin/festival-app"), Path("/usr/bin"), Path("/usr/lib")
-            if Path("/tmp/.X11-unix/X99").exists():
-                raise RuntimeError("refusing a preexisting display")
-            xvfb = subprocess.Popen(["Xvfb", ":99", "-screen", "0", "1280x900x24"], env=environment, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            environment["DISPLAY"] = ":99"
-            wait_until("owned Xvfb", lambda: subprocess.run(["xdpyinfo"], env=environment, capture_output=True).returncode == 0)
+            if guest_context is not None:
+                report['local_guest_session'] = guest_context.validate()
+            else:
+                if Path("/tmp/.X11-unix/X99").exists():
+                    raise RuntimeError("refusing a preexisting display")
+                xvfb = subprocess.Popen(["Xvfb", ":99", "-screen", "0", "1280x900x24"], env=environment, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                environment["DISPLAY"] = ":99"
+                wait_until("owned Xvfb", lambda: subprocess.run(["xdpyinfo"], env=environment, capture_output=True).returncode == 0)
+                if fresh_setup:
+                    manager = subprocess.Popen(["openbox"], env=environment, start_new_session=True)
+                    from linux_desktop import wait_for_openbox
+                    report['linux_desktop_ready'] = wait_for_openbox(manager, environment)
             from linux_window_events import Recorder
             window_events = Recorder(output, environment, report)
-            if fresh_setup:
-                manager = subprocess.Popen(["openbox"], env=environment, start_new_session=True)
-                from linux_desktop import wait_for_openbox
-                report['linux_desktop_ready'] = wait_for_openbox(manager, environment)
         suffix = ".exe" if target.endswith("windows-msvc") else ""
         installer, activity = commands / ("festival" + suffix), commands / ("festival-activity-engine" + suffix)
         for path in (binary, installer, activity):
@@ -574,6 +587,8 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
                 foreign_fixture = foreign_companion.Fixture(default_managed, installer, temporary / "companion-rollback", report.setdefault("foreign_companion_fixture", {}))
                 foreign_fixture.substitute()
                 report["foreign_companion_probe"] = foreign_companion.probe(installer, foreign_fixture, environment, output)
+        if guest_context is not None:
+            guest_context.before_launch(installer, environment, output, report)
         if missing_git_manual:
             import missing_git
             git_fixture = missing_git.Fixture(temporary/'git-restore-cache', output, environment)
@@ -634,6 +649,8 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
                     git_fixture.restore()
                     report['git_restored_prerequisite'] = missing_git.git_status(installer, environment, True, output/'git-restored-status.json')
                     report['git_retry_action'] = missing_git.interact(process, binary, environment, 'retry')
+                if guest_context is not None:
+                    guest_context.install_git(process, binary, installer, environment, output, report)
                 report["default_after_setup"] = wait_fresh_setup(process, installer, default_managed, target, output, environment, report, "fresh", **mac_options)
                 if foreign_fixture is not None:
                     report["companion_after_setup"] = foreign_fixture.healthy()
@@ -682,7 +699,11 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
                 report["appimage_default_launch_verified"] = True
                 report["appimage_extracted_app_executed"] = False
         # Stop only the process created by this proof, before uninstall/temp cleanup.
-        stop_owned(process, environment)
+        if guest_context is not None:
+            upgrade.normal_quit(process, binary, None, target, environment, output)
+            report['guest_retained_for_reboot'] = True
+        else:
+            stop_owned(process, environment)
         process = None
         if appimage is not None and linux_package == "both" and not fresh_setup:
             appimage_proof(appimage, extracted_appimage, target, output, environment, report)
@@ -728,7 +749,7 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
             elif report.get("fresh_default_setup_verified"):
                 cleanup_errors.append("App setup did not retain a default daemon log")
             obey = default_managed / "bin" / ("obey.exe" if os.name == "nt" else "obey")
-            if obey.is_file():
+            if obey.is_file() and guest_context is None:
                 def uninstall_owned_service():
                     command([obey, "service", "uninstall"], environment, timeout=120)
                     state = command([obey, "service", "status", "--json"], environment, json_output=True)
@@ -738,7 +759,7 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
                 actions.append(uninstall_owned_service)
         if installed is not None and (installed / "uninstall.exe").is_file():
             actions.append(uninstall_windows)
-        if owned_deb:
+        if owned_deb and guest_context is None:
             actions.append(uninstall_deb)
         if manager is not None:
             def stop_manager():
@@ -752,6 +773,9 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
                 xvfb.terminate()
                 xvfb.wait(timeout=10)
             actions.append(stop_display)
+        if guest_context is not None:
+            actions.append(guest_context.close)
+            report["guest_cleanup_owner"] = "outer disposable VM; installed App and service retained for actual reboot"
         actions.append(temporary_context.cleanup)
         for action in actions:
             try:
@@ -763,6 +787,7 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
         report["native_packaging_launch_verified"] = "failure" not in report and not cleanup_errors
         report["fresh_default_setup_verified"] = report["fresh_default_setup_verified"] and report["native_packaging_launch_verified"]
         report["new_login_shell_verified"] = report["new_login_shell_verified"] and report["native_packaging_launch_verified"]
+        report["automatic_git_authorization_verified"] = report["automatic_git_authorization_verified"] and report["native_packaging_launch_verified"]
         report["corrupt_integration_manual_recovery_verified"] = report["corrupt_integration_manual_recovery_verified"] and report["native_packaging_launch_verified"]
         report["foreign_companion_manual_recovery_verified"] = report["foreign_companion_manual_recovery_verified"] and report["native_packaging_launch_verified"]
         report["existing_user_reconciliation_verified"] = report["existing_user_reconciliation_verified"] and report["native_packaging_launch_verified"]
