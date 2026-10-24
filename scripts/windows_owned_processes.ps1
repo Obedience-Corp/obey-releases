@@ -22,7 +22,10 @@ if ($env:APP_PROOF_PROCESS_MODE -eq 'snapshot') {
     }
     ConvertTo-Json -InputObject @($records) -Compress
 } elseif ($env:APP_PROOF_PROCESS_MODE -eq 'verify') {
-    $records = @($env:APP_PROOF_PROCESS_IDENTITIES | ConvertFrom-Json)
+    # PS5.1 emits a JSON array as one pipeline object; @() would wrap it in
+    # another array. A typed assignment preserves one flat identity list on
+    # both Windows PowerShell5.1 and PowerShell7.
+    [object[]]$records = ConvertFrom-Json -InputObject $env:APP_PROOF_PROCESS_IDENTITIES
     $deadline = [DateTime]::UtcNow.AddSeconds(20)
     do {
         $survivors = @()

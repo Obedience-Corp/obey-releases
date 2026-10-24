@@ -10,65 +10,78 @@ if os.name != 'nt' or os.environ.get('CANDIDATE_NATIVE_DISPOSABLE') != '1' or os
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 from windows_console import run_prompt
 from login_windows import version_invocation
+from login_shell import windows_runtime
+
+
+def controls(shell, output, expected_major):
+    body=("function fest { if ($args.Count -ne 2 -or $args[0] -isnot [string] -or "
+          "$args[0] -ne 'version' -or $args[1] -ne '--short') { throw 'ordinary argv was nested or altered' }; "
+          "$global:LASTEXITCODE=0; 'v0.9.8' }; " + version_invocation('fest') +
+          "@{answer=(6*7);ordinary_version=$version.Trim();ps_major=$PSVersionTable.PSVersion.Major;ps_minor=$PSVersionTable.PSVersion.Minor}")
+    document=run_prompt(shell,body,dict(os.environ),output,'positive')
+    assert document['data']['answer']==42
+    assert document['data']['ps_major']==expected_major
+    if expected_major==5: assert document['data']['ps_minor']==1
+    assert document['data']['ordinary_version']=='v0.9.8'
+    assert document['guard']['input_redirected'] is False
+    assert not document['guard']['probe_marker']
+    transport=json.loads((output/'positive.transport.json').read_text())
+    assert transport['backend_name']=='pywinpty-3.1.0-WinPTY' and transport['dimensions']==[120,40]
+    assert transport['adapter_returncode']==0 and transport['shell_exit']['shell_returncode']==0
+    assert transport['shell_exit']['shell_pid']==document['console_process']['pid']
+    assert transport['owned_console_exit_verified'] is True
+    assert transport['native_backend']['backend']=='WinPTY'
+    assert {Path(row['path']).name for row in transport['native_backend']['files']} >= {'winpty.dll','winpty-agent.exe'}
+    assert all(len(row['sha256'])==64 for row in transport['native_backend']['files'])
+    assert (output/'positive.terminal.log').stat().st_size>0
+    eof_records=[json.loads(line) for line in (output/transport['eof_diagnostics_file']).read_text().splitlines()]
+    assert eof_records and eof_records[-1]['alive'] is False and eof_records[-1]['iseof'] is True
+    assert eof_records[-1]['status']==0,eof_records
+    print('PASS: actual owned console starts ordinary PowerShell with unredirected input and no startup/readiness override')
+    try:
+        body="[IO.File]::WriteAllText('"+str(output/'timeout.body-started').replace("'","''")+"','sleep begun'); Start-Sleep -Seconds 30; @{unexpected=$true}"
+        run_prompt(shell,body,dict(os.environ),output,'timeout',timeout=5)
+    except RuntimeError:
+        transport=json.loads((output/'timeout.transport.json').read_text())
+        assert transport.get('ordinary_startup_verified') is True,transport
+        assert transport.get('failure')=='owned interactive console exceeded execution/output bounds',transport
+        assert (output/'timeout.body-started').read_text()=='sleep begun'
+        assert (output/'timeout.started.json').is_file() and not (output/'timeout.console.json').exists()
+        assert transport.get('tracked_console_cleanup_verified') is True,transport
+        assert 'cleanup_failure' not in transport,transport
+        print('PASS: timed-out real console retains diagnostics and all recorded owned process identities exit')
+    else:raise AssertionError('owned console timeout did not fail')
+
+    # Deliberately end only this console's authenticated adapter while its owned
+    # PowerShell body is still alive; cleanup must not depend on adapter.poll().
+    identity_path=output/'early-exit.adapter.json'
+    body=("$identity=Get-Content -Raw -LiteralPath '"+str(identity_path).replace("'","''")+"' | ConvertFrom-Json; "
+          "$adapter=Get-Process -Id $identity.pid -ErrorAction Stop; [void]$adapter.Handle; "
+          "if ($adapter.StartTime.ToUniversalTime().Ticks.ToString() -ne $identity.started) { throw 'adapter identity changed' }; "
+          "[IO.File]::WriteAllText('"+str(output/'early-exit.body-started').replace("'","''")+"','adapter kill begins'); "
+          "$adapter.Kill(); Start-Sleep -Seconds 30; @{unexpected=$true}")
+    try:
+        run_prompt(shell,body,dict(os.environ),output,'early-exit',timeout=5)
+    except RuntimeError:
+        transport=json.loads((output/'early-exit.transport.json').read_text())
+        assert transport.get('ordinary_startup_verified') is True,transport
+        assert transport.get('failure') in ('ordinary console exited before its structured readback','console adapter exited before an authenticated tree snapshot'),transport
+        assert (output/'early-exit.body-started').read_text()=='adapter kill begins'
+        assert (output/'early-exit.started.json').is_file() and not (output/'early-exit.console.json').exists()
+        assert transport.get('ownership_snapshot_complete') is True,transport
+        assert transport.get('tracked_console_cleanup_verified') is True,transport
+        assert 'cleanup_failure' not in transport,transport
+        print('PASS: early adapter exit still stops/verifies tracked owned console descendants')
+    else:raise AssertionError('deliberate adapter exit did not fail')
 
 output=Path(os.environ['RUNNER_TEMP'])/'ordinary-console-proof'
 output.mkdir()
 shell=shutil.which('pwsh')
 if not shell:raise RuntimeError('installed PowerShell7 missing')
-body=("function fest { if ($args.Count -ne 2 -or $args[0] -isnot [string] -or "
-      "$args[0] -ne 'version' -or $args[1] -ne '--short') { throw 'ordinary argv was nested or altered' }; "
-      "$global:LASTEXITCODE=0; 'v0.9.8' }; " + version_invocation('fest') +
-      "@{answer=(6*7);ordinary_version=$version.Trim()}")
-document=run_prompt(shell,body,dict(os.environ),output,'positive')
-assert document['data']['answer']==42
-assert document['data']['ordinary_version']=='v0.9.8'
-assert document['guard']['input_redirected'] is False
-assert not document['guard']['probe_marker']
-transport=json.loads((output/'positive.transport.json').read_text())
-assert transport['backend_name']=='pywinpty-3.1.0-WinPTY' and transport['dimensions']==[120,40]
-assert transport['adapter_returncode']==0 and transport['shell_exit']['shell_returncode']==0
-assert transport['shell_exit']['shell_pid']==document['console_process']['pid']
-assert transport['owned_console_exit_verified'] is True
-assert transport['native_backend']['backend']=='WinPTY'
-assert {Path(row['path']).name for row in transport['native_backend']['files']} >= {'winpty.dll','winpty-agent.exe'}
-assert all(len(row['sha256'])==64 for row in transport['native_backend']['files'])
-assert (output/'positive.terminal.log').stat().st_size>0
-eof_records=[json.loads(line) for line in (output/transport['eof_diagnostics_file']).read_text().splitlines()]
-assert eof_records and eof_records[-1]['alive'] is False and eof_records[-1]['iseof'] is True
-assert eof_records[-1]['status']==0,eof_records
-print('PASS: actual owned console starts ordinary PowerShell with unredirected input and no startup/readiness override')
-try:
-    body="[IO.File]::WriteAllText('"+str(output/'timeout.body-started').replace("'","''")+"','sleep begun'); Start-Sleep -Seconds 30; @{unexpected=$true}"
-    run_prompt(shell,body,dict(os.environ),output,'timeout',timeout=5)
-except RuntimeError:
-    transport=json.loads((output/'timeout.transport.json').read_text())
-    assert transport.get('ordinary_startup_verified') is True,transport
-    assert transport.get('failure')=='owned interactive console exceeded execution/output bounds',transport
-    assert (output/'timeout.body-started').read_text()=='sleep begun'
-    assert (output/'timeout.started.json').is_file() and not (output/'timeout.console.json').exists()
-    assert transport.get('tracked_console_cleanup_verified') is True,transport
-    assert 'cleanup_failure' not in transport,transport
-    print('PASS: timed-out real console retains diagnostics and all recorded owned process identities exit')
-else:raise AssertionError('owned console timeout did not fail')
-
-# Deliberately end only this console's authenticated adapter while its owned
-# PowerShell body is still alive; cleanup must not depend on adapter.poll().
-identity_path=output/'early-exit.adapter.json'
-body=("$identity=Get-Content -Raw -LiteralPath '"+str(identity_path).replace("'","''")+"' | ConvertFrom-Json; "
-      "$adapter=Get-Process -Id $identity.pid -ErrorAction Stop; [void]$adapter.Handle; "
-      "if ($adapter.StartTime.ToUniversalTime().Ticks.ToString() -ne $identity.started) { throw 'adapter identity changed' }; "
-      "[IO.File]::WriteAllText('"+str(output/'early-exit.body-started').replace("'","''")+"','adapter kill begins'); "
-      "$adapter.Kill(); Start-Sleep -Seconds 30; @{unexpected=$true}")
-try:
-    run_prompt(shell,body,dict(os.environ),output,'early-exit',timeout=5)
-except RuntimeError:
-    transport=json.loads((output/'early-exit.transport.json').read_text())
-    assert transport.get('ordinary_startup_verified') is True,transport
-    assert transport.get('failure') in ('ordinary console exited before its structured readback','console adapter exited before an authenticated tree snapshot'),transport
-    assert (output/'early-exit.body-started').read_text()=='adapter kill begins'
-    assert (output/'early-exit.started.json').is_file() and not (output/'early-exit.console.json').exists()
-    assert transport.get('ownership_snapshot_complete') is True,transport
-    assert transport.get('tracked_console_cleanup_verified') is True,transport
-    assert 'cleanup_failure' not in transport,transport
-    print('PASS: early adapter exit still stops/verifies tracked owned console descendants')
-else:raise AssertionError('deliberate adapter exit did not fail')
+controls(shell,output,7)
+legacy,name,runtime=windows_runtime(dict(os.environ),'windows-powershell')
+assert name=='powershell' and runtime['major']==5 and runtime['version'].startswith('5.1.')
+legacy_output=output/'windows-powershell51'
+legacy_output.mkdir()
+controls(legacy,legacy_output,5)
+print('PASS: actual stock WindowsPowerShell5.1 ordinary startup, argv, EOF/exit, timeout and early adapter cleanup controls')

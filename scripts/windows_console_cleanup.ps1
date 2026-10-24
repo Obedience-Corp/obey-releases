@@ -3,7 +3,8 @@ $ErrorActionPreference='Stop'
 if ($env:CANDIDATE_NATIVE_DISPOSABLE -ne '1' -or $env:CANDIDATE_RUNNER_KIND -ne 'github-hosted') {
     throw 'Console cleanup requires a disposable hosted account'
 }
-$records=@($env:APP_CONSOLE_IDENTITIES | ConvertFrom-Json)
+# Preserve the decoded array itself on PS5.1, rather than wrapping it again.
+[object[]]$records=ConvertFrom-Json -InputObject $env:APP_CONSOLE_IDENTITIES
 foreach ($record in $records) {
     if ((-not ($record.pid -is [int] -or $record.pid -is [long])) -or $record.pid -le 0 -or $record.pid -gt [int]::MaxValue -or [string]$record.started -notmatch '^\d+$') {
         throw 'Invalid owned console identity; refusing all cleanup'

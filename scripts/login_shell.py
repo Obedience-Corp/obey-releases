@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import shutil
 import signal
+import sys
 import time
 import uuid
 
@@ -50,24 +51,50 @@ def seed_profile(path, home, shell):
             'seeded_sha256': hashlib.sha256(seeded).hexdigest()}
 
 
-def prepare(environment, report):
-    if os.environ.get('CANDIDATE_NATIVE_DISPOSABLE') != '1' or os.environ.get('CANDIDATE_RUNNER_KIND') != 'github-hosted':
-        raise RuntimeError('login proof requires the disposable native fresh account')
-    home = Path.home().resolve()
-    if os.name == 'nt':
+def windows_runtime(environment, requested_shell):
+    if requested_shell == 'windows-powershell':
+        # Windows os.environ exposes uppercase keys; a plain dict copy no
+        # longer supplies its case-insensitive lookup. Refuse conflicting
+        # duplicates instead of guessing which root reaches the child.
+        roots = [value for key, value in environment.items() if key.upper() == 'SYSTEMROOT']
+        if len(roots) != 1:
+            raise RuntimeError('Windows system-root environment is missing or ambiguous')
+        system = Path(roots[0])
+        legacy = system/'System32/WindowsPowerShell/v1.0/powershell.exe'
+        if not system.is_absolute() or not legacy.is_file():
+            raise RuntimeError('stock Windows PowerShell executable is unavailable')
+        shell, name, major = str(legacy), 'powershell', 5
+    elif requested_shell == 'default':
         shell = shutil.which('pwsh', path=environment.get('PATH'))
         if not shell:
             raise RuntimeError('ordinary PowerShell is unavailable')
-        name = 'pwsh'
-        runtime = command([shell, '-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
-                           '@{profile=$PROFILE.CurrentUserAllHosts;major=$PSVersionTable.PSVersion.Major;version=$PSVersionTable.PSVersion.ToString()} | ConvertTo-Json -Compress'], environment, json_output=True)
-        if runtime.get('major') != 7:
-            raise RuntimeError('this proof covers installed PowerShell7 only')
+        name, major = 'pwsh', 7
+    else:
+        raise ValueError('selected shell is not a Windows PowerShell edition')
+    runtime = command([shell, '-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
+                       '@{profile=$PROFILE.CurrentUserAllHosts;major=$PSVersionTable.PSVersion.Major;version=$PSVersionTable.PSVersion.ToString()} | ConvertTo-Json -Compress'], environment, json_output=True)
+    if runtime.get('major') != major or (major == 5 and not runtime.get('version', '').startswith('5.1.')):
+        raise RuntimeError('selected ordinary PowerShell runtime differs from expected edition')
+    return shell, name, runtime
+
+
+def prepare(environment, report, requested_shell='default'):
+    if os.environ.get('CANDIDATE_NATIVE_DISPOSABLE') != '1' or os.environ.get('CANDIDATE_RUNNER_KIND') != 'github-hosted':
+        raise RuntimeError('login proof requires the disposable native fresh account')
+    home = Path.home().resolve()
+    if requested_shell not in ('default', 'windows-powershell', 'zsh'):
+        raise ValueError('unsupported ordinary login shell selection')
+    if os.name == 'nt':
+        shell, name, runtime = windows_runtime(environment, requested_shell)
         profile = Path(runtime['profile'])
     else:
         import pwd
         shell = pwd.getpwuid(os.getuid()).pw_shell
         name = Path(shell).name
+        if requested_shell == 'windows-powershell':
+            raise ValueError('Windows PowerShell proof requires native Windows')
+        if requested_shell == 'zsh' and (sys.platform != 'darwin' or name != 'zsh'):
+            raise RuntimeError('selected Zsh proof requires the actual macOS account login shell')
         runtime = {'version': name}
         if name == 'bash':
             profile = next((home / n for n in ('.bash_profile', '.bash_login', '.profile') if (home / n).exists()), home / '.bash_profile')
@@ -154,7 +181,9 @@ def verify(fixture, managed, installer, environment, output, stage):
         else:
             import login_posix
             records[tool] = login_posix.verify_tool(fixture, tool, managed, environment, output, stage)
-    return {'shell': fixture['shell'], 'runtime': fixture['runtime'], 'mode': 'ordinary installed PowerShell7 console prompt' if os.name == 'nt' else 'interactive login shell in owned pty',
+    mode = ('ordinary stock WindowsPowerShell5.1 console prompt' if fixture['kind'] == 'powershell'
+            else 'ordinary installed PowerShell7 console prompt') if os.name == 'nt' else 'interactive login shell in owned pty'
+    return {'shell': fixture['shell'], 'runtime': fixture['runtime'], 'mode': mode,
             'profile': str(fixture['path']), 'foreign_profile_prefix_sha256': fixture['seeded_sha256'],
             'after_profile_sha256': hashlib.sha256(data).hexdigest(), 'profile_mtime_ns': fixture['path'].stat().st_mtime_ns,
             'integrations': integrations, 'commands': records}
