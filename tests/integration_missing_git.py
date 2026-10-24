@@ -18,25 +18,23 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 import missing_git
 
 real_apt = missing_git.Fixture.apt
+real_download = missing_git.Fixture.download
 
 
-def cached_apt(self, arguments, seconds):
-    if '--download-only' in arguments:
-        # The only replaced boundary is download transport. Real apt plans,
-        # removals, package queries, dpkg restore and hash checks run unchanged.
-        package = arguments[-1].split('=', 1)[0]
-        matches = list(Path('/fixture-archives').glob(package+'_*.deb'))
-        assert len(matches) == 1, matches
-        shutil.copyfile(matches[0], self.cache/matches[0].name)
-        return real_apt(self, arguments, seconds)
-    return real_apt(self, arguments, seconds)
+def cached_download(self, package, version):
+    # The only replaced boundary is network transport. The actual unprivileged
+    # authenticated APT download/cache verification still executes normally.
+    matches = list(Path('/fixture-archives').glob(package+'_*.deb'))
+    assert len(matches) == 1, matches
+    shutil.copyfile(matches[0], self.cache/matches[0].name)
+    return real_download(self, package, version)
 
 
 with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, {
         'CANDIDATE_NATIVE_DISPOSABLE':'1', 'CANDIDATE_RUNNER_KIND':'github-hosted'}):
     root = Path(temporary)
     before = missing_git.installed(os.environ)
-    with patch.object(missing_git.Fixture, 'apt', cached_apt):
+    with patch.object(missing_git.Fixture, 'download', cached_download):
         fixture = missing_git.Fixture(root/'cache', root, os.environ)
     try:
         fixture.remove()
@@ -63,7 +61,7 @@ with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, {
     # An apt invocation can fail after it has removed packages. The fixture
     # marks ownership before invoking apt, so the enclosing failure cleanup
     # must restore the exact state even when remove() never returns normally.
-    with patch.object(missing_git.Fixture, 'apt', cached_apt):
+    with patch.object(missing_git.Fixture, 'download', cached_download):
         partial = missing_git.Fixture(root/'partial-cache', root, os.environ)
     def remove_then_fail(self, arguments, seconds):
         result = real_apt(self, arguments, seconds)
@@ -83,3 +81,7 @@ with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, {
         partial.restore()
     assert partial.restored and missing_git.installed(os.environ) == before
     print('Actual removed Git restored after propagated partial-transaction failure PASS', flush=True)
+    cache_paths = [fixture.cache, partial.cache]
+    for cache in cache_paths:
+        assert all(path.stat().st_uid == os.getuid() for path in [cache, *cache.rglob('*')])
+print('Normal controller UID owns all cache files and temporary cleanup completed PASS', flush=True)

@@ -98,8 +98,7 @@ class Fixture:
         # Only the exact installed versions in authenticated APT indices are
         # eligible. A missing historical package fails before any removal.
         for name, version in sorted(self.removed.items()):
-            self.apt(['--download-only', '--reinstall', '--no-remove', '-y',
-                      '-o', f'Dir::Cache::archives={self.cache}/', 'install', f'{name}={version}'], 1800)
+            self.download(name, version)
         for path in sorted(self.cache.glob('*.deb')):
             fields = command(['dpkg-deb', '-f', path, 'Package', 'Version'], self.environment).splitlines()
             values = dict(row.split(': ', 1) for row in fields)
@@ -116,6 +115,16 @@ class Fixture:
     def apt(self, args, seconds):
         return command(['sudo', 'timeout', '--signal=TERM', '--kill-after=15s', f'{seconds}s',
                         'apt-get', *args], self.environment, timeout=seconds+45)
+
+    def download(self, name, version):
+        # `apt-get download` reads authenticated APT metadata but needs no root
+        # or dpkg lock. Keep archives and any transfer state owned by the normal
+        # verifier UID; privileged cache/partial directories cannot be cleaned
+        # by that account. Package/version are positional args, never shell text.
+        return command(['timeout', '--signal=TERM', '--kill-after=15s', '1800s',
+                        'bash', '-euc', 'cd -- "$1"; exec apt-get download "$2"',
+                        'fa0027-git-cache', self.cache, f'{name}={version}'],
+                       self.environment, timeout=1845)
 
     def enable_accessibility(self):
         value = command(['gsettings', 'get', 'org.gnome.desktop.interface', 'toolkit-accessibility'], self.environment).strip()
