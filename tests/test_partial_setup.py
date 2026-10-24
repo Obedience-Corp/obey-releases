@@ -168,6 +168,19 @@ def row(buttons=1,label=ui.LABEL,enabled=True):
 
 
 class RetryTests(unittest.TestCase):
+    def test_real_webkit_coalesced_row_heading_and_exact_negative_boundaries(self):
+        examples=[['Install selected app packages Failed E_ARTIFACT_DO: transport',ui.CODE],
+                  ['Install selected app packages\nFailed\nE_ARTIFACT_DO: transport',ui.CODE],
+                  [ui.LABEL,'Failed',ui.CODE]]
+        for texts in examples:self.assertTrue(ui.failed_install_text(texts))
+        for texts in [[ui.LABEL+' lookalike Failed',ui.CODE],
+                      [ui.LABEL+' Failedly',ui.CODE],
+                      ['Start the obey daemon Failed',ui.CODE],
+                      [ui.LABEL+' Failed','E_OTHER'],
+                      [ui.LABEL+' Failed','E_ARTIFACT_DO_LOOKALIKE'],
+                      ['prefix '+ui.LABEL+' Failed',ui.CODE]]:
+            with self.subTest(texts=texts):self.assertFalse(ui.failed_install_text(texts))
+
     def test_exact_failed_row_and_one_normal_action(self):
         action,evidence=ui.select_retry([node(children=[row()])],42,API)
         self.assertIn(ui.LABEL,evidence['row_text']);action.do_action.assert_not_called()
