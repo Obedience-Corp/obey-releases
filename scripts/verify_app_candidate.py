@@ -534,6 +534,8 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
             window_events = Recorder(output, environment, report)
             if fresh_setup:
                 manager = subprocess.Popen(["openbox"], env=environment, start_new_session=True)
+                from linux_desktop import wait_for_openbox
+                report['linux_desktop_ready'] = wait_for_openbox(manager, environment)
         suffix = ".exe" if target.endswith("windows-msvc") else ""
         installer, activity = commands / ("festival" + suffix), commands / ("festival-activity-engine" + suffix)
         for path in (binary, installer, activity):

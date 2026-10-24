@@ -102,6 +102,11 @@ jobs:
             -e CANDIDATE_TEST_CONTAINER=1 -e PYTHONDONTWRITEBYTECODE=1 \
             -v "$PWD:/src:ro" -w /src obey-release-x11:local \
             python -W error::ResourceWarning tests/integration_linux_window_events.py
+          docker run --rm --network none --user 10001:10001 \
+            --tmpfs /tmp:rw,exec,size=128m,mode=1777 \
+            -e CANDIDATE_TEST_CONTAINER=1 -e PYTHONDONTWRITEBYTECODE=1 \
+            -v "$PWD:/src:ro" -w /src obey-release-x11:local \
+            python -W error::ResourceWarning tests/integration_linux_desktop.py
       - name: Test actual Git cache restoration and owned GTK Retry action
         run: |
           docker build -t obey-release-git-ui:local - < tests/Dockerfile.git-ui

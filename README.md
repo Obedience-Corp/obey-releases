@@ -575,6 +575,16 @@ diagnostic evidence and cannot turn an App failure into success. An isolated rea
 X11 fixture checks ordered lifecycle events, simultaneous manager subscription,
 unavailable-display refusal, and cleanup of an unresponsive observer.
 
+The fresh Linux desktop must be ready before launching the App. The verifier
+waits for its live Openbox child's stable process birth, root/check-window EWMH
+self-reference and Openbox name, and selected root SubstructureRedirect events.
+This prevents launching into a bare display while the manager is still starting
+and reparenting existing windows. Openbox omits `_NET_WM_PID`; no such attribution
+is invented. Ownership comes from the unique empty X server and the single
+manager launched by this proof. A real isolated control rejects a bare display
+and an exited manager, then captures a managed window through the unchanged
+App screenshot path. This establishes the harness precondition, not App readiness.
+
 ### Missing Git: manual restoration and real App Retry
 
 The fresh workflow supports `platform_scope=deb` with
