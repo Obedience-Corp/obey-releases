@@ -13,6 +13,17 @@ LABEL = 'Install selected app packages'
 CODE = 'E_ARTIFACT_DO'
 
 
+def failed_install_text(texts):
+    # GTK exposes separate label/status nodes; WebKit coalesces adjacent spans
+    # into the same list item's name/Text interface. Keep the exact heading and
+    # status boundary, not a substring match against the entire application.
+    prefix = LABEL + ' Failed'
+    aggregate = [' '.join(value.split()) for value in texts]
+    heading = ((LABEL in texts and 'Failed' in texts) or
+               any(value == prefix or value.startswith(prefix + ' ') for value in aggregate))
+    return heading and CODE in texts
+
+
 def select_retry(applications, pid, api):
     roots = [app for app in applications if app.get_process_id() == pid]
     if len(roots) != 1:
@@ -25,8 +36,7 @@ def select_retry(applications, pid, api):
             raise RuntimeError('owned setup accessibility tree exceeds bound')
         if node.get_role() == api.Role.LIST_ITEM:
             texts, _ = subtree_text(node, api)
-            joined = '\n'.join(texts)
-            if LABEL in texts and 'Failed' in joined and CODE in joined:
+            if failed_install_text(texts):
                 rows.append((node, texts))
         children = node.get_child_count()
         if not 0 <= children <= 4000 or count + len(queue) + children > 4000:

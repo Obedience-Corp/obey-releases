@@ -1019,3 +1019,13 @@ Installer0.3.8 installation/fault/recovery on supported Linux x64. That componen
 control is not native App acceptance; inspect the subsequently dispatched public
 App originals before setting the dedicated partial-retry flag. Licensing, useful
 App work, reboot and other-platform negative cases retain their separate scope.
+
+Original B9 run40117109611 established the real partial placement and truthful
+failed report but stopped before Retry: WebKit combines adjacent heading/status
+spans into the list item's name and multiline text, whereas GTK exposes separate
+labels. The selector now accepts the exact normalized failed-Install prefix in
+that same authenticated list item, retaining the exact error code and one enabled
+owned Retry. A real WebKit HTML fixture (ordinary and list-style-reset layouts)
+requires the actual click callback and duplicate refusal; no role, coordinate,
+ownership or product-state fallback is used. The failed original stays rejected
+until a subsequent public App run proves completed Retry and preservation.
