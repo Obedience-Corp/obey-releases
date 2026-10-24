@@ -4,6 +4,7 @@ on:
     paths:
       - '.github/workflows/verify-linux-clean-vm.yml'
       - 'scripts/linux_kvm.py'
+      - 'scripts/linux_guest.py'
       - 'scripts/verify_candidate.py'
   workflow_dispatch:
 permissions:
@@ -38,4 +39,37 @@ jobs:
         with:
           name: linux-kvm-preflight
           path: ${{ runner.temp }}/linux-kvm-proof.json
+          if-no-files-found: error
+  clean-desktop-baseline:
+    needs: native-kvm
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install VM host tools on the disposable runner
+        env:
+          RUNNER_KIND: ${{ runner.environment }}
+        run: |
+          test "$RUNNER_KIND" = github-hosted
+          sudo -n apt-get update
+          sudo -n apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils \
+            ovmf cloud-image-utils python3-pil gnupg curl openssh-client openssl
+      - name: Boot clean desktop, cold clone and reboot with normal password sudo
+        shell: bash
+        env:
+          RUNNER_KIND: ${{ runner.environment }}
+        run: |
+          sudo -n /usr/bin/setpriv --reuid="$(id -u)" \
+            --regid="$(getent group kvm | cut -d: -f3)" --clear-groups --no-new-privs \
+            /usr/bin/env -i PATH=/usr/bin:/bin PYTHONDONTWRITEBYTECODE=1 \
+            RUNNER_TEMP="$RUNNER_TEMP" CANDIDATE_NATIVE_DISPOSABLE=1 \
+            CANDIDATE_RUNNER_KIND="$RUNNER_KIND" \
+            /usr/bin/python3 scripts/linux_guest.py --output "$RUNNER_TEMP/linux-clean-guest-proof"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: linux-clean-guest-baseline
+          path: ${{ runner.temp }}/linux-clean-guest-proof/
           if-no-files-found: error
