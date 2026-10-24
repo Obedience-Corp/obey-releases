@@ -86,6 +86,10 @@ class SessionClient:
         return checked_session(self.call('session', 'info', session, '--campaign', self.fixture['camp_id'], json_output=True),
                                session, self.fixture['camp_id'], status)
 
+    def lifecycle_events(self, session):
+        return self.call('session', 'events', session, '--campaign', self.fixture['camp_id'],
+                         '--kind', 'session_status_changed', '--limit', '100', json_output=True)
+
     def turn_readback(self, session, count):
         return checked_turns(self.call('session', 'turns', session, '--campaign', self.fixture['camp_id'], json_output=True),
                              session, self.fixture['camp_id'], count)

@@ -1044,3 +1044,11 @@ real provider work must succeed, and App reopen must retain the recovered proces
 packages, settings and unrelated camp files. Provider output/daemon logs are not
 exported; owned service and provider cleanup gate acceptance. This proves backend
 crash recovery, not interrupted-turn resume or licensed App reconnect.
+
+`tests/integration_service_events_cli.py` checks the exact shared lifecycle argv
+against checksum-verified public Obey 0.2.3 in isolated Docker: singular `--kind`
+is accepted and the rejected `--kinds` predecessor is reproduced. It appends
+`--help` to isolate parsing; event JSON and crash lifecycle still require the
+actual native recovery journey. The Linux contracts CI retains its original
+control log separately. Fixed recovery stage labels identify failure boundaries
+without exporting provider output or session arguments.

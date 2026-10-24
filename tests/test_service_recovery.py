@@ -137,3 +137,11 @@ class ServiceRecoveryContracts(unittest.TestCase):
             os.utime(replacement, ns=(binary.stat().st_atime_ns, fixture.baseline['mtimes'][str(binary)]))
             os.replace(replacement, binary)
             with self.assertRaisesRegex(ValueError, 'physical identities'): fixture.preserved()
+
+    def test_both_event_readbacks_use_released_singular_kind_and_json_contract(self):
+        client = active_session.SessionClient()
+        client.obey = self.root/'obey'; client.environment = {}; client.fixture = {'camp_id': 'camp'}
+        with patch.object(active_session, 'quiet', return_value={'events': []}) as quiet:
+            self.assertEqual(client.lifecycle_events('old'), {'events': []})
+        quiet.assert_called_once_with([client.obey, '--no-color', 'session', 'events', 'old',
+            '--campaign', 'camp', '--kind', 'session_status_changed', '--limit', '100', '--json'], {}, json_output=True)
