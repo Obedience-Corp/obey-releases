@@ -28,14 +28,52 @@ def active_greeter():
             and state.get('Service') == 'lightdm-greeter')
 
 
-def process_identity(proc, scope):
-    if proc.stat().st_uid != os.getuid() or (proc / 'exe').resolve() != Path('/usr/bin/xfce4-session'):
+def process_identity(proc, scope, executable='xfce4-session'):
+    if proc.stat().st_uid != os.getuid() or (proc / 'exe').resolve() != Path('/usr/bin') / executable:
         raise RuntimeError('Xfce session process identity differs from the expected user/executable')
     groups = (proc / 'cgroup').read_text()
     if not any(scope in row.split(':', 2)[2].split('/') for row in groups.splitlines()):
         raise RuntimeError('Xfce process is outside the selected local logind session scope')
     fields = (proc / 'stat').read_text().rsplit(')', 1)[1].split()
     return {'start_ticks': int(fields[19]), 'cgroup': groups, 'uid': proc.stat().st_uid}
+
+
+def desktop_windows(environment, scope):
+    """Require the actual mapped desktop and panel, not just an early WM atom."""
+    owners = {}
+    for name in ('xfdesktop', 'xfce4-panel'):
+        found = subprocess.run(['pgrep', '-u', str(os.getuid()), '-x', name],
+                               capture_output=True, text=True, timeout=10)
+        if found.returncode == 1:
+            return []
+        if found.returncode != 0 or len(found.stdout.split()) != 1:
+            raise RuntimeError('ambiguous desktop component process: ' + name)
+        pid = int(found.stdout.strip())
+        proc = Path('/proc') / str(pid)
+        owners[pid] = (name, proc, process_identity(proc, scope, name))
+    listing = command(['xprop', '-root', '_NET_CLIENT_LIST_STACKING'], environment)
+    windows = re.findall(r'0x[0-9a-fA-F]+', listing)
+    if len(windows) > 128:
+        raise RuntimeError('unexpected clean desktop window count')
+    visible = []
+    for window in windows:
+        values = command(['xprop', '-id', window, '_NET_WM_PID', '_NET_WM_WINDOW_TYPE'], environment)
+        match = re.search(r'_NET_WM_PID\(CARDINAL\) = ([0-9]+)', values)
+        if match is None or int(match[1]) not in owners:
+            continue
+        pid = int(match[1])
+        name, proc, identity = owners[pid]
+        expected = '_NET_WM_WINDOW_TYPE_DESKTOP' if name == 'xfdesktop' else '_NET_WM_WINDOW_TYPE_DOCK'
+        if expected not in values:
+            continue
+        geometry = command(['xwininfo', '-id', window], environment)
+        if 'Map State: IsViewable' not in geometry:
+            continue
+        if process_identity(proc, scope, name) != identity:
+            raise RuntimeError('desktop component identity changed during window readback')
+        visible.append({'process': name, 'pid': pid, 'identity': identity,
+                        'window_id': window, 'window_type': expected, 'mapped': True})
+    return visible
 
 
 def read_session():
@@ -108,10 +146,12 @@ def read_session():
         raise RuntimeError('local desktop does not expose its expected Xfce window manager')
     bus_id = command(['gdbus', 'call', '--session', '--dest', 'org.freedesktop.DBus',
                       '--object-path', '/org/freedesktop/DBus', '--method', 'org.freedesktop.DBus.GetId'], child_environment)
+    views = desktop_windows(child_environment, selected['Scope'])
     if process_identity(proc, selected['Scope']) != identity:
         raise RuntimeError('Xfce process changed during desktop access checks')
     return {'session': selected, 'xfce_pid': pid, 'environment': environment,
             'process_identity': identity,
+            'desktop_windows': views, 'desktop_ready': {view['process'] for view in views} == {'xfdesktop', 'xfce4-panel'},
             'x11_access_verified': True, 'window_manager': wm_name, 'user_bus_id': bus_id,
             'authentication': 'private fixture password through real LightDM keyboard input'}
 

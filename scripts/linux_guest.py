@@ -222,6 +222,39 @@ class Guest:
             time.sleep(1)
         raise TimeoutError('normal LightDM login did not produce an active local Xfce session')
 
+    def capture_desktop(self, output, stem, authenticated):
+        script = Path(__file__).with_name('linux_guest_session.py').read_text()
+        frames = []
+        deadline = time.monotonic() + 45
+        while time.monotonic() < deadline:
+            state = json.loads(self.ssh('python3 -', input=script).stdout)
+            if (state is None or state['session'] != authenticated['session']
+                    or state['process_identity'] != authenticated['process_identity']):
+                raise RuntimeError('authenticated local desktop changed before capture')
+            if state['desktop_ready']:
+                destination = output / f'{stem}-{len(frames) + 1:02}.png'
+                self.screenshot(destination)
+                from PIL import Image
+                with Image.open(destination) as frame:
+                    # This only rejects blank scanout. Actual desktop identity
+                    # comes from the mapped windows above and independent review.
+                    nonuniform = any(low != high for low, high in frame.convert('RGB').getextrema())
+                frames.append({'file': destination.name, 'nonuniform': nonuniform})
+                if nonuniform:
+                    after = json.loads(self.ssh('python3 -', input=script).stdout)
+                    if (after is None or after['session'] != state['session']
+                            or after['process_identity'] != state['process_identity']):
+                        raise RuntimeError('authenticated desktop changed during frame capture')
+                    unchanged = after['desktop_ready'] and after['desktop_windows'] == state['desktop_windows']
+                    frames[-1]['desktop_identity_unchanged'] = unchanged
+                    if unchanged:
+                        return {'session_readback': after, 'frames': frames, 'selected': destination.name}
+            time.sleep(1)
+        # Authentication has succeeded; this is a safe diagnostic of desktop
+        # startup, not a capture after failed password entry.
+        self.screenshot(output / (stem + '-not-ready.png'))
+        raise TimeoutError('authenticated desktop did not expose painted desktop/panel windows')
+
     def power(self, action, password):
         if action not in ('poweroff', 'reboot'):
             raise ValueError('unsupported guest power action')
@@ -288,14 +321,14 @@ def prove(output, report):
                 raise ValueError('cold clone changed the baseline package inventory')
             report['guest_clone_verified'] = True
             report['clone_login'] = guest.login(password)
-            guest.screenshot(output / 'clone-logged-in.png')
+            report['clone_desktop_capture'] = guest.capture_desktop(output, 'clone-logged-in', report['clone_login'])
             guest.power('reboot', password)
             report['reboot'] = guest.wait(old_boot=report['clone']['boot_id'])
             guest.screenshot(output / 'reboot-desktop.png')
             if report['reboot']['package_sha256'] != report['clone']['package_sha256']:
                 raise ValueError('reboot changed the baseline package inventory')
             report['reboot_login'] = guest.login(password)
-            guest.screenshot(output / 'reboot-logged-in.png')
+            report['reboot_desktop_capture'] = guest.capture_desktop(output, 'reboot-logged-in', report['reboot_login'])
             guest.power('poweroff', password)
             report['clone_cleanup'] = guest.close(); guest = None
             if digest(disk) != baseline_hash or digest(variables) != variables_hash:
