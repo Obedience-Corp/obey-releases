@@ -729,9 +729,9 @@ The clean Linux workflow also accepts paired `app_source` / `app_version` inputs
 for the unchanged public App test release. It installs observation utilities on
 the disposable clone, rechecks that Git and ecosystem state are absent, and runs
 the existing App verifier as a real Xfce autostart child. The Deb uses ordinary
-password sudo. Missing Git is installed through the App's real button and the
-normal polkit password dialog, bound to the App-descended apt request and owned
-OS authentication agent. Fixture passwords stay private and never enter App
+password sudo. Missing Git follows automatic initial App setup or its existing
+Retry control, then the normal polkit password dialog bound to the App-descended
+apt request and owned OS authentication agent. Fixture passwords stay private and never enter App
 arguments or environment. No authorization policy or passwordless sudo is added.
 
 That optional journey retains the installed App and user service across a real
