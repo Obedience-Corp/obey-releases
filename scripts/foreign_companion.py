@@ -31,6 +31,20 @@ def owned_file(path):
     return info
 
 
+def descriptor_identity(info, path, windows=None):
+    """Match CPython Windows path-stat's filename-derived executable bits only.
+
+    fstat has no filename. CPython path stat adds 0111 for .exe, independently
+    of ACLs. Do not reconcile any other metadata or any POSIX permissions.
+    """
+    result = identity(info)
+    if (os.name == 'nt' if windows is None else windows):
+        if Path(path).name != 'camp-app.exe' or not stat.S_ISREG(info.st_mode):
+            raise ValueError('descriptor reconciliation requires the fixed regular companion executable')
+        result['st_mode'] |= 0o111
+    return result
+
+
 class Fixture:
     def __init__(self, managed, installer, private_root, report):
         if not ((os.environ.get('CANDIDATE_TEST_CONTAINER') == '1' and Path('/.dockerenv').exists()) or
@@ -72,7 +86,11 @@ class Fixture:
             raise ValueError('foreign fixture target identity changed')
         descriptor = os.open(self.path, os.O_RDWR | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_BINARY', 0))
         try:
-            if identity(os.fstat(descriptor)) != identity(self.info):
+            raw = os.fstat(descriptor)
+            observed = descriptor_identity(raw, self.path)
+            self.report.setdefault('descriptor_metadata', []).append({
+                'path': identity(self.info), 'raw_handle': identity(raw), 'compared_handle': observed})
+            if observed != identity(self.info):
                 raise ValueError('foreign fixture changed before descriptor acquisition')
             with os.fdopen(descriptor, 'r+b', closefd=False) as stream:
                 if stream.read(MAX_BYTES + 1) != expected:
@@ -80,7 +98,7 @@ class Fixture:
                 stream.seek(0); stream.write(replacement); stream.truncate(); stream.flush(); os.fsync(descriptor)
             if times:
                 restore_times(descriptor, self.info)
-            if identity(os.fstat(descriptor)) != identity(self.info):
+            if descriptor_identity(os.fstat(descriptor), self.path) != identity(self.info):
                 raise ValueError('foreign fixture metadata changed during owned write')
         finally:
             os.close(descriptor)
