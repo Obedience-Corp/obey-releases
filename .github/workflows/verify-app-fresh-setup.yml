@@ -23,7 +23,7 @@ on:
         description: Fresh install or explicitly seeded old/current managed-user proof
         type: choice
         default: none
-        options: [none, older-idle, current, missing-companion]
+        options: [none, older-idle, current, missing-companion, corrupt-integrations]
       source_revision:
         type: string
         required: true
@@ -58,7 +58,8 @@ jobs:
             zsh) [[ "$LOGIN:$EXISTING:$GIT_RECOVERY" == true:none:false && ( "$SCOPE" == mac || "$SCOPE" == intel ) ]] || exit 64 ;;
             *) echo 'Unsupported login shell proof' >&2; exit 64 ;;
           esac
-          case "$LOGIN:$EXISTING" in false:none|false:older-idle|false:current|false:missing-companion|true:none) ;;
+          if [[ "$EXISTING" == corrupt-integrations && "$LOGIN:$GIT_RECOVERY:$SCOPE:$LOGIN_SHELL" != false:false:windows:default ]]; then echo "Corrupt receipt recovery requires Windows-only current-user mode" >&2; exit 64; fi
+          case "$LOGIN:$EXISTING" in false:none|false:older-idle|false:current|false:missing-companion|false:corrupt-integrations|true:none) ;;
             *) echo 'Login proof requires unseeded fresh setup; invalid mode' >&2; exit 64 ;; esac
       - uses: actions/setup-python@v6
         with:
