@@ -135,6 +135,27 @@ class PosixLoginContracts(unittest.TestCase):
             with self.assertRaises(ValueError): login_posix.sections(raw, 'm', ('A',))
 
     @unittest.skipUnless(shutil.which('zsh'), 'Zsh requires the additional shell test image')
+    def test_real_zsh_plain_executables_survive_reopen(self):
+        for tool in ('obey', 'ob'):
+            with self.subTest(tool=tool), tempfile.TemporaryDirectory() as directory:
+                args = self.fixture(Path(directory), kind='zsh', tool=tool)
+                first = login_posix.verify_tool(args[0], tool, *args[1:], 'setup')
+                reopened = login_posix.verify_tool(args[0], tool, *args[1:], 'reopen')
+                self.assertEqual(first, reopened)
+                self.assertEqual(first['dispatch'], 'executable')
+                self.assertFalse(first['installed_wrapper_verified'])
+
+    @unittest.skipUnless(shutil.which('zsh'), 'Zsh requires the additional shell test image')
+    def test_real_zsh_hash_override_is_not_hidden_by_correct_path(self):
+        for tool in ('camp', 'obey'):
+            with self.subTest(tool=tool), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory); foreign = root/('foreign-'+tool)
+                foreign.write_text('#!/bin/sh\nprintf "v'+login_shell.TOOLS[tool][0]+'\\n"\n'); foreign.chmod(0o755)
+                args = self.fixture(root, kind='zsh', tool=tool, extra=f'hash {tool}={shlex.quote(str(foreign))}')
+                with self.assertRaisesRegex(ValueError, 'unexpected external executable'):
+                    login_posix.verify_tool(args[0], tool, *args[1:], 'zsh-hash')
+
+    @unittest.skipUnless(shutil.which('zsh'), 'Zsh requires the additional shell test image')
     def test_real_zsh_wrapper_and_foreign_spoof(self):
         for extra, fails in (('', False), ("camp() { printf 'v0.16.2\\n'; }", True)):
             with self.subTest(fails=fails), tempfile.TemporaryDirectory() as directory:
