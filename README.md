@@ -616,6 +616,11 @@ release archives. Every archive member is checked against installed bytes,
 mode, UID/GID and symlink target before removal; missing or unsupported members
 fail closed. Exact package file state, all installed package versions, and Git
 system/user configuration hashes (including absence) must match after restore.
+Extended attributes on a directory are allowed only when dpkg identifies an
+installed owner outside the removal set. That shared directory remains in place;
+its owner set and attribute hashes must match before removal and after restore.
+Archives do not carry or restore those attributes. Attributes on files, symlinks
+or directories without a retained owner remain unsupported and are refused.
 Git LFS maintainer scripts can recreate the four default filter entries in a
 different order. A private original system-config backup restores exact bytes
 or original absence only when that known block is the sole change. The fixed-path

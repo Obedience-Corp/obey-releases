@@ -16,6 +16,33 @@ import git_rollback as rollback
 
 
 class GitRollbackTests(unittest.TestCase):
+    def test_attributed_directory_requires_retained_owner_and_exact_readback(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary)/'shared'; path.mkdir()
+            os.setxattr(path, 'user.fixture', b'preserve exact attribute')
+            def query(arguments, environment):
+                return str(path)+'\n' if arguments[1] == '-L' else 'git, retained: '+str(path)+'\n'
+            with patch('verify_candidate.command', side_effect=query):
+                expected = rollback.package_files('git', {}, {'retained'})
+                self.assertEqual(expected[str(path)]['retained_owners'], ['retained'])
+                self.inspect(path, expected)
+                with self.assertRaisesRegex(ValueError, 'extended metadata'):
+                    self.inspect(path, expected, lambda info: setattr(info, 'pax_headers',
+                                                                     {'SCHILY.xattr.user.fixture':'changed'}))
+                with self.assertRaisesRegex(ValueError, 'no retained package owner'):
+                    rollback.package_files('git', {}, {'other'})
+                os.setxattr(path, 'user.fixture', b'foreign change')
+                self.assertNotEqual(rollback.package_files('git', {}, {'retained'}), expected)
+            path = Path(temporary)/'executable'; path.write_bytes(b'owned')
+            os.setxattr(path, 'user.fixture', b'not covered by a shared directory')
+            with self.assertRaisesRegex(ValueError, 'extended attributes'):
+                rollback.file_state(path, directory_owners={'retained'})
+
+    def test_shared_directory_ownership_cannot_match_another_path(self):
+        with patch('verify_candidate.command', return_value='retained: /foreign\n'):
+            with self.assertRaisesRegex(ValueError, 'ambiguous'):
+                rollback.retained_directory_owners('/owned', {}, {'retained'})
+
     def test_default_lfs_block_reordering_preserves_all_foreign_bytes(self):
         entries = [b'\tclean = git-lfs clean -- %f\n', b'\tsmudge = git-lfs smudge -- %f\n',
                    b'\tprocess = git-lfs filter-process\n', b'\trequired = true\n']

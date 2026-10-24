@@ -21,7 +21,7 @@ def digest(stream):
     return value.hexdigest()
 
 
-def file_state(path, absent=False):
+def file_state(path, absent=False, directory_owners=()):
     path = Path(path)
     try:
         info = path.lstat()
@@ -29,9 +29,16 @@ def file_state(path, absent=False):
         if absent:
             return {'kind': 'absent'}
         raise
-    if os.listxattr(path, follow_symlinks=False):
-        raise ValueError('rollback does not support extended attributes: ' + str(path))
     result = {'mode': stat.S_IMODE(info.st_mode), 'uid': info.st_uid, 'gid': info.st_gid}
+    attributes = os.listxattr(path, follow_symlinks=False)
+    if attributes:
+        if not stat.S_ISDIR(info.st_mode) or not directory_owners:
+            raise ValueError('rollback does not support extended attributes: ' + str(path))
+        # This directory remains owned by installed packages outside removal.
+        # Its attributes must survive in place; archives do not restore them.
+        result['retained_owners'] = sorted(directory_owners)
+        result['preserved_xattrs'] = {name: hashlib.sha256(os.getxattr(path, name, follow_symlinks=False)).hexdigest()
+                                     for name in sorted(attributes)}
     if stat.S_ISREG(info.st_mode):
         with path.open('rb') as stream:
             result.update(kind='file', sha256=digest(stream))
@@ -44,13 +51,34 @@ def file_state(path, absent=False):
     return result
 
 
-def package_files(name, environment):
+def retained_directory_owners(path, environment, retained_packages):
+    from verify_candidate import command
+    listing = command(['dpkg-query', '-S', path], environment)
+    owners = set()
+    for row in listing.splitlines():
+        fields = row.rsplit(': ', 1)
+        if len(fields) != 2 or fields[1] != path:
+            raise ValueError('ambiguous shared-directory package ownership: ' + path)
+        owners.update(fields[0].split(', '))
+    retained = owners.intersection(retained_packages)
+    if not retained:
+        raise ValueError('attributed directory has no retained package owner: ' + path)
+    return retained
+
+
+def package_files(name, environment, retained_packages=()):
     from verify_candidate import command
     listing = command(['dpkg-query', '-L', name], environment)
     paths = [str(Path(line)) for line in listing.splitlines()]
     if not paths or len(paths) > 50000 or any(not Path(path).is_absolute() for path in paths):
         raise ValueError('invalid installed package file inventory')
-    return {path: file_state(path) for path in sorted(set(paths))}
+    result = {}
+    for path in sorted(set(paths)):
+        owners = ()
+        if stat.S_ISDIR(Path(path).lstat().st_mode) and os.listxattr(path, follow_symlinks=False):
+            owners = retained_directory_owners(path, environment, retained_packages)
+        result[path] = file_state(path, directory_owners=owners)
+    return result
 
 
 def config_files(environment):
@@ -161,6 +189,8 @@ def check_archive(archive, expected, environment):
         actual = {}
         with tarfile.open(fileobj=stream, mode='r:') as tar:
             for member in tar.getmembers():
+                if any('xattr' in key.lower() or '.acl' in key.lower() for key in member.pax_headers):
+                    raise ValueError('rollback archive contains unsupported extended metadata')
                 path = PurePosixPath(member.name)
                 if path.is_absolute() or '..' in path.parts or len(actual) >= 50000:
                     raise ValueError('unsafe rollback archive member')
@@ -178,8 +208,16 @@ def check_archive(archive, expected, environment):
                 else:
                     raise ValueError('unsupported rollback archive member')
                 actual[key] = value
-        if actual != expected:
-            changed = sorted(key for key in set(actual) | set(expected) if actual.get(key) != expected.get(key))
+        archive_expected = {}
+        for path, value in expected.items():
+            value = dict(value)
+            if value['kind'] == 'directory' and value.get('retained_owners') and value.get('preserved_xattrs'):
+                del value['retained_owners']
+                del value['preserved_xattrs']
+            archive_expected[path] = value
+        if actual != archive_expected:
+            changed = sorted(key for key in set(actual) | set(archive_expected)
+                             if actual.get(key) != archive_expected.get(key))
             raise ValueError('rollback archive differs from installed file baseline: ' + repr(changed[:20]))
 
 
