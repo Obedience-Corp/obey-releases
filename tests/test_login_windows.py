@@ -43,3 +43,43 @@ class WindowsLoginContracts(unittest.TestCase):
             for changes in [{'input_redirected':True},{'user_interactive':False},{'probe_marker':'1'}, {'startup_flags':['-NoLogo','-EncodedCommand','bad']}, {'host':'ServerRemoteHost'}]:
                 bad=copy.deepcopy(good);bad['guard'].update(changes)
                 with self.assertRaises(ValueError):windows_console.validate_startup(bad,shell)
+
+    def test_conpty_eof_requires_actual_exit_eof_and_known_status(self):
+        class ReadFailure(Exception): pass
+        class Terminal:
+            alive=False; eof=True; status=0
+            def read(self, blocking): raise ReadFailure('Standard out reached EOF')
+            def isalive(self): return self.alive
+            def iseof(self): return self.eof
+            def get_exitstatus(self): return self.status
+        terminal=Terminal()
+        self.assertIsNone(windows_console.read_terminal(terminal,ReadFailure))
+        for changes in [{'alive':True},{'status':None},{'status':False}]:
+            broken=Terminal()
+            for key,value in changes.items():setattr(broken,key,value)
+            with self.assertRaises(ReadFailure):windows_console.read_terminal(broken,ReadFailure)
+        terminal.status=7
+        self.assertIsNone(windows_console.read_terminal(terminal,ReadFailure))
+        # EOF doesn't convert a failed shell exit to success: its status remains
+        # available to the adapter's strict nonzero return-code propagation.
+        self.assertEqual(terminal.get_exitstatus(),7)
+
+    def test_conpty_drain_preserves_trailing_chunks_and_rejects_unrelated_error(self):
+        import io
+        class ReadFailure(Exception): pass
+        class Terminal:
+            def __init__(self):self.chunks=iter(['tail\x1b[31m','last','Standard out reached EOF'])
+            def read(self,blocking):
+                value=next(self.chunks)
+                if value=='Standard out reached EOF':raise ReadFailure(value)
+                return value
+            def isalive(self):return False
+            def get_exitstatus(self):return 0
+        output=io.BytesIO()
+        windows_console.drain_terminal(Terminal(),ReadFailure,output)
+        self.assertEqual(output.getvalue(),b'tail\x1b[31mlast')
+        terminal=Terminal()
+        def fail(blocking):raise ReadFailure('unrelated failure')
+        terminal.read=fail
+        with self.assertRaisesRegex(ReadFailure,'unrelated'):
+            windows_console.drain_terminal(terminal,ReadFailure,io.BytesIO())

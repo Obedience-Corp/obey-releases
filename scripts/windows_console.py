@@ -23,6 +23,30 @@ def find_backend(environment):
     return Path(backend.__file__).resolve()
 
 
+def read_terminal(terminal, read_error):
+    try:
+        return terminal.read(blocking=False)
+    except read_error as error:
+        # The pinned API reports EOF as an error. Accept it only after the
+        # actual owned shell has exited with a readable status AND EOF.
+        if (str(error) == 'Standard out reached EOF' and not terminal.isalive()
+                and type(terminal.get_exitstatus()) is int):
+            return None
+        raise
+
+
+def drain_terminal(terminal, read_error, stream, timeout=5):
+    deadline = time.monotonic() + timeout
+    while True:
+        chunk = read_terminal(terminal, read_error)
+        if chunk is None: return
+        if chunk:
+            stream.write(chunk.encode('utf-8')); stream.flush()
+        if time.monotonic() >= deadline:
+            raise RuntimeError('ConPTY terminal output drain exceeded its bound')
+        time.sleep(0.01)
+
+
 def conpty_adapter(shell, status_path):
     """Separate owned process: fixed-size native ConPTY, never a TTY ioctl."""
     import codecs
@@ -30,6 +54,7 @@ def conpty_adapter(shell, status_path):
     import msvcrt
     from ctypes import wintypes
     from winpty import PTY
+    from winpty._winpty import WinptyError
     from winpty.enums import Backend
     terminal = PTY(120, 40, backend=Backend.ConPTY)
     if not terminal.spawn(shell, cmdline=' -NoLogo', cwd=os.getcwd(),
@@ -53,19 +78,18 @@ def conpty_adapter(shell, status_path):
                 raise RuntimeError('ConPTY controller input closed before shell exit')
             text = decode.decode(value)
             if text: terminal.write(text)
-        chunk = terminal.read(blocking=False)
+        chunk = read_terminal(terminal, WinptyError)
         if chunk:
             sys.stdout.buffer.write(chunk.encode('utf-8')); sys.stdout.buffer.flush()
         time.sleep(0.01)
-    # Retain final terminal output and the actual spawned shell status.
-    chunk = terminal.read(blocking=False)
-    if chunk:
-        sys.stdout.buffer.write(chunk.encode('utf-8')); sys.stdout.buffer.flush()
     status = terminal.get_exitstatus()
     Path(status_path).write_text(json.dumps({'shell_pid': terminal.pid, 'shell_returncode': status,
         'backend': 'ConPTY', 'columns': 120, 'rows': 40}) + '\n')
     if type(status) is not int:
         raise RuntimeError('ConPTY shell exit status unavailable')
+    # Drain every queued terminal chunk, not merely one final read. Only the
+    # pinned dependency's exact EOF after proven shell exit ends this drain.
+    drain_terminal(terminal, WinptyError, sys.stdout.buffer)
     return status
 
 
