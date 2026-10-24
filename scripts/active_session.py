@@ -81,7 +81,8 @@ class Fixture:
         self.turns = []
 
     def call(self, *arguments, json_output=False):
-        return quiet([self.obey, '--no-color', *arguments], self.environment, json_output=json_output)
+        flags = ['--json'] if json_output else []
+        return quiet([self.obey, '--no-color', *arguments, *flags], self.environment, json_output=json_output)
 
     def create_session(self):
         text = self.call('session', 'create', '--campaign', self.fixture['camp_id'], '--provider', 'ollama',
