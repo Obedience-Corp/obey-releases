@@ -27,7 +27,7 @@ on:
         description: Fresh install or explicitly seeded old/current managed-user proof
         type: choice
         default: none
-        options: [none, older-idle, older-active, current, missing-companion, corrupt-integrations, foreign-companion, corrupt-receipts, external-suite-old, external-suite-minimum, external-suite-current, external-suite-mixed-fest]
+        options: [none, older-idle, older-active, service-recovery, current, missing-companion, corrupt-integrations, foreign-companion, corrupt-receipts, external-suite-old, external-suite-minimum, external-suite-current, external-suite-mixed-fest]
       source_revision:
         type: string
         required: true
@@ -67,8 +67,8 @@ jobs:
           if [[ ( "$EXISTING" == corrupt-integrations || "$EXISTING" == foreign-companion ) && "$LOGIN:$GIT_RECOVERY:$SCOPE:$LOGIN_SHELL" != false:false:windows:default ]]; then echo "Manual recovery requires Windows-only current-user mode" >&2; exit 64; fi
           if [[ "$EXISTING" == corrupt-receipts && ( "$LOGIN:$GIT_RECOVERY:$LOGIN_SHELL" != false:false:default || ( "$SCOPE" != windows && "$SCOPE" != deb ) ) ]]; then echo "Receipt recovery requires Windows or Debian current-user mode" >&2; exit 64; fi
           if [[ "$EXISTING" == external-suite-* && "$LOGIN:$GIT_RECOVERY:$SCOPE:$LOGIN_SHELL" != false:false:deb:default ]]; then echo "External suite compatibility requires Debian-only normal first launch" >&2; exit 64; fi
-          if [[ "$EXISTING" == older-active && "$LOGIN:$GIT_RECOVERY:$SCOPE:$LOGIN_SHELL" != false:false:deb:default ]]; then echo "Real active-session proof requires Debian-only mode" >&2; exit 64; fi
-          case "$LOGIN:$EXISTING" in false:external-suite-old|false:external-suite-minimum|false:external-suite-current|false:external-suite-mixed-fest|false:none|false:older-idle|false:older-active|false:current|false:missing-companion|false:corrupt-integrations|false:foreign-companion|false:corrupt-receipts|true:none) ;;
+          if [[ ( "$EXISTING" == older-active || "$EXISTING" == service-recovery ) && "$LOGIN:$GIT_RECOVERY:$SCOPE:$LOGIN_SHELL" != false:false:deb:default ]]; then echo "Real active-session proof requires Debian-only mode" >&2; exit 64; fi
+          case "$LOGIN:$EXISTING" in false:external-suite-old|false:external-suite-minimum|false:external-suite-current|false:external-suite-mixed-fest|false:none|false:older-idle|false:older-active|false:service-recovery|false:current|false:missing-companion|false:corrupt-integrations|false:foreign-companion|false:corrupt-receipts|true:none) ;;
             *) echo 'Login proof requires unseeded fresh setup; invalid mode' >&2; exit 64 ;; esac
       - uses: actions/setup-python@v6
         with:
@@ -121,7 +121,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y minisign xvfb x11-utils xdotool imagemagick openbox wmctrl libegl1 libegl-mesa0 libgles2 libgl1 libgl1-mesa-dri
           sudo apt-get install -y --no-install-recommends gdb
-          if [[ '${{ inputs.existing_user }}' == older-active ]]; then sudo apt-get install -y --no-install-recommends zstd; fi
+          if [[ '${{ inputs.existing_user }}' == older-active || '${{ inputs.existing_user }}' == service-recovery ]]; then sudo apt-get install -y --no-install-recommends zstd; fi
           if [[ '${{ inputs.verify_missing_git_manual || false }}' == true || '${{ inputs.existing_user }}' == corrupt-receipts || '${{ inputs.verify_partial_install_retry || false }}' == true ]]; then
             sudo apt-get install -y python3-gi gir1.2-atspi-2.0 at-spi2-core dbus-x11 gsettings-desktop-schemas libglib2.0-bin dconf-gsettings-backend dpkg-repack fakeroot
           fi

@@ -1029,3 +1029,18 @@ owned Retry. A real WebKit HTML fixture (ordinary and list-style-reset layouts)
 requires the actual click callback and duplicate refusal; no role, coordinate,
 ownership or product-state fallback is used. The failed original stays rejected
 until a subsequent public App run proves completed Retry and preservation.
+
+### Installed Linux service crash recovery
+
+The opt-in fresh-setup journey `existing_user=service-recovery` requires Debian-only
+mode and the unchanged public test candidate. It seeds authentic current selected
+packages and a private CPU Ollama provider, completes real managed-session work,
+and normally quits the App before injecting one receipt-, unit-, UID-, executable-
+and birth-validated SIGKILL through a held Linux pidfd. It observes systemd
+MainPID/NRestarts and the responsive socket before any session command can wake
+the daemon. The interrupted running session must become FAILED with the published
+`daemon restarted` diagnostic while its completed turn remains unchanged. New
+real provider work must succeed, and App reopen must retain the recovered process,
+packages, settings and unrelated camp files. Provider output/daemon logs are not
+exported; owned service and provider cleanup gate acceptance. This proves backend
+crash recovery, not interrupted-turn resume or licensed App reconnect.
