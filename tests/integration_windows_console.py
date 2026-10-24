@@ -24,6 +24,9 @@ assert transport['adapter_returncode']==0 and transport['shell_exit']['shell_ret
 assert transport['shell_exit']['shell_pid']==document['console_process']['pid']
 assert transport['owned_console_exit_verified'] is True
 assert (output/'positive.terminal.log').stat().st_size>0
+eof_records=[json.loads(line) for line in (output/transport['eof_diagnostics_file']).read_text().splitlines()]
+assert eof_records and eof_records[-1]['alive'] is False and eof_records[-1]['iseof'] is True
+assert eof_records[-1]['status']==0,eof_records
 print('PASS: actual owned console starts ordinary PowerShell with unredirected input and no startup/readiness override')
 try:
     body="[IO.File]::WriteAllText('"+str(output/'timeout.body-started').replace("'","''")+"','sleep begun'); Start-Sleep -Seconds 30; @{unexpected=$true}"

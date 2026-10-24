@@ -103,3 +103,27 @@ class WindowsLoginContracts(unittest.TestCase):
         def forbidden(blocking):raise AssertionError('already drained')
         terminal.read=forbidden
         windows_console.drain_terminal(terminal,ReadFailure,io.BytesIO())
+
+    def test_empty_conpty_error_requires_post_error_proven_eof_and_retains_diagnostics(self):
+        class ReadFailure(Exception):pass
+        class Terminal:
+            alive=False;status=0;eof=False
+            def isalive(self):return self.alive
+            def get_exitstatus(self):return self.status
+            def iseof(self):return self.eof
+            def read(self,blocking):self.eof=True;raise ReadFailure('')
+        terminal=Terminal();records=[]
+        self.assertIsNone(windows_console.read_terminal(terminal,ReadFailure,records.append))
+        self.assertEqual(records,[{'alive':False,'status':0,'iseof':True,'event':'read-error','error_type':'ReadFailure','error':''}])
+        for changes in [{'alive':True},{'status':None}]:
+            terminal=Terminal()
+            for key,value in changes.items():setattr(terminal,key,value)
+            with self.assertRaises(ReadFailure):windows_console.read_terminal(terminal,ReadFailure)
+        terminal=Terminal()
+        def unrelated(blocking):terminal.eof=True;raise ReadFailure('unrelated')
+        terminal.read=unrelated
+        with self.assertRaisesRegex(ReadFailure,'unrelated'):windows_console.read_terminal(terminal,ReadFailure)
+        terminal=Terminal()
+        def no_eof(blocking):raise ReadFailure('')
+        terminal.read=no_eof
+        with self.assertRaises(ReadFailure):windows_console.read_terminal(terminal,ReadFailure)

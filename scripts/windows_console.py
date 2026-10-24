@@ -23,27 +23,40 @@ def find_backend(environment):
     return Path(backend.__file__).resolve()
 
 
-def read_terminal(terminal, read_error):
-    def drained():
-        return (not terminal.isalive() and type(terminal.get_exitstatus()) is int
-                and terminal.iseof())
-    if drained(): return None
+def read_terminal(terminal, read_error, diagnostics=None):
+    def state():
+        return {'alive': terminal.isalive(), 'status': terminal.get_exitstatus(),
+                'iseof': terminal.iseof()}
+    def drained(value):
+        return value['alive'] is False and type(value['status']) is int and value['iseof'] is True
+    before = state()
+    if drained(before):
+        if diagnostics: diagnostics(dict(before, event='drained-before-read'))
+        return None
     try:
         chunk = terminal.read(blocking=False)
-        if not chunk and drained(): return None
+        if not chunk:
+            after = state()
+            if drained(after):
+                if diagnostics: diagnostics(dict(after, event='drained-after-empty-read'))
+                return None
         return chunk
     except read_error as error:
-        # The pinned API reports EOF as an error. Accept it only after the
-        # actual owned shell has exited with a readable status AND EOF.
-        if str(error) == 'Standard out reached EOF' and drained():
+        after = state()
+        if diagnostics:
+            diagnostics(dict(after, event='read-error', error_type=type(error).__name__, error=str(error)))
+        # Pinned async NTSTATUS -> HRESULT.message() can yield an empty error.
+        # Only these two observed EOF forms with independently proven full EOF
+        # and actual shell exit are accepted; unrelated errors remain failures.
+        if str(error) in ('Standard out reached EOF', '') and drained(after):
             return None
         raise
 
 
-def drain_terminal(terminal, read_error, stream, timeout=10):
+def drain_terminal(terminal, read_error, stream, timeout=10, diagnostics=None):
     deadline = time.monotonic() + timeout
     while True:
-        chunk = read_terminal(terminal, read_error)
+        chunk = read_terminal(terminal, read_error, diagnostics)
         if chunk is None: return
         if chunk:
             stream.write(chunk.encode('utf-8')); stream.flush()
@@ -72,6 +85,9 @@ def conpty_adapter(shell, status_path):
                      wintypes.LPVOID, ctypes.POINTER(wintypes.DWORD), wintypes.LPVOID]
     peek.restype = wintypes.BOOL
     handle = wintypes.HANDLE(msvcrt.get_osfhandle(sys.stdin.fileno()))
+    def diagnostic(document):
+        with Path(status_path + '.eof.jsonl').open('a', encoding='utf-8') as stream:
+            stream.write(json.dumps(document) + '\n')
     decode = codecs.getincrementaldecoder('utf-8')()
     while terminal.isalive():
         available = wintypes.DWORD()
@@ -83,7 +99,7 @@ def conpty_adapter(shell, status_path):
                 raise RuntimeError('ConPTY controller input closed before shell exit')
             text = decode.decode(value)
             if text: terminal.write(text)
-        chunk = read_terminal(terminal, WinptyError)
+        chunk = read_terminal(terminal, WinptyError, diagnostic)
         if chunk:
             sys.stdout.buffer.write(chunk.encode('utf-8')); sys.stdout.buffer.flush()
         time.sleep(0.01)
@@ -94,7 +110,7 @@ def conpty_adapter(shell, status_path):
         raise RuntimeError('ConPTY shell exit status unavailable')
     # Drain every queued terminal chunk, not merely one final read. Only the
     # pinned dependency's exact EOF after proven shell exit ends this drain.
-    drain_terminal(terminal, WinptyError, sys.stdout.buffer)
+    drain_terminal(terminal, WinptyError, sys.stdout.buffer, diagnostics=diagnostic)
     return status
 
 
@@ -139,7 +155,8 @@ def run_prompt(shell, body, environment, output, stem, timeout=60):
     acknowledge = output / (stem + '.owned')
     adapter_record = output / (stem + '.adapter.json')
     shell_exit = output / (stem + '.shell-exit.json')
-    for path in [script, result, raw, ready, acknowledge, adapter_record, shell_exit, Path(str(result) + '.tmp'), Path(str(ready) + '.tmp')]:
+    eof_diagnostics = Path(str(shell_exit) + '.eof.jsonl')
+    for path in [script, result, raw, ready, acknowledge, adapter_record, shell_exit, eof_diagnostics, Path(str(result) + '.tmp'), Path(str(ready) + '.tmp')]:
         if path.exists() or path.is_symlink(): raise RuntimeError('refusing existing console evidence output')
     script.write_text("""$ErrorActionPreference='Stop'
 $owned=Get-Process -Id $PID
@@ -163,7 +180,7 @@ $json=$record | ConvertTo-Json -Depth 16 -Compress
     snapshot = []
     root_identity = None
     transport = {'backend': str(backend), 'backend_sha256': hashlib.sha256(backend.read_bytes()).hexdigest(),
-                 'backend_name': 'pywinpty-3.1.0-ConPTY', 'dimensions': [120, 40],
+                 'backend_name': 'pywinpty-3.1.0-ConPTY', 'dimensions': [120, 40], 'eof_diagnostics_file': eof_diagnostics.name,
                  'ordinary_startup_verified': False, 'owned_console_exit_verified': False}
     def capture_owned():
         rows = command(observer, dict(environment, APP_PROOF_PROCESS_MODE='snapshot',
