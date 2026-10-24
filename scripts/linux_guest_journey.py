@@ -18,9 +18,11 @@ def copy(guest, source, destination, *, from_guest=False):
          destination if from_guest else remote + str(destination)], timeout=600)
 
 
-def prepare(guest, password, source, version, report):
+def prepare(guest, password, source, version, report, package='deb'):
     from app_upgrade_contract import release_identity
     release_identity(source, version)
+    if package not in ('deb', 'appimage'):
+        raise ValueError('invalid guest App package')
     guest.ssh('mkdir -m 700 ' + ROOT)
     bundle = guest.root / 'journey-scripts.tar'
     with tarfile.open(bundle, 'w') as archive:
@@ -42,7 +44,7 @@ def prepare(guest, password, source, version, report):
     guest.ssh('cd ' + ROOT + ' && env CANDIDATE_RUNNER_KIND=github-hosted GITHUB_REPOSITORY=Obedience-Corp/obey-releases '
               'python3 scripts/verify_app_candidate.py --mode fetch-public --source ' + source +
               ' --version ' + version + ' --directory public', timeout=4200)
-    config = json.dumps({'source': source, 'version': version})
+    config = json.dumps({'source': source, 'version': version, 'package': package})
     guest.ssh('umask 077; cat > ' + ROOT + '/config.json', input=config)
     guest.ssh('umask 077; cat > ' + ROOT + '/credential', input=password)
     runner = '''#!/bin/sh

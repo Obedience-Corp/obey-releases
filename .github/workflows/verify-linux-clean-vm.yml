@@ -6,6 +6,9 @@ on:
       - 'scripts/linux_kvm.py'
       - 'scripts/linux_guest.py'
       - 'scripts/linux_guest_session.py'
+      - 'scripts/linux_guest_app.py'
+      - 'scripts/linux_guest_journey.py'
+      - 'scripts/verify_app_candidate.py'
       - 'scripts/verify_candidate.py'
   workflow_dispatch:
     inputs:
@@ -15,6 +18,11 @@ on:
       app_version:
         description: 'Public App version; required with app_source'
         type: string
+      app_package:
+        description: 'Package to launch in the clean guest'
+        type: choice
+        options: [deb, appimage]
+        default: deb
 permissions:
   contents: read
 jobs:
@@ -70,11 +78,16 @@ jobs:
           RUNNER_KIND: ${{ runner.environment }}
           APP_SOURCE: ${{ inputs.app_source }}
           APP_VERSION: ${{ inputs.app_version }}
+          APP_PACKAGE: ${{ inputs.app_package }}
         run: |
           flags=()
           if [[ -n "$APP_SOURCE" || -n "$APP_VERSION" ]]; then
             [[ "$APP_SOURCE" =~ ^[a-f0-9]{40}$ && "$APP_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
-            flags=(--app-source "$APP_SOURCE" --app-version "$APP_VERSION")
+            [[ "${APP_PACKAGE:-deb}" == deb || "$APP_PACKAGE" == appimage ]]
+            flags=(--app-source "$APP_SOURCE" --app-version "$APP_VERSION" --app-package "${APP_PACKAGE:-deb}")
+          elif [[ "${APP_PACKAGE:-deb}" != deb ]]; then
+            echo 'AppImage selection requires a public App source/version' >&2
+            exit 64
           fi
           sudo -n /usr/bin/setpriv --reuid="$(id -u)" \
             --regid="$(getent group kvm | cut -d: -f3)" --clear-groups --no-new-privs \

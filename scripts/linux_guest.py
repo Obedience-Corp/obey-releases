@@ -283,7 +283,9 @@ class Guest:
                 'forced_stop': forced}
 
 
-def prove(output, report, app_source=None, app_version=None):
+def prove(output, report, app_source=None, app_version=None, app_package='deb'):
+    if app_package not in ('deb', 'appimage') or app_package != 'deb' and app_source is None:
+        raise ValueError('AppImage journey requires a public App source/version')
     if (app_source is None) != (app_version is None):
         raise ValueError("App journey requires both immutable source and version")
     if app_source is not None:
@@ -296,6 +298,7 @@ def prove(output, report, app_source=None, app_version=None):
                   app_first_use_verified=False, consumer_trust_verified=False,
                   baseline_kind='Ubuntu minimal cloud image plus Xfce desktop; normal password sudo',
                   host_shares=False, secrets_uploaded=False)
+    report['app_package'] = app_package if app_source is not None else None
     report['host_tools'] = run(['dpkg-query', '-W', '-f', '${Package}\t${Version}\n',
                                 'qemu-system-x86', 'qemu-utils', 'ovmf', 'cloud-image-utils']).stdout
     guest = None
@@ -331,7 +334,7 @@ def prove(output, report, app_source=None, app_version=None):
             if app_source is not None:
                 import linux_guest_journey as journey
                 app_prepared = True
-                journey.prepare(guest, password, app_source, app_version, report)
+                journey.prepare(guest, password, app_source, app_version, report, app_package)
             report['clone_login'] = guest.login(password)
             report['clone_desktop_capture'] = guest.capture_desktop(output, 'clone-logged-in', report['clone_login'])
             if app_source is not None:
@@ -375,10 +378,11 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--app-source')
     parser.add_argument('--app-version')
+    parser.add_argument('--app-package', choices=('deb', 'appimage'), default='deb')
     args = parser.parse_args()
     report = {'schema': 'linux-clean-guest/v1'}
     try:
-        prove(args.output, report, args.app_source, args.app_version)
+        prove(args.output, report, args.app_source, args.app_version, args.app_package)
     except Exception as error:
         report['failure'] = str(error)
         raise
