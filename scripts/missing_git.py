@@ -188,6 +188,12 @@ class Fixture:
         (self.output/'missing-git-restored-files.json').write_text(json.dumps(
             {'packages': files, 'git_config': configs}, indent=2)+'\n')
         if files != self.files_before or configs != self.config_before:
-            raise RuntimeError('restoration changed package bytes/ownership/modes or Git configuration')
+            changed = {name: sorted(path for path in set(files[name]) | set(self.files_before[name])
+                                   if files[name].get(path) != self.files_before[name].get(path))[:20]
+                       for name in self.removed if files[name] != self.files_before[name]}
+            changed_configs = sorted(path for path in set(configs) | set(self.config_before)
+                                     if configs.get(path) != self.config_before.get(path))
+            raise RuntimeError('restoration changed package bytes/ownership/modes or Git configuration: '
+                               + repr({'packages': changed, 'git_config': changed_configs}))
         self.restored = True
         self.record('restored')
