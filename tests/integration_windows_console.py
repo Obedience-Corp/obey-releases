@@ -19,10 +19,13 @@ assert document['data']['answer']==42
 assert document['guard']['input_redirected'] is False
 assert not document['guard']['probe_marker']
 transport=json.loads((output/'positive.transport.json').read_text())
-assert transport['backend_name']=='pywinpty-3.1.0-ConPTY' and transport['dimensions']==[120,40]
+assert transport['backend_name']=='pywinpty-3.1.0-WinPTY' and transport['dimensions']==[120,40]
 assert transport['adapter_returncode']==0 and transport['shell_exit']['shell_returncode']==0
 assert transport['shell_exit']['shell_pid']==document['console_process']['pid']
 assert transport['owned_console_exit_verified'] is True
+assert transport['native_backend']['backend']=='WinPTY'
+assert {Path(row['path']).name for row in transport['native_backend']['files']} >= {'winpty.dll','winpty-agent.exe'}
+assert all(len(row['sha256'])==64 for row in transport['native_backend']['files'])
 assert (output/'positive.terminal.log').stat().st_size>0
 eof_records=[json.loads(line) for line in (output/transport['eof_diagnostics_file']).read_text().splitlines()]
 assert eof_records and eof_records[-1]['alive'] is False and eof_records[-1]['iseof'] is True

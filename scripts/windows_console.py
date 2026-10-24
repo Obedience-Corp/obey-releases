@@ -1,4 +1,4 @@
-"""Owned ConPTY console transport; never changes a startup guard."""
+"""Owned native WinPTY console transport; never changes a startup guard."""
 import hashlib
 import json
 import os
@@ -71,12 +71,12 @@ def drain_terminal(terminal, read_error, stream, timeout=10, diagnostics=None):
         if chunk:
             stream.write(chunk.encode('utf-8')); stream.flush()
         if time.monotonic() >= deadline:
-            raise RuntimeError('ConPTY terminal output drain exceeded its bound')
+            raise RuntimeError('native PTY terminal output drain exceeded its bound')
         time.sleep(0.01)
 
 
-def conpty_adapter(shell, status_path):
-    """Separate owned process: fixed-size native ConPTY, never a TTY ioctl."""
+def pty_adapter(shell, status_path):
+    """Separate owned process: fixed-size native WinPTY, never a TTY ioctl."""
     import codecs
     import ctypes
     import msvcrt
@@ -84,10 +84,30 @@ def conpty_adapter(shell, status_path):
     from winpty import PTY
     from winpty._winpty import WinptyError
     from winpty.enums import Backend
-    terminal = PTY(120, 40, backend=Backend.ConPTY)
-    if not terminal.spawn(shell, cmdline=' -NoLogo', cwd=os.getcwd(),
+    terminal = PTY(120, 40, backend=Backend.WinPTY)
+    extension = find_backend(os.environ)
+    expected_dll = extension.parent / 'winpty.dll'
+    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+    loaded = kernel.GetModuleHandleW
+    loaded.argtypes = [wintypes.LPCWSTR]
+    loaded.restype = wintypes.HMODULE
+    dll = loaded('winpty.dll')
+    if not dll:
+        raise RuntimeError('native WinPTY backend DLL is not loaded')
+    filename = kernel.GetModuleFileNameW
+    filename.argtypes = [wintypes.HMODULE, wintypes.LPWSTR, wintypes.DWORD]
+    filename.restype = wintypes.DWORD
+    buffer = ctypes.create_unicode_buffer(32768)
+    length = filename(wintypes.HMODULE(dll), buffer, len(buffer))
+    if not length or length == len(buffer) or not os.path.samefile(buffer.value, expected_dll):
+        raise RuntimeError('native WinPTY loaded an unexpected DLL')
+    files = [extension, expected_dll, extension.parent / 'winpty-agent.exe']
+    inventory = [{'path':str(path), 'sha256':hashlib.sha256(path.read_bytes()).hexdigest()} for path in files]
+    Path(status_path + '.backend.json').write_text(json.dumps({
+        'backend':'WinPTY', 'loaded_dll':buffer.value, 'files':inventory}) + '\n')
+    if not terminal.spawn(shell, cmdline=subprocess.list2cmdline([shell, '-NoLogo']), cwd=os.getcwd(),
                           env='\0'.join(f'{k}={v}' for k, v in os.environ.items()) + '\0'):
-        raise RuntimeError('ConPTY failed to spawn ordinary PowerShell')
+        raise RuntimeError('WinPTY failed to spawn ordinary PowerShell')
     # Poll the adapter's owned anonymous input pipe. A blocked daemon reader on
     # sys.stdin could hold Python's buffered-IO lock during interpreter shutdown.
     peek = ctypes.WinDLL('kernel32', use_last_error=True).PeekNamedPipe
@@ -106,7 +126,7 @@ def conpty_adapter(shell, status_path):
         if available.value:
             value = os.read(sys.stdin.fileno(), min(available.value, 65536))
             if not value:
-                raise RuntimeError('ConPTY controller input closed before shell exit')
+                raise RuntimeError('WinPTY controller input closed before shell exit')
             text = decode.decode(value)
             if text: terminal.write(text)
         chunk = read_terminal(terminal, WinptyError, diagnostic, time.monotonic() + 10)
@@ -115,9 +135,9 @@ def conpty_adapter(shell, status_path):
         time.sleep(0.01)
     status = terminal.get_exitstatus()
     Path(status_path).write_text(json.dumps({'shell_pid': terminal.pid, 'shell_returncode': status,
-        'backend': 'ConPTY', 'columns': 120, 'rows': 40}) + '\n')
+        'backend': 'WinPTY', 'columns': 120, 'rows': 40}) + '\n')
     if type(status) is not int:
-        raise RuntimeError('ConPTY shell exit status unavailable')
+        raise RuntimeError('WinPTY shell exit status unavailable')
     # Drain every queued terminal chunk, not merely one final read. Only the
     # pinned dependency's exact EOF after proven shell exit ends this drain.
     drain_terminal(terminal, WinptyError, sys.stdout.buffer, diagnostics=diagnostic)
@@ -166,7 +186,8 @@ def run_prompt(shell, body, environment, output, stem, timeout=60):
     adapter_record = output / (stem + '.adapter.json')
     shell_exit = output / (stem + '.shell-exit.json')
     eof_diagnostics = Path(str(shell_exit) + '.eof.jsonl')
-    for path in [script, result, raw, ready, acknowledge, adapter_record, shell_exit, eof_diagnostics, Path(str(result) + '.tmp'), Path(str(ready) + '.tmp')]:
+    backend_record = Path(str(shell_exit) + '.backend.json')
+    for path in [script, result, raw, ready, acknowledge, adapter_record, shell_exit, eof_diagnostics, backend_record, Path(str(result) + '.tmp'), Path(str(ready) + '.tmp')]:
         if path.exists() or path.is_symlink(): raise RuntimeError('refusing existing console evidence output')
     script.write_text("""$ErrorActionPreference='Stop'
 $owned=Get-Process -Id $PID
@@ -190,7 +211,7 @@ $json=$record | ConvertTo-Json -Depth 16 -Compress
     snapshot = []
     root_identity = None
     transport = {'backend': str(backend), 'backend_sha256': hashlib.sha256(backend.read_bytes()).hexdigest(),
-                 'backend_name': 'pywinpty-3.1.0-ConPTY', 'dimensions': [120, 40], 'eof_diagnostics_file': eof_diagnostics.name,
+                 'backend_name': 'pywinpty-3.1.0-WinPTY', 'dimensions': [120, 40], 'eof_diagnostics_file': eof_diagnostics.name,
                  'ordinary_startup_verified': False, 'owned_console_exit_verified': False}
     def capture_owned():
         rows = command(observer, dict(environment, APP_PROOF_PROCESS_MODE='snapshot',
@@ -209,9 +230,9 @@ $json=$record | ConvertTo-Json -Depth 16 -Compress
     try:
         with raw.open('xb') as stream:
             # Only this separate adapter sees redirected pipes. The spawned
-            # PowerShell receives a fixed-size native ConPTY and normal startup.
+            # PowerShell receives a fixed-size native WinPTY and normal startup.
             process = subprocess.Popen([sys.executable, '-u', str(Path(__file__).resolve()),
-                '--conpty-adapter', str(shell), str(shell_exit)], env=environment, stdin=subprocess.PIPE,
+                '--pty-adapter', str(shell), str(shell_exit)], env=environment, stdin=subprocess.PIPE,
                 stdout=stream, stderr=subprocess.STDOUT)
             transport['adapter_pid'] = process.pid
             root_identity = {'pid': process.pid, 'started': process_birth(process)}
@@ -293,6 +314,8 @@ $json=$record | ConvertTo-Json -Depth 16 -Compress
     finally:
         if process is not None:
             transport['adapter_returncode'] = process.poll()
+        if backend_record.is_file():
+            transport['native_backend'] = json.loads(backend_record.read_text())
         if shell_exit.is_file():
             transport['shell_exit'] = json.loads(shell_exit.read_text())
         if process is not None and process.stdin is not None:
@@ -302,6 +325,6 @@ $json=$record | ConvertTo-Json -Depth 16 -Compress
 
 
 if __name__ == '__main__':
-    if len(sys.argv) != 4 or sys.argv[1] != '--conpty-adapter':
-        raise SystemExit('invalid fixed ConPTY adapter invocation')
-    raise SystemExit(conpty_adapter(sys.argv[2], sys.argv[3]))
+    if len(sys.argv) != 4 or sys.argv[1] != '--pty-adapter':
+        raise SystemExit('invalid fixed WinPTY adapter invocation')
+    raise SystemExit(pty_adapter(sys.argv[2], sys.argv[3]))
