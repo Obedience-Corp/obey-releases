@@ -335,15 +335,29 @@ def windows_silent(executable, environment):
     command(["pwsh", "-NoProfile", "-NonInteractive", "-Command", script], dict(environment, APP_PROOF_SETUP=str(executable)), timeout=120)
 
 
+def windows_owned_birth(process):
+    identity = getattr(process, "identity", None)
+    if isinstance(identity, dict):
+        if (type(identity.get("pid")) is not int or identity["pid"] <= 0 or identity["pid"] != process.pid
+                or not re.fullmatch("[0-9]+", str(identity.get("started", ""))) or int(identity["started"]) <= 0):
+            raise RuntimeError("invalid observed Windows root identity")
+        return str(identity["started"])
+    from windows_console import process_birth
+    return process_birth(process)
+
+
 def stop_owned(process, environment):
     if process.poll() is not None:
         return
     if os.name == "nt":
         query = Path(__file__).with_name("windows_owned_processes.ps1")
+        started = windows_owned_birth(process)
         identities = json.loads(command(["pwsh", "-NoProfile", "-NonInteractive", "-File", query],
-                                       dict(environment, APP_PROOF_PROCESS_MODE="snapshot", APP_PROOF_PROCESS_PID=str(process.pid))))
-        if not isinstance(identities, list) or any(not isinstance(item.get("pid"), int) or not str(item.get("started", "")).isdigit() for item in identities):
+                                       dict(environment, APP_PROOF_PROCESS_MODE="snapshot", APP_PROOF_PROCESS_PID=str(process.pid), APP_PROOF_PROCESS_STARTED=started)))
+        if not isinstance(identities, list) or any(not isinstance(item, dict) or type(item.get("pid")) is not int or item["pid"] <= 0 or not re.fullmatch("[0-9]+", str(item.get("started", ""))) or int(item["started"]) <= 0 for item in identities):
             raise RuntimeError("invalid owned process identity snapshot")
+        if {"pid": process.pid, "started": started} not in identities or len({item["pid"] for item in identities}) != len(identities):
+            raise RuntimeError("owned process snapshot lost the known root identity")
         # taskkill can return nonzero for an already-exiting WebView descendant.
         # Retain that result, and accept cleanup only after identity-aware readback.
         killed = subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], env=environment,

@@ -137,7 +137,7 @@ class DiagnosticBoundaries(unittest.TestCase):
         process.poll.return_value = None
         identities = [{"pid": 123, "started": "10001"}, {"pid": 124, "started": "10002"}]
         killed = Mock(returncode=255, stdout="root terminated", stderr="child unsupported")
-        with patch.object(app.os, "name", "nt"), patch.object(app, "Path", return_value=Mock(with_name=Mock(return_value="query.ps1"))), patch.object(app, "command", side_effect=[json.dumps(identities), '{"owned_processes_exited":true}']) as query, patch.object(app.subprocess, "run", return_value=killed):
+        with patch.object(app, "windows_owned_birth", return_value="10001"), patch.object(app.os, "name", "nt"), patch.object(app, "Path", return_value=Mock(with_name=Mock(return_value="query.ps1"))), patch.object(app, "command", side_effect=[json.dumps(identities), '{"owned_processes_exited":true}']) as query, patch.object(app.subprocess, "run", return_value=killed):
             app.stop_owned(process, {})
         self.assertEqual(json.loads(query.call_args_list[1].args[1]["APP_PROOF_PROCESS_IDENTITIES"]), identities)
         process.wait.assert_called_once_with(timeout=20)
@@ -146,10 +146,26 @@ class DiagnosticBoundaries(unittest.TestCase):
         process = Mock(pid=123)
         process.poll.return_value = None
         killed = Mock(returncode=0, stdout="", stderr="")
-        with patch.object(app.os, "name", "nt"), patch.object(app, "Path", return_value=Mock(with_name=Mock(return_value="query.ps1"))), patch.object(app, "command", side_effect=['[{"pid":123,"started":"10001"}]', RuntimeError("owned survivor")]), patch.object(app.subprocess, "run", return_value=killed):
+        with patch.object(app, "windows_owned_birth", return_value="10001"), patch.object(app.os, "name", "nt"), patch.object(app, "Path", return_value=Mock(with_name=Mock(return_value="query.ps1"))), patch.object(app, "command", side_effect=['[{"pid":123,"started":"10001"}]', RuntimeError("owned survivor")]), patch.object(app.subprocess, "run", return_value=killed):
             with self.assertRaisesRegex(RuntimeError, "owned survivor"):
                 app.stop_owned(process, {})
         process.wait.assert_not_called()
+
+    def test_wrong_root_birth_refuses_taskkill(self):
+        process = Mock(pid=123)
+        process.poll.return_value = None
+        with patch.object(app, "windows_owned_birth", return_value="10001"), patch.object(app.os, "name", "nt"), patch.object(app, "Path", return_value=Mock(with_name=Mock(return_value="query.ps1"))), patch.object(app, "command", return_value='[{"pid":123,"started":"9999"}]'), patch.object(app.subprocess, "run") as kill:
+            with self.assertRaisesRegex(RuntimeError, "lost the known root identity"):
+                app.stop_owned(process, {})
+        kill.assert_not_called()
+        process.wait.assert_not_called()
+
+    def test_observed_windows_root_keeps_known_birth_and_rejects_wrong_pid(self):
+        process = Mock(pid=123, identity={"pid":123,"started":"10001"})
+        self.assertEqual(app.windows_owned_birth(process), "10001")
+        process.identity["pid"] = 124
+        with self.assertRaisesRegex(RuntimeError, "invalid observed Windows root"):
+            app.windows_owned_birth(process)
 
     def test_delayed_captures_keep_all_frames_and_late_primary(self):
         with tempfile.TemporaryDirectory() as name:
