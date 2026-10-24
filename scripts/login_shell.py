@@ -1,15 +1,11 @@
 """Fresh disposable-account profile preservation and ordinary shell readback."""
-import base64
 import errno
 import hashlib
-import json
 import os
 from pathlib import Path
 import re
-import shlex
 import shutil
 import signal
-import subprocess
 import time
 import uuid
 
@@ -90,29 +86,6 @@ def prepare(environment, report):
     return fixture
 
 
-def script_for(fixture, tool):
-    if tool not in TOOLS or not re.fullmatch(r'fa0027_keep_[0-9a-f]{12}', fixture['function']):
-        raise ValueError('invalid fixed login probe')
-    marker = 'FA0027_' + fixture['function'][12:]
-    if fixture['kind'] in ('pwsh', 'powershell'):
-        args = ' '.join("'" + arg + "'" for arg in TOOLS[tool][1])
-        script = f"""$ErrorActionPreference='Stop'
-'{marker}_PROFILE'; {fixture['function']}
-'{marker}_PATH'; $resolved=Get-Command '{tool}' -ErrorAction Stop
-if ($resolved.CommandType -ne 'Application') {{ throw 'required command is shadowed' }}
-$resolved.Source
-'{marker}_VERSION'; & '{tool}' {args}
-if ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}
-'{marker}_END'
-"""
-        return [fixture['shell'], '-NoLogo', '-NonInteractive', '-EncodedCommand', base64.b64encode(script.encode('utf-16-le')).decode()], marker
-    script = (f"printf '%s\\n' '{marker}_PROFILE'; {fixture['function']} || exit 91; "
-              f"printf '%s\\n' '{marker}_PATH'; command -v {shlex.quote(tool)} || exit 92; "
-              f"printf '%s\\n' '{marker}_VERSION'; {shlex.join([tool] + TOOLS[tool][1])} || exit 93; "
-              f"printf '%s\\n' '{marker}_END'")
-    return [fixture['shell'], '-l', '-i', '-c', script], marker
-
-
 def pty_run(args, environment, output, timeout=60):
     import pty
     import select
@@ -164,25 +137,6 @@ def pty_run(args, environment, output, timeout=60):
         os.close(master)
 
 
-def parse_probe(data, marker, value, tool, managed):
-    text = data.decode('utf-8')
-    markers = [marker + suffix for suffix in ('_PROFILE', '_PATH', '_VERSION', '_END')]
-    lines = text.splitlines()
-    if any(lines.count(item) != 1 for item in markers):
-        raise ValueError('ordinary login output has missing or ambiguous evidence markers')
-    indices = [lines.index(item) for item in markers]
-    if indices != sorted(indices): raise ValueError('login evidence markers are out of order')
-    foreign = lines[indices[0]+1:indices[1]]
-    paths = lines[indices[1]+1:indices[2]]
-    version = '\n'.join(lines[indices[2]+1:indices[3]])
-    expected = managed / 'bin' / (tool + ('.exe' if os.name == 'nt' else ''))
-    if foreign != [value] or len(paths) != 1 or not Path(paths[0]).is_absolute() or not expected.is_file() or not Path(paths[0]).is_file() or not os.path.samefile(paths[0], expected):
-        raise ValueError('new login shell lost its foreign profile or resolved an unexpected command')
-    if not re.search(r'(?<![0-9.])' + re.escape(TOOLS[tool][0]) + r'(?![0-9.])', version):
-        raise ValueError('ordinary shell command reported an unexpected version')
-    return {'path': paths[0], 'version_output': version, 'profile_sentinel_verified': True}
-
-
 def verify(fixture, managed, installer, environment, output, stage):
     owned_profile(fixture['path'], Path.home().resolve())
     data = fixture['path'].read_bytes()
@@ -194,28 +148,13 @@ def verify(fixture, managed, installer, environment, output, stage):
         raise ValueError('App terminal integration is not ready for an ordinary new shell')
     records = {}
     for tool in TOOLS:
-        args, marker = script_for(fixture, tool)
-        path = output / f'{stage}-login-{tool}.terminal.log'
         if os.name == 'nt':
-            from verify_app_candidate import stop_owned
-            with path.open('xb') as stream:
-                process = subprocess.Popen(args, env=environment, stdout=stream, stderr=subprocess.STDOUT)
-                deadline = time.monotonic() + 60
-                try:
-                    while process.poll() is None:
-                        if time.monotonic() >= deadline or path.stat().st_size > 1024 * 1024:
-                            raise RuntimeError('owned PowerShell probe exceeded execution/output bounds')
-                        time.sleep(0.1)
-                except BaseException as original:
-                    try: stop_owned(process, environment)
-                    except Exception as cleanup:
-                        raise RuntimeError(f"PowerShell probe failed: {original}; owned cleanup failed: {cleanup}") from original
-                    raise
-                if process.returncode: raise RuntimeError('ordinary PowerShell command failed; output retained')
+            import login_windows
+            records[tool] = login_windows.verify_tool(fixture, tool, managed, environment, output, stage)
         else:
-            pty_run(args, environment, path)
-        records[tool] = parse_probe(path.read_bytes(), marker, fixture['value'], tool, managed)
-    return {'shell': fixture['shell'], 'runtime': fixture['runtime'], 'mode': 'ordinary installed PowerShell7 profile startup' if os.name == 'nt' else 'interactive login shell in owned pty',
+            import login_posix
+            records[tool] = login_posix.verify_tool(fixture, tool, managed, environment, output, stage)
+    return {'shell': fixture['shell'], 'runtime': fixture['runtime'], 'mode': 'ordinary installed PowerShell7 console prompt' if os.name == 'nt' else 'interactive login shell in owned pty',
             'profile': str(fixture['path']), 'foreign_profile_prefix_sha256': fixture['seeded_sha256'],
             'after_profile_sha256': hashlib.sha256(data).hexdigest(), 'profile_mtime_ns': fixture['path'].stat().st_mtime_ns,
             'integrations': integrations, 'commands': records}

@@ -12,6 +12,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Install hash-pinned ordinary Windows console transport
+        if: runner.os == 'Windows'
+        run: |
+          python -m pip install --only-binary=:all: --require-hashes -r tests/requirements-windows-console.txt
       - name: Verify owned window capture behind another window
         shell: pwsh
         env:
@@ -20,6 +27,7 @@ jobs:
         run: |
           ./scripts/windows_packaging_service.ps1 -SelfTest
           ./tests/integration_windows_capture.ps1
+          python tests/integration_windows_console.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -27,6 +35,7 @@ jobs:
           path: |
             ${{ runner.temp }}/owned-window-capture*
             ${{ runner.temp }}/capture-fixture-*
+            ${{ runner.temp }}/ordinary-console-proof/
           if-no-files-found: ignore
   contracts:
     runs-on: ubuntu-24.04
@@ -34,10 +43,11 @@ jobs:
       - uses: actions/checkout@v4
       - name: Test archive/identity failure paths in filesystem isolation
         run: |
+          docker build -t obey-release-shell-contracts:local - < tests/Dockerfile.shells
           docker run --rm --user 10001:10001 \
             --tmpfs /tmp:rw,exec,size=128m,mode=1777 \
             -e CANDIDATE_TEST_CONTAINER=1 -e PYTHONDONTWRITEBYTECODE=1 \
-            -v "$PWD:/src:ro" -w /src python:3.13-slim \
+            -v "$PWD:/src:ro" -w /src obey-release-shell-contracts:local \
             python -m unittest discover -s tests -v
       - name: Test real offline Debian dependency installation and partial cleanup
         run: |
