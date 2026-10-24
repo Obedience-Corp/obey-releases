@@ -404,7 +404,7 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
               "runner_platform": native_platform(), "first_use_complete": False, "useful_first_use_verified": False, "native_failure_recovery_verified": False, "license_access_verified": False,
               "reboot_verified": False, "consumer_trust_verified": False, "two_version_update_verified": False, "native_packaging_launch_verified": False, "linux_package_mode": linux_package}
     output.mkdir()
-    process = xvfb = manager = None
+    process = xvfb = manager = window_events = None
     installed = None
     owned_deb = False
     appimage = extracted_appimage = None
@@ -525,6 +525,8 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
             xvfb = subprocess.Popen(["Xvfb", ":99", "-screen", "0", "1280x900x24"], env=environment, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             environment["DISPLAY"] = ":99"
             wait_until("owned Xvfb", lambda: subprocess.run(["xdpyinfo"], env=environment, capture_output=True).returncode == 0)
+            from linux_window_events import Recorder
+            window_events = Recorder(output, environment, report)
             if fresh_setup:
                 manager = subprocess.Popen(["openbox"], env=environment, start_new_session=True)
         suffix = ".exe" if target.endswith("windows-msvc") else ""
@@ -643,6 +645,8 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
                 manager.terminate()
                 manager.wait(timeout=10)
             actions.append(stop_manager)
+        if window_events is not None:
+            actions.append(window_events.stop)
         if xvfb is not None:
             def stop_display():
                 xvfb.terminate()

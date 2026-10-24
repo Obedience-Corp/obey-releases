@@ -155,7 +155,8 @@ class AppContracts(unittest.TestCase):
                 (output / "app.png").write_bytes(b"frame")
                 return {"screenshot": "app.png"}
             with patch.object(app, "require_clean_host"), patch.object(app, "native_platform", return_value="linux/amd64"), patch.object(app, "verify_signature"), patch.object(app.shutil, "which", return_value=None), patch.object(app.subprocess, "run", side_effect=run), patch.object(app.subprocess, "Popen", return_value=process) as started, patch.object(app, "command", return_value="bundled contract") as invoked, patch.object(app, "capture_startup", side_effect=capture), patch.object(app, "stop_owned"), patch.object(app, "appimage_proof") as fallback, patch.dict(os.environ, {"RUNNER_TEMP": str(root)}):
-                app.native(inputs, document, "x86_64-unknown-linux-gnu", root / "report", "appimage")
+                with patch('linux_window_events.Recorder'):
+                    app.native(inputs, document, "x86_64-unknown-linux-gnu", root / "report", "appimage")
             calls = [call.args[0] for call in invoked.call_args_list]
             self.assertFalse(any(arguments[0] in ("sudo", "apt-get", "dpkg-query", "dpkg-deb") for arguments in calls))
             self.assertTrue(any(Path(call.args[0][0]).name == image for call in started.call_args_list))

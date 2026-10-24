@@ -563,3 +563,14 @@ Disposable ARM/Intel native controls require a real owned window, PID filtering,
 wrong-bundle refusal without termination, a retained screenshot, and normal quit.
 The fresh workflow also permits `intel` or `appimage` diagnostic replay while
 keeping `all` as the unchanged full matrix and validating complete public inputs.
+
+Linux native verification subscribes to root-child X11 lifecycle notifications
+on its owned display before starting Openbox or the App. The flushed JSONL trace
+records create/map/unmap/reparent/destroy/configure events, with readiness only
+after the server acknowledges subscription. It selects nonexclusive notification
+events, never window-manager redirection, and collects no input or window content.
+After a child is reparented away from the root, its subsequent lifecycle is outside
+this trace's scope. Observer errors, bounded truncation, and forced cleanup remain
+diagnostic evidence and cannot turn an App failure into success. An isolated real
+X11 fixture checks ordered lifecycle events, simultaneous manager subscription,
+unavailable-display refusal, and cleanup of an unresponsive observer.
