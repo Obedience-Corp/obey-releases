@@ -83,7 +83,7 @@ def process_birth(pid):
     return int(Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()[19])
 
 
-def pkexec_child(app_pid):
+def pkexec_child(app_pid, *, missing_ok=False):
     """Bind the OS prompt to the real App's exact Git installation request."""
     from linux_window_diagnostics import process_inventory
     rows = process_inventory(app_pid)
@@ -96,6 +96,8 @@ def pkexec_child(app_pid):
         if args == [b'/usr/bin/pkexec', b'/usr/bin/apt-get', b'install', b'--yes', b'git', b'']:
             found.append({'pid': row['pid'], 'start_ticks': row['start_ticks'], 'parent_pid': row['parent_pid'],
                           'arguments': [value.decode() for value in args[:-1]]})
+    if not found and missing_ok:
+        return None
     if len(found) != 1:
         raise RuntimeError('expected one App-descended pkexec apt-get install --yes git')
     return found[0]
@@ -196,9 +198,18 @@ class Context:
         gi.require_version('Atspi', '2.0')
         from gi.repository import Atspi
         Atspi.set_timeout(1000, 5000)
-        report['git_missing_ui'] = missing_git.interact(process, binary, environment, 'inspect')
         command(['import', '-window', 'root', output / 'git-missing-desktop.png'], environment)
-        report['git_install_action'] = missing_git.interact(process, binary, environment, 'retry')
+        request = pkexec_child(process.pid, missing_ok=True)
+        if request is not None:
+            # Initial setup already invokes prerequisites. While the OS dialog
+            # is pending the Retry button correctly stays disabled. Do not
+            # invent or duplicate an App action that already happened.
+            report['git_install_trigger'] = 'automatic initial App setup'
+            report['git_initial_pkexec_request'] = request
+        else:
+            report['git_missing_ui'] = missing_git.interact(process, binary, environment, 'inspect')
+            report['git_install_action'] = missing_git.interact(process, binary, environment, 'retry')
+            report['git_install_trigger'] = 'normal App Retry action'
         def prompt():
             if process.poll() is not None:
                 raise RuntimeError('App exited before OS Git authorization')

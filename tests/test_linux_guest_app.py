@@ -117,6 +117,25 @@ class GuestAppControls(unittest.TestCase):
                     process.terminate()
                 process.wait(timeout=10)
 
+    def test_automatic_git_request_is_optional_only_when_absent_never_ambiguous(self):
+        import linux_window_diagnostics
+        row = {'pid': 123, 'start_ticks': 456, 'parent_pid': 42}
+        exact = b'/usr/bin/pkexec\0/usr/bin/apt-get\0install\0--yes\0git\0'
+        with patch.object(linux_window_diagnostics, 'process_inventory', return_value=[row]), \
+             patch.object(Path, 'read_bytes', return_value=exact):
+            self.assertEqual(guest.pkexec_child(42, missing_ok=True)['pid'], 123)
+        with patch.object(linux_window_diagnostics, 'process_inventory', return_value=[]):
+            self.assertIsNone(guest.pkexec_child(42, missing_ok=True))
+            with self.assertRaisesRegex(RuntimeError, 'expected one App-descended'):
+                guest.pkexec_child(42)
+        with patch.object(linux_window_diagnostics, 'process_inventory', return_value=[row, dict(row, pid=124)]), \
+             patch.object(Path, 'read_bytes', return_value=exact):
+            with self.assertRaisesRegex(RuntimeError, 'expected one App-descended'):
+                guest.pkexec_child(42, missing_ok=True)
+        with patch.object(linux_window_diagnostics, 'process_inventory', return_value=[row]), \
+             patch.object(Path, 'read_bytes', return_value=b'/usr/bin/pkexec\0/bin/sh\0'):
+            self.assertIsNone(guest.pkexec_child(42, missing_ok=True))
+
     def test_persisted_settings_symlink_refused(self):
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory); settings = home / '.obey/festival-app/settings.json'
