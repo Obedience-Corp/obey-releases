@@ -9,6 +9,8 @@ import os
 from pathlib import Path
 import sqlite3
 import stat
+import sys
+import time
 
 from corrupt_integrations import identity, regular, restore_times, sha, MAX_BYTES
 from foreign_companion import owned_file as owned_executable
@@ -26,7 +28,7 @@ def quiescent(environment):
         if not isinstance(rows, list):
             raise ValueError('invalid App/Installer process inventory')
     else:
-        # Filesystem contracts run only in an owned container, not the operator.
+        # Linux native journeys and filesystem contracts both have /proc.
         rows = []
         for proc in Path('/proc').iterdir():
             if proc.name.isdecimal():
@@ -50,7 +52,7 @@ def owned(path):
 class Fixture:
     def __init__(self, managed, private_root, report, environment):
         if not ((os.environ.get('CANDIDATE_TEST_CONTAINER') == '1' and Path('/.dockerenv').exists()) or
-                (os.name == 'nt' and os.environ.get('CANDIDATE_NATIVE_DISPOSABLE') == '1' and
+                ((os.name == 'nt' or sys.platform.startswith('linux')) and os.environ.get('CANDIDATE_NATIVE_DISPOSABLE') == '1' and
                  os.environ.get('CANDIDATE_RUNNER_KIND') == 'github-hosted')):
             raise RuntimeError('receipt corruption requires an owned disposable fixture')
         self.path = Path(managed)/'state.db'
@@ -243,10 +245,39 @@ def probe(installer, fixture, before, environment, output):
 
 
 def error_window(window):
+    if 'receipt_accessibility' in window:
+        evidence = window['receipt_accessibility']
+        text = ' '.join(' '.join(value.split()) for value in evidence.get('visible_text', []))
+        return (evidence.get('owned_accessibility_verified') is True and
+                all(value in text for value in ('Getting this machine ready',
+                    'Installed tool versions are unknown', MESSAGE, CODE)))
     names = window.get('visible_names', [])
     expected = 'Read what this machine hasFailed'+MESSAGE+CODE+'Retry'
     return (window.get('uia_verified') is True and 'Getting this machine ready' in names and
             'A step did not finish. Its detail is below.' in names and expected in names)
+
+
+def linux_observation(process, binary, environment):
+    from linux_git_retry import birth
+    expected = birth(process.pid)
+    helper = Path(__file__).with_name('linux_receipt_ui.py').resolve()
+    deadline = time.monotonic() + 45
+    while True:
+        if process.poll() is not None or birth(process.pid) != expected:
+            raise RuntimeError('App exited or changed identity before receipt observation')
+        try:
+            result = command(['/usr/bin/python3', '-I', helper, '--pid', str(process.pid),
+                              '--birth', str(expected), '--executable', binary.resolve()],
+                             environment, timeout=10, json_output=True)
+        except (RuntimeError, json.JSONDecodeError):
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(.2)
+            continue
+        if (result.get('pid') != process.pid or result.get('birth') != expected or
+                result.get('owned_accessibility_verified') is not True):
+            raise RuntimeError('invalid owned receipt diagnostic observation')
+        return result
 
 
 def preserved_user(existing, before, fixture, environment):

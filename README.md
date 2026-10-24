@@ -784,7 +784,8 @@ acceptance requires a separate original native journey.
 ### Packaged unreadable receipt-state manual recovery
 
 `verify-app-fresh-setup.yml` accepts `existing_user=corrupt-receipts` only with
-Windows scope, the default shell, and login/Git proof disabled. Use a separately
+Windows or Debian scope, the default shell, and login/Git proof disabled. macOS
+and AppImage receipt recovery are not supported by this verifier. Use a separately
 qualified signed public candidate containing the App unreadable-state guard
 (source `8b19ce6ffe2f2e747dd6b2ab2d78ee34869d3ef0` or reviewed successor).
 The older B3 candidate does not establish this behavior.
@@ -796,6 +797,17 @@ live tool facts while reporting incomplete receipt state. The App must show the
 authenticated `E_INSTALLER_STATE_UNREADABLE` failure and recovery guidance while
 all selected executable hashes/mtimes, existing settings, camp registration,
 service identity and corrupted database bytes remain unchanged.
+
+On Debian, a bounded AT-SPI observer reads visible text from the exact App PID,
+process birth and executable, with identity checks before and after observation.
+The original window screenshot is retained alongside the authenticated text;
+the diagnostic must include the unreadable-state error and truthful unknown
+installed-version presentation. The desktop accessibility setting is read before
+enabling observation and restored with readback during cleanup, including failures.
+Automation exercises the observer against a real GTK window, excludes hidden and
+foreign text, and rejects stale process identity and unqualified invocation. These
+controls alone do not establish packaged App recovery; that needs a separate
+native public-candidate run with the complete preservation/readback checks.
 
 Only after normal App quit and an actual no-App/no-Installer check can the fixture
 restore its known private backup byte-for-byte and restore the original mtime on

@@ -58,7 +58,8 @@ jobs:
             zsh) [[ "$LOGIN:$EXISTING:$GIT_RECOVERY" == true:none:false && ( "$SCOPE" == mac || "$SCOPE" == intel ) ]] || exit 64 ;;
             *) echo 'Unsupported login shell proof' >&2; exit 64 ;;
           esac
-          if [[ ( "$EXISTING" == corrupt-integrations || "$EXISTING" == foreign-companion || "$EXISTING" == corrupt-receipts ) && "$LOGIN:$GIT_RECOVERY:$SCOPE:$LOGIN_SHELL" != false:false:windows:default ]]; then echo "Manual recovery requires Windows-only current-user mode" >&2; exit 64; fi
+          if [[ ( "$EXISTING" == corrupt-integrations || "$EXISTING" == foreign-companion ) && "$LOGIN:$GIT_RECOVERY:$SCOPE:$LOGIN_SHELL" != false:false:windows:default ]]; then echo "Manual recovery requires Windows-only current-user mode" >&2; exit 64; fi
+          if [[ "$EXISTING" == corrupt-receipts && ( "$LOGIN:$GIT_RECOVERY:$LOGIN_SHELL" != false:false:default || ( "$SCOPE" != windows && "$SCOPE" != deb ) ) ]]; then echo "Receipt recovery requires Windows or Debian current-user mode" >&2; exit 64; fi
           case "$LOGIN:$EXISTING" in false:none|false:older-idle|false:current|false:missing-companion|false:corrupt-integrations|false:foreign-companion|false:corrupt-receipts|true:none) ;;
             *) echo 'Login proof requires unseeded fresh setup; invalid mode' >&2; exit 64 ;; esac
       - uses: actions/setup-python@v6
@@ -112,8 +113,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y minisign xvfb x11-utils xdotool imagemagick openbox wmctrl libegl1 libegl-mesa0 libgles2 libgl1 libgl1-mesa-dri
           sudo apt-get install -y --no-install-recommends gdb
-          if [[ '${{ inputs.verify_missing_git_manual || false }}' == true ]]; then
-            sudo apt-get install -y python3-gi gir1.2-atspi-2.0 at-spi2-core dbus-x11 gsettings-desktop-schemas dpkg-repack fakeroot
+          if [[ '${{ inputs.verify_missing_git_manual || false }}' == true || '${{ inputs.existing_user }}' == corrupt-receipts ]]; then
+            sudo apt-get install -y python3-gi gir1.2-atspi-2.0 at-spi2-core dbus-x11 gsettings-desktop-schemas libglib2.0-bin dconf-gsettings-backend dpkg-repack fakeroot
           fi
           dpkg-query -W libegl1 libegl-mesa0 libgles2 libgl1 libgl1-mesa-dri gdb libc6
       - name: Install macOS signature verifier
@@ -148,7 +149,7 @@ jobs:
           if [[ "$VERIFY_LOGIN_SHELL" == true ]]; then flags+=(--verify-login-shell); fi
           if [[ "$VERIFY_MISSING_GIT_MANUAL" == true ]]; then flags+=(--verify-missing-git-manual); fi
           prefix=()
-          if [[ "$VERIFY_MISSING_GIT_MANUAL" == true ]]; then prefix=(dbus-run-session --); fi
+          if [[ "$VERIFY_MISSING_GIT_MANUAL" == true || ( "$EXISTING_USER" == corrupt-receipts && "$TARGET" == x86_64-unknown-linux-gnu ) ]]; then prefix=(dbus-run-session --); fi
           "${prefix[@]}" python scripts/verify_app_candidate.py --mode verify-fresh --source "$SOURCE" --version "$VERSION" --target "$TARGET" --linux-package "$PACKAGE" --existing-user "$EXISTING_USER" "${flags[@]}"
       - uses: actions/upload-artifact@v4
         if: always()
