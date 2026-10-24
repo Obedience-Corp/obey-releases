@@ -948,3 +948,13 @@ and historical-root-edge controls must refuse while unrelated identities survive
 Both the new control trees and the ordinary owned tree require final identity-aware
 exit readback. These controls qualify the observer; an unchanged App Windows native
 reproof remains required after the original40097043291 failure.
+
+The original40098521423 CI job was green despite a failed Windows PowerShell5.1
+control: a later native program masked the Python exit status. That packet remains
+rejected. Native Python invocations now use the checked wrapper, and both preceding
+PowerShell scripts have immediate exit-code checks. An actual exit23 before a later
+success command must stop execution in PS7 and5.1, while the paired successful path
+must reach both markers. This control runs in its own step with an independent
+immediate exit-code check, so a broken wrapper cannot mask its own failed control. Controls use task-owned Python files to avoid legacy
+command-line quote handling. The5.1 CIM row decoder uses explicit array assignment
+and foreach rather than pipeline enumeration.

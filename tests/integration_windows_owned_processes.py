@@ -123,9 +123,10 @@ foreach($name in @('root','parent','leaf')) {if([int]$known.$name.pid -notin $id
 $ErrorActionPreference='Stop'
 . $env:OWNED_OBSERVER_SCRIPT
 $known=ConvertFrom-Json -InputObject $env:OWNED_FIXTURE_IDENTITIES
-$rows=@(ConvertFrom-Json -InputObject ([IO.File]::ReadAllText($env:OWNED_PRIOR_CIM)) | ForEach-Object {
-    [pscustomobject]@{ProcessId=[int]$_.pid;ParentProcessId=[int]$_.parent_pid;
-        CreationDate=[datetime]::new([long]$_.cim_created_ticks,[DateTimeKind]::Utc)}})
+$decoded=ConvertFrom-Json -InputObject ([IO.File]::ReadAllText($env:OWNED_PRIOR_CIM))
+$rows=@(foreach($row in $decoded) {
+    [pscustomobject]@{ProcessId=[int]$row.pid;ParentProcessId=[int]$row.parent_pid;
+        CreationDate=[datetime]::new([long]$row.cim_created_ticks,[DateTimeKind]::Utc)}})
 $deadline=[DateTime]::UtcNow.AddSeconds(15)
 do {
     $parent=Get-ProcessOrObservedAbsent ([int]$known.parent.pid)
