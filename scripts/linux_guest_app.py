@@ -288,7 +288,7 @@ def reboot_readback(root, output):
             if report['before_app_launch'][key] != before['default_after_reopen'][key]:
                 raise RuntimeError('OS reboot changed installed selected receipts/files')
         with (output / 'app.log').open('w') as log:
-            process = subprocess.Popen([str(binary)], env=environment, stdout=log, stderr=subprocess.STDOUT)
+            process = subprocess.Popen([str(binary)], env=environment, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
             report['after_app_launch'] = app.wait_fresh_setup(process, installer, managed, TARGET, output, environment, report, 'reboot')
             for key in ('receipts', 'selected_mtime_ns'):
                 if report['after_app_launch'][key] != report['before_app_launch'][key]:
@@ -303,9 +303,17 @@ def reboot_readback(root, output):
         report['failure'] = str(error)
         raise
     finally:
+        cleanup_error = None
         if process is not None:
-            app.stop_owned(process, environment)
+            try:
+                app.stop_owned(process, environment)
+            except Exception as error:
+                cleanup_error = error
+                report['cleanup_failure'] = str(error)
+                report['reboot_verified'] = False
         (output / 'proof.json').write_text(json.dumps(report, indent=2) + '\n')
+        if cleanup_error is not None:
+            raise RuntimeError('owned post-reboot App cleanup failed') from cleanup_error
 
 
 def main():

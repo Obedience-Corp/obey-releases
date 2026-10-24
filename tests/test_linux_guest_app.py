@@ -3,6 +3,8 @@ import io
 import os
 from pathlib import Path
 import stat
+import subprocess
+import json
 import sys
 import tempfile
 from types import SimpleNamespace
@@ -74,6 +76,46 @@ class GuestAppControls(unittest.TestCase):
         args = authorization.sudo.call_args.args[0]
         self.assertEqual(args[:4], ['timeout', '--signal=TERM', '--kill-after=15s', '60s'])
         self.assertEqual(args[4:], ['apt-get', 'install', '-y', 'example'])
+
+    def test_failed_post_reboot_app_stops_its_group_and_retains_original_error(self):
+        # Real isolated processes prove the cleanup contract; no App or provider
+        # is emulated as a successful product journey.
+        import verify_app_upgrade
+        actual_popen = subprocess.Popen
+        foreign = actual_popen([sys.executable, '-c', 'import time; time.sleep(60)'])
+        launched = []
+        def launch(arguments, **options):
+            process = actual_popen([sys.executable, '-c', 'import time; time.sleep(60)'], **options)
+            launched.append(process)
+            return process
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / 'evidence/install').mkdir(parents=True)
+                selected = {'receipts': {}, 'selected_mtime_ns': {}}
+                (root / 'evidence/install/proof.json').write_text(json.dumps({'default_after_reopen': selected}))
+                (root / 'install-boot.json').write_text(json.dumps({'boot_id': 'different-prior-boot'}))
+                (root / 'persisted-after-install.json').write_text('{}')
+                output = root / 'reboot'
+                with patch.object(guest, 'local_context', return_value={}), \
+                     patch.object(guest, 'persisted_state', return_value={}), \
+                     patch.object(app, 'fresh_setup_readback', return_value=selected), \
+                     patch.object(app, 'wait_fresh_setup', side_effect=RuntimeError('expected startup failure')), \
+                     patch.object(guest.subprocess, 'Popen', side_effect=launch):
+                    with self.assertRaisesRegex(RuntimeError, 'expected startup failure'):
+                        guest.reboot_readback(root, output)
+                self.assertEqual(len(launched), 1)
+                self.assertIsNotNone(launched[0].poll())
+                self.assertIsNone(foreign.poll())
+                proof = json.loads((output / 'proof.json').read_text())
+                self.assertFalse(proof['reboot_verified'])
+                self.assertEqual(proof['failure'], 'expected startup failure')
+                self.assertNotIn('cleanup_failure', proof)
+        finally:
+            for process in [*launched, foreign]:
+                if process.poll() is None:
+                    process.terminate()
+                process.wait(timeout=10)
 
     def test_persisted_settings_symlink_refused(self):
         with tempfile.TemporaryDirectory() as directory:
