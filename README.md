@@ -71,7 +71,7 @@ private source is checked out. The verifier refuses preexisting ecosystem tools
 or Obey supervisor entries, uses an owned temporary managed bin/config/data/socket,
 and uninstalls only the service it attempted to register. The fresh disposable
 account's real home is retained for native supervisor lookup; this must never run
-on an operator account. Receipt/file hashes and exact live versions are checked.
+on an operator account. Integration/file hashes and exact live versions are checked.
 
 Reports record actual codesign/spctl or Authenticode results without changing
 security settings. Windows reports include the read-only raw Smart App Control
@@ -330,7 +330,7 @@ Mac ARM/Intel, Debian, default AppImage and Windows NSIS each use a separate fre
 machine. Linux runs normal desktop graphics/window-manager dependencies; Deb never
 provides dependencies or state to the AppImage leg. Windows requires visible
 licensing UI; Mac/Linux retain delayed setup and reopened frames for explicit
-image inspection. Receipt/service readiness alone does not prove rendered UI.
+image inspection. Integration/service readiness alone does not prove rendered UI.
 
 These lanes do not establish licensing,
 useful first work, provider control, reboot, consumer trust or failure recovery.
@@ -670,6 +670,27 @@ foreign profile preservation, unchanged state after normal reopen, real service
 readback and complete cleanup. `new_login_shell_verified` stays false until the
 whole native journey succeeds. These hosted-machine cases do not prove cmd,
 Windows Terminal UI, consumer trust prompts, reboot or licensed useful work.
+
+### Corrupt integration preferences: diagnosis and manual recovery
+
+`existing_user=corrupt-integrations` requires `platform_scope=windows`, default
+shell, no login proof and no missing-Git mode. It seeds the same genuine current
+public selected packages and installed service as the current-user journey. The
+fixture privately backs up its own valid `integrations.json`, refuses links,
+hardlinks and foreign ownership, then adds an invalid JSON prefix. The bundled
+Installer's real integration check must report that corruption; the original
+packaged App must visibly show its configuration failure and diagnostic. The
+original corrupt bytes, selected receipts/executable hashes/mtimes, service
+PID/unit, settings, registered camp and foreign files must remain unchanged.
+
+Only after normal App quit does the fixture restore its digest- and identity-bound
+original preference bytes and mtime. Normal reopen must reach Licenses with
+unchanged receipts/tools/service and user state, followed by another unchanged
+reopen and complete owned cleanup. The private rollback file is not uploaded.
+`corrupt_integration_manual_recovery_verified` remains false until every step and
+cleanup passes. This proves an explicit manual support recovery on a disposable
+account, not automatic Installer repair, receipt-database repair, arbitrary
+foreign-file replacement, reboot, consumer trust or useful licensed work.
 
 ## Clean Linux guest infrastructure
 
