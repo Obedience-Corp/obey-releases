@@ -931,3 +931,20 @@ the real-provider daemon log are not exported.
 `active_session_update_verified` is independent of licensed useful App work,
 consumer trust, reboot and other-platform acceptance. Source/unit checks or a
 provider-only container run cannot establish this native published-App result.
+
+### Windows snapshot churn
+
+The read-only owned-process observer keeps the caller's exact root generation and
+validates every parent/child birth edge. A vanished parent can retire a selected
+subtree only after the OS explicitly reports every member absent. Any surviving
+process, including a reused PID, or any permission/query error still refuses the
+snapshot. Retired CIM identities are recorded on stderr; the JSON identity API
+remains unchanged. No timeout, retry or termination fallback is added.
+
+Native PS7/Windows PowerShell5.1 controls replay actual prior CIM observations
+after marker-driven normal parent/leaf exit, exercise the complete observer and
+require its retirement diagnostic. Live-orphan, modeled reused-PID, unknown-query
+and historical-root-edge controls must refuse while unrelated identities survive.
+Both the new control trees and the ordinary owned tree require final identity-aware
+exit readback. These controls qualify the observer; an unchanged App Windows native
+reproof remains required after the original40097043291 failure.
