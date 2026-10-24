@@ -54,7 +54,7 @@ class WindowsLoginContracts(unittest.TestCase):
             def get_exitstatus(self): return self.status
         terminal=Terminal()
         self.assertIsNone(windows_console.read_terminal(terminal,ReadFailure))
-        for changes in [{'alive':True},{'status':None},{'status':False}]:
+        for changes in [{'alive':True},{'eof':False},{'status':None},{'status':False}]:
             broken=Terminal()
             for key,value in changes.items():setattr(broken,key,value)
             with self.assertRaises(ReadFailure):windows_console.read_terminal(broken,ReadFailure)
@@ -68,13 +68,16 @@ class WindowsLoginContracts(unittest.TestCase):
         import io
         class ReadFailure(Exception): pass
         class Terminal:
-            def __init__(self):self.chunks=iter(['tail\x1b[31m','last','Standard out reached EOF'])
+            def __init__(self):self.eof=False;self.chunks=iter(['tail\x1b[31m','last','Standard out reached EOF'])
             def read(self,blocking):
                 value=next(self.chunks)
-                if value=='Standard out reached EOF':raise ReadFailure(value)
+                if value=='Standard out reached EOF':
+                    self.eof=True
+                    raise ReadFailure(value)
                 return value
             def isalive(self):return False
             def get_exitstatus(self):return 0
+            def iseof(self):return self.eof
         output=io.BytesIO()
         windows_console.drain_terminal(Terminal(),ReadFailure,output)
         self.assertEqual(output.getvalue(),b'tail\x1b[31mlast')
@@ -83,3 +86,20 @@ class WindowsLoginContracts(unittest.TestCase):
         terminal.read=fail
         with self.assertRaisesRegex(ReadFailure,'unrelated'):
             windows_console.drain_terminal(terminal,ReadFailure,io.BytesIO())
+
+    def test_conpty_async_empty_and_already_consumed_eof_finish_drain(self):
+        import io
+        class ReadFailure(Exception):pass
+        class Terminal:
+            eof=False
+            def isalive(self):return False
+            def get_exitstatus(self):return 0
+            def iseof(self):return self.eof
+            def read(self,blocking):self.eof=True;return ''
+        terminal=Terminal()
+        self.assertIsNone(windows_console.read_terminal(terminal,ReadFailure))
+        # A previous read consumed EOF. The next drain must use authoritative
+        # queue/reader/pipe EOF rather than wait for another one-shot event.
+        def forbidden(blocking):raise AssertionError('already drained')
+        terminal.read=forbidden
+        windows_console.drain_terminal(terminal,ReadFailure,io.BytesIO())

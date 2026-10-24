@@ -24,18 +24,23 @@ def find_backend(environment):
 
 
 def read_terminal(terminal, read_error):
+    def drained():
+        return (not terminal.isalive() and type(terminal.get_exitstatus()) is int
+                and terminal.iseof())
+    if drained(): return None
     try:
-        return terminal.read(blocking=False)
+        chunk = terminal.read(blocking=False)
+        if not chunk and drained(): return None
+        return chunk
     except read_error as error:
         # The pinned API reports EOF as an error. Accept it only after the
         # actual owned shell has exited with a readable status AND EOF.
-        if (str(error) == 'Standard out reached EOF' and not terminal.isalive()
-                and type(terminal.get_exitstatus()) is int):
+        if str(error) == 'Standard out reached EOF' and drained():
             return None
         raise
 
 
-def drain_terminal(terminal, read_error, stream, timeout=5):
+def drain_terminal(terminal, read_error, stream, timeout=10):
     deadline = time.monotonic() + timeout
     while True:
         chunk = read_terminal(terminal, read_error)
