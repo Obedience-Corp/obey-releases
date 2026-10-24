@@ -1,3 +1,4 @@
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-gi gir1.2-gtk-3.0 gir1.2-atspi-2.0 at-spi2-core dbus-x11 xvfb xauth && rm -rf /var/lib/apt/lists/*
 RUN apt-get update && apt-get install -y --no-install-recommends git git-lfs sudo && mkdir /fixture-archives && apt-get --download-only --reinstall -y -o Dir::Cache::archives=/fixture-archives/ install git git-lfs
+RUN useradd --uid 10001 --no-create-home fixture && echo 'fixture ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/fixture
