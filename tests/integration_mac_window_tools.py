@@ -30,7 +30,7 @@ try:
             'CFBundleName': 'FA0027 owned query control', 'CFBundlePackageType': 'APPL'}))
         fixture = binaries / 'mac-fixture'
         source = Path(__file__).parent / 'fixtures/mac_window_fixture.swift'
-        command([tools.identity['compiler'], '-module-cache-path', tools.query_binary.parent / 'module-cache', source, '-o', fixture], os.environ, timeout=180)
+        command([tools.identity['compiler'], '-sdk', tools.identity['sdk_path'], '-module-cache-path', tools.query_binary.parent / 'module-cache', source, '-o', fixture], os.environ, timeout=180)
         report['fixture_source_sha256'] = hashlib.sha256(source.read_bytes()).hexdigest()
         report['fixture_binary_sha256'] = hashlib.sha256(fixture.read_bytes()).hexdigest()
         ready = work / 'ready.json'

@@ -52,9 +52,13 @@ def prepare(work, output, environment):
     directory.mkdir()
     compiler = Path(command(['xcrun', '--find', 'swiftc'], environment, timeout=30).strip())
     if not compiler.is_absolute() or not compiler.is_file(): raise ValueError('installed Swift compiler is missing')
+    sdk = Path(command(['xcrun', '--sdk', 'macosx', '--show-sdk-path'], environment, timeout=30).strip())
+    if not sdk.is_absolute() or not sdk.is_dir(): raise ValueError('installed macOS SDK is missing')
+    sdk_version = command(['xcrun', '--sdk', 'macosx', '--show-sdk-version'], environment, timeout=30).strip()
     record = {'prepared_before_app_launch': True, 'compiler': str(compiler),
               'compiler_resolved_path': str(compiler.resolve()), 'compiler_sha256': digest(compiler),
               'compiler_version': command([compiler, '--version'], environment, timeout=30),
+              'sdk_path': str(sdk), 'sdk_resolved_path': str(sdk.resolve()), 'sdk_version': sdk_version,
               'compile_timeout_seconds': 180, 'query_timeout_seconds': 10,
               'helpers': {}, 'complete': False}
     began = time.monotonic()
@@ -64,7 +68,7 @@ def prepare(work, output, environment):
             binary = directory / ('owned-mac-' + name)
             row = {'source': filename, 'source_sha256': digest(source)}
             record['helpers'][name] = row
-            command([compiler, '-module-cache-path', directory / 'module-cache', source, '-o', binary],
+            command([compiler, '-sdk', sdk, '-module-cache-path', directory / 'module-cache', source, '-o', binary],
                     environment, timeout=180)
             if binary.is_symlink() or not binary.is_file():
                 raise ValueError('Swift compilation did not produce the owned helper')

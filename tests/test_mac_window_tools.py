@@ -18,10 +18,13 @@ class MacWindowToolsContracts(unittest.TestCase):
         work=root/'work';work.mkdir();output=root/'proof';output.mkdir()
         frontend=root/'swift-frontend';frontend.write_bytes(b'owned compiler')
         compiler=root/'swiftc';compiler.symlink_to(frontend)
+        sdk=root/'MacOSX.sdk';sdk.mkdir()
         environment={'CANDIDATE_NATIVE_DISPOSABLE':'1','CANDIDATE_RUNNER_KIND':'github-hosted'}
         def command(arguments, environment, **kwargs):
             values=[str(value) for value in arguments];calls.append((values,kwargs))
             if values[:2]==['xcrun','--find']:return str(compiler)+'\n'
+            if values[-1]=='--show-sdk-path':return str(sdk)+'\n'
+            if values[-1]=='--show-sdk-version':return '15.0\n'
             if values[-1]=='--version':return 'fixture Swift compiler\n'
             if '-o' in values:
                 Path(values[values.index('-o')+1]).write_bytes(('compiled '+values[-1]).encode())
@@ -48,6 +51,8 @@ class MacWindowToolsContracts(unittest.TestCase):
             self.assertEqual(Path(record['compiler']).name,'swiftc')
             self.assertEqual(Path(record['compiler_resolved_path']).name,'swift-frontend')
             self.assertTrue(all(Path(call[0][0]).name=='swiftc' for call in calls if '-o' in call[0]))
+            self.assertTrue(all(call[0][call[0].index('-sdk')+1]==record['sdk_path'] for call in calls if '-o' in call[0]))
+            self.assertEqual(record['sdk_version'],'15.0')
             self.assertTrue(record['prepared_before_app_launch'])
             self.assertEqual(set(record['helpers']),{'query','quit'})
             self.assertTrue(all(len(row['source_sha256'])==len(row['binary_sha256'])==64 for row in record['helpers'].values()))
@@ -66,8 +71,11 @@ class MacWindowToolsContracts(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory);work=root/'work';work.mkdir();output=root/'proof';output.mkdir()
             compiler=root/'swiftc';compiler.write_bytes(b'compiler')
+            sdk=root/'MacOSX.sdk';sdk.mkdir()
             def command(arguments,environment,**kwargs):
-                if arguments[0]=='xcrun':return str(compiler)
+                if arguments[:2]==['xcrun','--find']:return str(compiler)
+                if arguments[-1]=='--show-sdk-path':return str(sdk)
+                if arguments[-1]=='--show-sdk-version':return '15.0'
                 if arguments[-1]=='--version':return 'fixture compiler'
                 raise RuntimeError('compiler failed before App launch')
             with patch.object(tools.sys,'platform','darwin'),patch.object(tools,'command',side_effect=command):
