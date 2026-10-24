@@ -115,7 +115,7 @@ class WindowsLoginContracts(unittest.TestCase):
         terminal=Terminal();records=[]
         self.assertIsNone(windows_console.read_terminal(terminal,ReadFailure,records.append))
         self.assertEqual(records[0],{'alive':False,'status':0,'iseof':True,'event':'read-error','error_type':'ReadFailure','error':''})
-        self.assertEqual(records[-1]['event'],'post-error-eof-readback')
+        self.assertEqual(records[-1]['event'],'read-error')
         for changes in [{'alive':True},{'status':None}]:
             terminal=Terminal()
             for key,value in changes.items():setattr(terminal,key,value)
@@ -129,43 +129,56 @@ class WindowsLoginContracts(unittest.TestCase):
         terminal.read=no_eof
         with self.assertRaises(ReadFailure):windows_console.read_terminal(terminal,ReadFailure)
 
-    def test_post_exit_empty_error_waits_only_for_bounded_authoritative_eof(self):
+    def test_broken_pipe_drains_trailing_chunks_and_consumes_sentinel_before_eof(self):
+        import io
+        class ReadFailure(Exception):pass
+        class Terminal:
+            eof=False
+            def __init__(self):self.chunks=iter(['LOCALIZED109','tail\x1b[31m','last','sentinel'])
+            def isalive(self):return False
+            def get_exitstatus(self):return 0
+            def iseof(self):return self.eof
+            def read(self,blocking):
+                value=next(self.chunks)
+                if value=='LOCALIZED109':raise ReadFailure(value)
+                if value=='sentinel':self.eof=True;raise ReadFailure('Standard out reached EOF')
+                return value
+        output=io.BytesIO();records=[]
+        windows_console.drain_terminal(Terminal(),ReadFailure,output,diagnostics=records.append,
+            broken_pipe_message='LOCALIZED109')
+        self.assertEqual(output.getvalue(),b'tail\x1b[31mlast')
+        self.assertEqual(records[0]['error'],'LOCALIZED109')
+        self.assertTrue(records[-1]['iseof'])
+        self.assertFalse(records[0]['iseof'])
+
+    def test_pending_drain_without_sentinel_rethrows_original_at_deadline(self):
+        import io
         from unittest.mock import patch
         class ReadFailure(Exception):pass
+        failure=ReadFailure('LOCALIZED109')
         class Terminal:
             count=0
             def isalive(self):return False
             def get_exitstatus(self):return 0
-            def iseof(self):self.count+=1;return self.count>=4
-            def read(self,blocking):raise ReadFailure('')
+            def iseof(self):return False
+            def read(self,blocking):
+                self.count+=1
+                if self.count==1:raise failure
+                return ''
         records=[]
-        with patch.object(windows_console.time,'sleep'):
-            self.assertIsNone(windows_console.read_terminal(Terminal(),ReadFailure,records.append,
-                windows_console.time.monotonic()+1))
-        self.assertFalse(records[0]['iseof'])
-        self.assertTrue(records[-1]['iseof'])
-        terminal=Terminal();terminal.iseof=lambda:False
-        records=[]
-        with self.assertRaises(ReadFailure):
-            windows_console.read_terminal(terminal,ReadFailure,records.append,
-                windows_console.time.monotonic()-1)
-        self.assertFalse(records[-1]['iseof'])
-
-        # Enter the pending state, then advance the deterministic clock beyond
-        # the deadline while authoritative EOF stays false.
-        terminal=Terminal();terminal.iseof=lambda:False;records=[]
-        failure=ReadFailure('')
-        def pending(blocking):raise failure
-        terminal.read=pending
-        with patch.object(windows_console.time,'monotonic',side_effect=[0,2]), \
+        with patch.object(windows_console.time,'monotonic',side_effect=[0,0,2]), \
                 patch.object(windows_console.time,'sleep') as sleep:
             with self.assertRaises(ReadFailure) as raised:
-                windows_console.read_terminal(terminal,ReadFailure,records.append,1)
+                windows_console.drain_terminal(Terminal(),ReadFailure,io.BytesIO(),timeout=1,
+                    diagnostics=records.append,broken_pipe_message='LOCALIZED109')
         self.assertIs(raised.exception,failure)
         sleep.assert_called_once_with(0.01)
-        self.assertFalse(records[0]['iseof'])
         self.assertFalse(records[-1]['iseof'])
-        self.assertEqual(records[-1]['event'],'post-error-eof-readback')
+        self.assertEqual(records[-1]['event'],'drain-deadline')
+        terminal=Terminal();terminal.iseof=lambda:True
+        with patch.object(windows_console.time,'monotonic',side_effect=[0,2]):
+            with self.assertRaisesRegex(RuntimeError,'exceeded its bound'):
+                windows_console.drain_terminal(terminal,ReadFailure,io.BytesIO(),timeout=1)
 
     def test_live_or_unknown_shell_never_queries_synchronous_pipe_eof(self):
         class ReadFailure(Exception):pass

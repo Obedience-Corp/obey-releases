@@ -23,60 +23,71 @@ def find_backend(environment):
     return Path(backend.__file__).resolve()
 
 
-def read_terminal(terminal, read_error, diagnostics=None, eof_deadline=None):
-    def state():
-        alive = terminal.isalive()
-        status = terminal.get_exitstatus()
-        # The synchronous WinPTY reader may hold a blocking ReadFile on this
-        # pipe. A concurrent PeekNamedPipe/iseof can block and starve stdin.
-        # Live or unknown-status EOF is unobserved, never acceptance evidence.
-        eof = terminal.iseof() if alive is False and type(status) is int else None
-        return {'alive': alive, 'status': status, 'iseof': eof}
-    def drained(value):
-        return value['alive'] is False and type(value['status']) is int and value['iseof'] is True
-    before = state()
+def terminal_state(terminal):
+    alive = terminal.isalive()
+    status = terminal.get_exitstatus()
+    # Never peek a live synchronous pipe alongside its blocking reader.
+    eof = terminal.iseof() if alive is False and type(status) is int else None
+    return {'alive': alive, 'status': status, 'iseof': eof}
+
+
+def drained(value):
+    return value['alive'] is False and type(value['status']) is int and value['iseof'] is True
+
+
+def pending_eof(terminal, error, broken_pipe_message):
+    state = terminal_state(terminal)
+    messages = {'Standard out reached EOF', ''}
+    if broken_pipe_message: messages.add(broken_pipe_message)
+    return (str(error).strip() in messages and state['alive'] is False
+            and type(state['status']) is int)
+
+
+def read_terminal(terminal, read_error, diagnostics=None, broken_pipe_message=None):
+    before = terminal_state(terminal)
     if drained(before):
         if diagnostics: diagnostics(dict(before, event='drained-before-read'))
         return None
     try:
         chunk = terminal.read(blocking=False)
         if not chunk:
-            after = state()
+            after = terminal_state(terminal)
             if drained(after):
                 if diagnostics: diagnostics(dict(after, event='drained-after-empty-read'))
                 return None
         return chunk
     except read_error as error:
-        after = state()
+        after = terminal_state(terminal)
         if diagnostics:
             diagnostics(dict(after, event='read-error', error_type=type(error).__name__, error=str(error)))
-        # Pinned async NTSTATUS -> HRESULT.message() can yield an empty error.
-        # Only these two observed EOF forms with independently proven full EOF
-        # and actual shell exit are accepted; unrelated errors remain failures.
-        if str(error) in ('Standard out reached EOF', ''):
-            # The queued async reader error can be observed before its reader
-            # exit event/cleanup closes ConPTY output. Wait only for that proven
-            # post-exit transition, within the caller's existing drain deadline.
-            while (after['alive'] is False and type(after['status']) is int
-                    and not drained(after) and eof_deadline is not None
-                    and time.monotonic() < eof_deadline):
-                time.sleep(0.01)
-                after = state()
-            if diagnostics:
-                diagnostics(dict(after, event='post-error-eof-readback', error=str(error)))
-            if drained(after): return None
+        if pending_eof(terminal, error, broken_pipe_message) and drained(after):
+            return None
         raise
 
 
-def drain_terminal(terminal, read_error, stream, timeout=10, diagnostics=None):
+def drain_terminal(terminal, read_error, stream, timeout=10, diagnostics=None,
+                   broken_pipe_message=None, pending_error=None):
     deadline = time.monotonic() + timeout
     while True:
-        chunk = read_terminal(terminal, read_error, diagnostics, deadline)
-        if chunk is None: return
+        try:
+            chunk = read_terminal(terminal, read_error, diagnostics, broken_pipe_message)
+        except read_error as error:
+            if not pending_eof(terminal, error, broken_pipe_message): raise
+            if pending_error is None: pending_error = error
+            if diagnostics:
+                diagnostics(dict(terminal_state(terminal), event='pending-eof-drain', error=str(error)))
+            # The synchronous reader queues a read error before its None EOF
+            # sentinel. Polling EOF alone leaves that sentinel unconsumed.
+            chunk = ''
         if chunk:
             stream.write(chunk.encode('utf-8')); stream.flush()
         if time.monotonic() >= deadline:
+            if diagnostics:
+                diagnostics(dict(terminal_state(terminal), event='drain-deadline',
+                                 error=str(pending_error) if pending_error else None))
+            if pending_error is not None: raise pending_error
             raise RuntimeError('native PTY terminal output drain exceeded its bound')
+        if chunk is None: return
         time.sleep(0.01)
 
 
@@ -123,6 +134,9 @@ def pty_adapter(shell, status_path):
     def diagnostic(document):
         with Path(status_path + '.eof.jsonl').open('a', encoding='utf-8') as stream:
             stream.write(json.dumps(document) + '\n')
+    broken_pipe_message = ctypes.FormatError(109).strip()
+    if not broken_pipe_message: raise RuntimeError('Windows broken-pipe message unavailable')
+    pending_error = None
     decode = codecs.getincrementaldecoder('utf-8')()
     while terminal.isalive():
         available = wintypes.DWORD()
@@ -134,7 +148,12 @@ def pty_adapter(shell, status_path):
                 raise RuntimeError('WinPTY controller input closed before shell exit')
             text = decode.decode(value)
             if text: terminal.write(text)
-        chunk = read_terminal(terminal, WinptyError, diagnostic, time.monotonic() + 10)
+        try:
+            chunk = read_terminal(terminal, WinptyError, diagnostic, broken_pipe_message)
+        except WinptyError as error:
+            if not pending_eof(terminal, error, broken_pipe_message): raise
+            pending_error = error
+            break
         if chunk:
             sys.stdout.buffer.write(chunk.encode('utf-8')); sys.stdout.buffer.flush()
         time.sleep(0.01)
@@ -145,7 +164,8 @@ def pty_adapter(shell, status_path):
         raise RuntimeError('WinPTY shell exit status unavailable')
     # Drain every queued terminal chunk, not merely one final read. Only the
     # pinned dependency's exact EOF after proven shell exit ends this drain.
-    drain_terminal(terminal, WinptyError, sys.stdout.buffer, diagnostics=diagnostic)
+    drain_terminal(terminal, WinptyError, sys.stdout.buffer, diagnostics=diagnostic,
+                   broken_pipe_message=broken_pipe_message, pending_error=pending_error)
     return status
 
 
