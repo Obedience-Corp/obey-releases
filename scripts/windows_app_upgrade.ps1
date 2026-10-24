@@ -29,6 +29,10 @@ if ($mode -eq 'quit') {
     exit 0
 }
 if ($mode -notin @('restart', 'check-updates')) { throw 'Unknown App UI operation' }
+if ($mode -eq 'check-updates' -and $process.MainWindowHandle -ne 0) {
+    $native = & (Join-Path $PSScriptRoot 'windows_native_menu.ps1') -Window $process.MainWindowHandle.ToInt64() -OwnerPid $appId
+    if ($native.native_menu) { $native | ConvertTo-Json -Depth 4 -Compress; exit 0 }
+}
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 if ($process.MainWindowHandle -eq 0) { '{"invoked":false}'; exit 0 }

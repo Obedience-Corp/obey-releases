@@ -1,4 +1,4 @@
-param([string]$WindowColor, [string]$ReadyPath, [switch]$SlowUIA)
+param([string]$WindowColor, [string]$ReadyPath, [switch]$SlowUIA, [switch]$NativeMenu)
 $ErrorActionPreference = 'Stop'
 if ($env:CANDIDATE_NATIVE_DISPOSABLE -ne '1' -or $env:CANDIDATE_RUNNER_KIND -ne 'github-hosted') {
     throw 'Window integration requires a disposable hosted Windows runner'
@@ -6,7 +6,42 @@ if ($env:CANDIDATE_NATIVE_DISPOSABLE -ne '1' -or $env:CANDIDATE_RUNNER_KIND -ne 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 if ($WindowColor) {
-    if ($SlowUIA) {
+    if ($NativeMenu) {
+        $references = @(Get-ChildItem -LiteralPath (Join-Path $PSHOME 'ref') -Filter '*.dll' | ForEach-Object FullName)
+        $references += @([Windows.Forms.Form].Assembly.Location, [Windows.Forms.Message].Assembly.Location)
+        Add-Type -ReferencedAssemblies $references @'
+using System;
+using System.Runtime.InteropServices;
+using System.Windows.Forms;
+public class NativeMenuFixture : Form {
+    public string ResultPath;
+    public int Count;
+    private IntPtr Popup;
+    [DllImport("user32.dll")] static extern uint EnableMenuItem(IntPtr menu,uint item,uint flags);
+    [DllImport("user32.dll")] static extern IntPtr CreateMenu();
+    [DllImport("user32.dll")] static extern IntPtr CreatePopupMenu();
+    [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern bool AppendMenu(IntPtr menu,uint flags,UIntPtr id,string label);
+    [DllImport("user32.dll")] static extern bool SetMenu(IntPtr window,IntPtr menu);
+    [DllImport("user32.dll")] static extern bool DrawMenuBar(IntPtr window);
+    protected override void OnShown(EventArgs args) {
+        var bar=CreateMenu(); var popup=CreatePopupMenu(); Popup=popup;
+        if(bar==IntPtr.Zero || popup==IntPtr.Zero || !AppendMenu(popup,0,(UIntPtr)1234,"Check for app updates") ||
+           !AppendMenu(bar,0x10,(UIntPtr)popup,"&App") || !SetMenu(Handle,bar) || !DrawMenuBar(Handle))
+            throw new Exception("Cannot create actual Win32 menu fixture");
+        base.OnShown(args);
+    }
+    protected override void WndProc(ref Message message) {
+        if(message.Msg==0x111 && ((long)message.WParam & 0xffff)==1234) {
+            Count++; EnableMenuItem(Popup,1234,1);
+            System.IO.File.WriteAllText(ResultPath,"{\"pid\":"+System.Environment.ProcessId+",\"count\":"+Count+"}");
+        }
+        base.WndProc(ref message);
+    }
+}
+'@
+        $form = [NativeMenuFixture]::new()
+        $form.ResultPath = "$ReadyPath.menu.json"
+    } elseif ($SlowUIA) {
         # Supplying explicit references replaces Add-Type's normal framework
         # set. Preserve the installed PowerShell reference assemblies as well
         # as WinForms' runtime-only forwarded Message assembly.
@@ -36,7 +71,7 @@ public class SlowAccessibleFixture : Form {
     $form.Size = [Drawing.Size]::new(500, 400)
     $form.BackColor = [Drawing.Color]::FromName($WindowColor)
     $form.TopMost = $WindowColor -eq 'Blue'
-    if ($WindowColor -eq 'Red') {
+    if ($WindowColor -eq 'Red' -and -not $NativeMenu) {
         $menu = [Windows.Forms.MenuStrip]::new()
         $appMenu = [Windows.Forms.ToolStripMenuItem]::new('App')
         $check = [Windows.Forms.ToolStripMenuItem]::new('Check for app updates')
@@ -60,14 +95,15 @@ public class SlowAccessibleFixture : Form {
     exit 0
 }
 $children = @()
-function StartFixture($color, [switch]$blockUIA) {
-    $label = if ($blockUIA) { "$color-slow" } else { $color }
+function StartFixture($color, [switch]$blockUIA, [switch]$nativeMenu) {
+    $label = if ($blockUIA) { "$color-slow" } elseif ($nativeMenu) { "$color-native" } else { $color }
     $ready = Join-Path $env:RUNNER_TEMP "capture-fixture-$label.ready.json"
     $stdout = Join-Path $env:RUNNER_TEMP "capture-fixture-$label.stdout.log"
     $stderr = Join-Path $env:RUNNER_TEMP "capture-fixture-$label.stderr.log"
     # This is a GUI fixture: a hidden startup window can suppress its first show.
     $arguments = @('-NoProfile', '-STA', '-File', "`"$PSCommandPath`"", '-WindowColor', $color, '-ReadyPath', "`"$ready`"")
     if ($blockUIA) { $arguments += '-SlowUIA' }
+    if ($nativeMenu) { $arguments += '-NativeMenu' }
     $child = Start-Process (Get-Command pwsh).Source -WindowStyle Normal -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr -ArgumentList $arguments
     $script:children += $child
     $deadline = [DateTime]::UtcNow.AddSeconds(30)
@@ -118,6 +154,30 @@ try {
     while (-not (Test-Path $menuResult) -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 100 }
     $observed = Get-Content -Raw $menuResult | ConvertFrom-Json
     if ($observed.pid -ne $target.Id -or $observed.count -ne 1) { throw 'Menu action did not run exactly once in the owned fixture' }
+    $nativeTarget = StartFixture 'Red' -nativeMenu
+    $env:APP_UPGRADE_PID = $nativeTarget.Id.ToString()
+    $env:APP_UPGRADE_EXE = $nativeTarget.Path
+    $env:APP_UPGRADE_STARTED = '0'
+    $rejectedNative = InvokeMenuFixture 'native-stale'
+    if ($rejectedNative.code -eq 0 -or $rejectedNative.error -notmatch 'PID was reused') { throw 'Stale native menu identity was not refused' }
+    $env:APP_UPGRADE_STARTED = $nativeTarget.StartTime.ToUniversalTime().Ticks.ToString()
+    $nativeInvocation = InvokeMenuFixture 'native-owned'
+    if ($nativeInvocation.code -ne 0) { throw "Native menu helper failed: $($nativeInvocation.error)" }
+    $nativeResult = $nativeInvocation.output | ConvertFrom-Json
+    if (-not $nativeResult.invoked -or $nativeResult.method -ne 'owned Win32 menu bounds + SendInput' -or $nativeResult.root_pid -ne $nativeTarget.Id) { throw 'Actual Win32 menu did not use guarded real input' }
+    $nativeResultPath = Join-Path $env:RUNNER_TEMP 'capture-fixture-Red-native.ready.json.menu.json'
+    $deadline = [DateTime]::UtcNow.AddSeconds(5)
+    while (-not (Test-Path $nativeResultPath) -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 50 }
+    $actualNative = Get-Content -Raw $nativeResultPath | ConvertFrom-Json
+    if ($actualNative.pid -ne $nativeTarget.Id -or $actualNative.count -ne 1) { throw 'Actual Win32 menu action did not execute exactly once' }
+    $disabledNative = InvokeMenuFixture 'native-disabled'
+    if ($disabledNative.code -eq 0 -or $disabledNative.error -notmatch 'disabled') { throw 'Disabled native menu action was not refused' }
+    $stillOnce = Get-Content -Raw $nativeResultPath | ConvertFrom-Json
+    if ($stillOnce.count -ne 1) { throw 'Disabled native action unexpectedly ran' }
+    Write-Host "Actual Win32 menu proof: $($nativeInvocation.output)"
+    $nativeTarget.CloseMainWindow() | Out-Null
+    if (-not $nativeTarget.WaitForExit(5000)) { throw 'Native fixture did not close normally' }
+
     'PASS: stale menu identity refused; actual owned App menu action invoked once'
     $obscurer = StartFixture 'Blue'
     Start-Sleep -Milliseconds 500

@@ -240,18 +240,19 @@ def check_installed_b(package_format, binary, bundle, reference, expected_image,
     return {"appimage_sha256": sha256(binary)}
 
 
-def menu_update_check(process, binary, environment, identity):
+def menu_update_check(process, binary, environment, identity, output):
     return wait_until("actual owned App update menu", lambda: (
         value if (value := windows_query("check-updates", environment,
             APP_UPGRADE_PID=str(process.pid), APP_UPGRADE_EXE=str(binary),
-            APP_UPGRADE_STARTED=identity["started"])).get("invoked") else None), seconds=30)
+            APP_UPGRADE_STARTED=identity["started"],
+            APP_UPGRADE_MENU_DIAGNOSTICS=str(output / "native-menu.jsonl"))).get("invoked") else None), seconds=30)
 
 
 def offline_check_then_retry(process, binary, fixture, proxy, target, output, environment, report, identity):
     before_payload = tree(binary.parent)
     before_state = retained_state(fixture, environment)
     blocked_before = sum(row["outcome"] == "blocked" for row in proxy.snapshot()["requests"])
-    report["offline_menu_action"] = menu_update_check(process, binary, environment, identity)
+    report["offline_menu_action"] = menu_update_check(process, binary, environment, identity, output)
     def failure_window():
         frame = app.window_capture(process, target, output / "offline-check.png", environment)
         report["offline_window"] = frame
@@ -268,7 +269,7 @@ def offline_check_then_retry(process, binary, fixture, proxy, target, output, en
     report["offline_preserved_state"] = before_state
     report["proxy_after_failure"] = snapshot
     proxy.allow_release_tunnels()
-    report["same_pid_retry_action"] = menu_update_check(process, binary, environment, identity)
+    report["same_pid_retry_action"] = menu_update_check(process, binary, environment, identity, output)
     report["same_pid_retry_identity"] = identity
     report["offline_check_preserved_a"] = True
 
