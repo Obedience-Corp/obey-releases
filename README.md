@@ -763,3 +763,16 @@ current receipts/files and the original companion bytes/mtime. Cleanup is requir
 before `foreign_companion_manual_recovery_verified` can pass. This is bounded
 preservation and explicit manual recovery, not automatic foreign-file adoption,
 arbitrary uninstall, other-OS acceptance, consumer trust or useful licensed work.
+
+### Receipt corruption fixture qualification
+
+Automation CI also exercises a real Windows SQLite database, descriptor-bound
+byte/mtime restoration, and refusal to restore while an owned Installer-name
+process remains alive. Fixture executables and receipts are synthetic and never
+establish production package or App recovery. The helper requires no App or
+Installer process and no SQLite sidecars before backup, corruption or restoration.
+Its initial immutable read explicitly asserts this already-verified quiescence;
+normal live receipt readback keeps its existing read-only behavior. Recovered
+readback may record a zero-byte WAL and ephemeral shared index without removing
+them; any WAL transaction bytes remain a refusal. Packaged App corruption/retry
+acceptance requires a separate original native journey.

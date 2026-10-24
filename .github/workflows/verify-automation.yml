@@ -30,6 +30,7 @@ jobs:
           python tests/integration_windows_console.py
           python tests/integration_corrupt_integrations.py
           python tests/integration_foreign_companion.py
+          python tests/integration_corrupt_receipts.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -40,6 +41,7 @@ jobs:
             ${{ runner.temp }}/ordinary-console-proof/
             ${{ runner.temp }}/corrupt-integration-control/
             ${{ runner.temp }}/foreign-companion-control/
+            ${{ runner.temp }}/corrupt-receipt-control/
           if-no-files-found: ignore
   mac-window-tools:
     strategy:
