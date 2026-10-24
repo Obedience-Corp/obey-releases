@@ -5,7 +5,7 @@ on:
       failure_mode:
         description: Optional bounded transport failure and same-process retry (new-menu A required)
         type: choice
-        options: [none, offline-check]
+        options: [none, offline-check, signature-fallback]
         default: none
       installation_context:
         description: Redirected mechanism fixture, or Windows default-home relaunch acceptance
@@ -56,7 +56,7 @@ jobs:
             *) echo "default-home acceptance requires package_format=nsis" >&2; exit 64 ;;
           esac
           case "$FAILURE_MODE:$INSTALLATION_CONTEXT:$PACKAGE_FORMAT" in
-            none:*|offline-check:redirected:nsis) ;;
+            none:*|offline-check:redirected:nsis|signature-fallback:redirected:nsis) ;;
             *) echo "offline-check requires redirected NSIS-only selection" >&2; exit 64 ;;
           esac
       - uses: actions/checkout@v4

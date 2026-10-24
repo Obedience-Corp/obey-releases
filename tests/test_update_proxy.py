@@ -11,7 +11,7 @@ import unittest
 if os.environ.get("CANDIDATE_TEST_CONTAINER") != "1" or not Path("/.dockerenv").exists():
     raise RuntimeError("transport fixtures require Docker")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-from owned_update_proxy import UpdateProxy, PUBLIC_RELEASE_TARGETS
+from owned_update_proxy import UpdateProxy, SignatureFallbackProxy, PUBLIC_RELEASE_TARGETS
 
 
 def connect(proxy, target):
@@ -101,3 +101,25 @@ class ProxyContracts(unittest.TestCase):
             server.shutdown()
             server.server_close()
             thread.join(timeout=3)
+
+
+class SignatureProxyContracts(unittest.TestCase):
+    def test_transition_refuses_only_bad_feed_and_never_unselected_host(self):
+        proxy = SignatureFallbackProxy()
+        try:
+            self.assertEqual(proxy.targets, PUBLIC_RELEASE_TARGETS | {proxy.BAD_FEED_TARGET})
+            self.assertTrue(proxy._allow_request(proxy.BAD_FEED_TARGET, None))
+            proxy.block_bad_feed()
+            client, header = connect(proxy, proxy.BAD_FEED_TARGET)
+            with client:
+                self.assertIn(b"502", header)
+            client, header = connect(proxy, ("unselected.invalid", 443))
+            with client:
+                self.assertIn(b"403", header)
+            for target in PUBLIC_RELEASE_TARGETS:
+                self.assertTrue(proxy._allow_request(target, None))
+            self.assertEqual([r["outcome"] for r in proxy.snapshot()["requests"]], ["blocked", "denied"])
+        finally:
+            proxy.close()
+        with self.assertRaisesRegex(RuntimeError, "closed"):
+            proxy.block_bad_feed()

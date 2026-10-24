@@ -1085,3 +1085,24 @@ not claim optional plugin functionality. Default selected/idle validators remain
 strict; only this explicit profile permits the external companion. No App settings
 are preseeded: the normal first-launch check must complete and compatible tools
 must skip foreground repair. This does not establish licensed useful work.
+
+
+### Native signature rejection and configured-feed recovery
+
+The existing upgrade workflow's `failure_mode=signature-fallback` is restricted
+to redirected Windows NSIS and original public B9. A separate temporary A0.1.0
+test candidate compiles two HTTPS endpoints: the commit-addressed
+`tests/fixtures/updater-signature/bad-signature.json`, followed by immutable B9
+`latest.json`. This branch must never merge into App main or update stable.
+The first fixture points to unchanged B9 bytes with a genuine mismatched B2
+production signature. Native verification independently authenticates B9 and
+requires actual minisign rejection of the mismatch before launching A.
+
+The ordinary owned menu must show a signature-specific failed download and no
+Restart now offer. A's tree, process birth and retained component/user state must
+remain unchanged. The opaque CONNECT proxy then refuses only the first feed host,
+closing old tunnels; the same App's normal menu retry must use the configured
+valid fallback, install exact authenticated B9 and preserve state through reopen.
+Unrelated denials fail acceptance. TLS, production keys, immutable assets and
+complete candidate publication integrity remain unchanged. This proves verified
+retry recovery, not forced downgrade or arbitrary post-migration rollback.
