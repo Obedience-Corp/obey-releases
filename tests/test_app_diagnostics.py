@@ -113,11 +113,19 @@ class DiagnosticBoundaries(unittest.TestCase):
             self.assertFalse(report["original_candidate_accepted"])
 
     def test_default_failure_diagnostics_do_not_sign_or_copy_payloads(self):
+        self.check_default_diagnostic('festival')
+        self.check_default_diagnostic('festival-app-installer')
+
+    def check_default_diagnostic(self, installer_name):
         with tempfile.TemporaryDirectory() as name:
             root = Path(name)
             application, binary, output, capture, calls = self.diagnostic_fixture(root)
+            if binary.name != installer_name:
+                binary = binary.rename(binary.with_name(installer_name))
             with patch.object(mac, "capture", side_effect=capture), patch.object(mac, "crash_reports", return_value=[]):
-                report = mac.diagnose(application, root, output, {})
+                report = mac.diagnose(application, root, output, {}, installer_name=installer_name)
+            self.assertIn(installer_name, report['binaries'])
+            self.assertTrue(report['original_cli_bytes_unchanged'])
             self.assertFalse(any(arguments[0] == "ditto" or "--force" in arguments for arguments in calls))
             self.assertFalse(report["modified_copy_requested"])
             self.assertEqual(binary.read_bytes(), b"original signed bytes")

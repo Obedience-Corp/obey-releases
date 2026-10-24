@@ -114,10 +114,9 @@ def default_home_layout(home, environment):
     return home / ".obey/installer"
 
 
-def default_home_readback(binary, managed, environment):
+def default_home_readback(installer, managed, environment):
     """Read public sidecar resolution with the unchanged default environment."""
-    suffix = ".exe" if os.name == "nt" else ""
-    status = command([binary.parent / ("festival" + suffix), "--managed", "status", "--plugin", "obedience-corp/camp-app", "--json"], environment, json_output=True)
+    status = command([installer, "--managed", "status", "--plugin", "obedience-corp/camp-app", "--json"], environment, json_output=True)
     checked_status(status, managed)
     return {"installer_status": status, "selected_mtime_ns": {
         row["path"]: Path(row["path"]).stat().st_mtime_ns for row in checked_receipts(managed)["files"]}}
@@ -208,11 +207,11 @@ def nsis_reference(installer, destination, environment):
     return binaries[0].parent
 
 
-def check_nsis_payload(installed, reference):
+def check_nsis_payload(installed, reference, installer_name='festival'):
     expected = tree(reference)
     # NSIS plugin machinery is not an installed App payload.
     expected = {name: value for name, value in expected.items() if name.split(os.sep)[0] != "$PLUGINSDIR"}
-    if not {"festival-app.exe", "festival.exe", "festival-activity-engine.exe"} <= expected.keys():
+    if not {"festival-app.exe", installer_name + ".exe", "festival-activity-engine.exe"} <= expected.keys():
         raise ValueError("incomplete authenticated Windows reference payload")
     actual = tree(installed)
     if any(actual.get(name) != value for name, value in expected.items()):
@@ -220,7 +219,7 @@ def check_nsis_payload(installed, reference):
     return expected
 
 
-def check_installed_b(package_format, binary, bundle, reference, expected_image, version, environment):
+def check_installed_b(package_format, binary, bundle, reference, expected_image, version, environment, installer_name='festival'):
     if package_format == "dmg":
         if plistlib.loads((bundle / "Contents/Info.plist").read_bytes()).get("CFBundleShortVersionString") != version:
             raise ValueError("installed Mac version is not B")
@@ -229,7 +228,7 @@ def check_installed_b(package_format, binary, bundle, reference, expected_image,
         actual_version = command(["pwsh", "-NoProfile", "-Command", "(Get-Item -LiteralPath $env:APP_PROOF_EXE).VersionInfo.ProductVersion"], dict(environment, APP_PROOF_EXE=str(binary))).strip()
         if actual_version not in (version, version + ".0"):
             raise ValueError("installed Windows version is not B")
-        return check_nsis_payload(binary.parent, reference)
+        return check_nsis_payload(binary.parent, reference, installer_name)
     if package_format == "deb":
         if command(["dpkg-query", "-W", "-f=${Version}", "festival-app"], environment).strip() != version:
             raise ValueError("installed Debian version is not B")
@@ -298,8 +297,11 @@ def native(root, target, package_format, a_source, a_version, b_source, b_versio
     a = checked_public(root / "a", a_source, a_version)
     b = checked_public(root / "b", b_source, b_version)
     checked_upgrade_pair(a, b)
+    a_installer, b_installer = app.installer_basename(a), app.installer_basename(b)
+    suffix = '.exe' if target.endswith('windows-msvc') else ''
     output.mkdir()
     report = {"a_source": a_source, "a_version": a_version, "b_source": b_source, "b_version": b_version,
+              "a_installer_basename": a_installer, "b_installer_basename": b_installer,
               "target": target, "package_format": package_format, "installation_context": installation_context, "failure_mode": failure_mode,
               "default_home_relaunch_verified": False, "two_version_update_verified": False,
               "license_access_verified": False, "useful_first_use_verified": False, "consumer_trust_verified": False, "reboot_verified": False, "native_failure_recovery_verified": False}
@@ -329,7 +331,7 @@ def native(root, target, package_format, a_source, a_version, b_source, b_versio
         bundle = reference = None
         if package_format == "dmg":
             report["a_native_package"] = {"version": a_version, "target": target}
-            binary, _, _ = app.mac_install(root / "a/assets", a["targets"][target], work, environment, report["a_native_package"])
+            binary, _, _ = app.mac_install(root / "a/assets", a["targets"][target], work, environment, report["a_native_package"], a_installer)
             bundle = binary.parent.parent.parent
             expected = work / "reference-b"
             expected.mkdir()
@@ -390,7 +392,7 @@ def native(root, target, package_format, a_source, a_version, b_source, b_versio
         log = (output / "app.log").open("w")
         try:
             if default_managed is not None:
-                report["default_before"] = default_home_readback(binary, managed, environment)
+                report["default_before"] = default_home_readback(binary.parent / (a_installer + suffix), managed, environment)
             process = subprocess.Popen([str(binary)], env=environment, stdout=log, stderr=subprocess.STDOUT, start_new_session=os.name != "nt")
             report["a_pid"] = process.pid
             report["a_window"] = app.window_capture(process, target, output / "a.png", environment, **mac_options)
@@ -411,7 +413,7 @@ def native(root, target, package_format, a_source, a_version, b_source, b_versio
                 try:
                     value = check_installed_b(package_format, binary, bundle, reference,
                                               artifact(root / "b", b, target, ".AppImage") if package_format == "appimage" else None,
-                                              b_version, environment)
+                                              b_version, environment, b_installer)
                 except (ValueError, FileNotFoundError) as error:
                     report["pending_b_payload"] = str(error)
                     return None
@@ -423,7 +425,7 @@ def native(root, target, package_format, a_source, a_version, b_source, b_versio
             report["installed_payload_window"] = app.window_capture(process, target, output / "installed-before-quit.png", environment, **mac_options)
             if default_managed is not None:
                 wait_windows_setup(process, target, output, environment, report, "auto_restarted_b")
-                report["default_after_auto_restart"] = default_home_readback(binary, managed, environment)
+                report["default_after_auto_restart"] = default_home_readback(binary.parent / (b_installer + suffix), managed, environment)
             report["running_version_before_quit"] = b_version if package_format == "nsis" else a_version
             normal_quit(process, binary, bundle, target, environment, output, **mac_options)
             process = None
@@ -432,11 +434,11 @@ def native(root, target, package_format, a_source, a_version, b_source, b_versio
             report["reopened_pid"] = process.pid
             report["reopened_captures"] = []
             report["reopened_b_window"] = app.capture_startup(process, target, output, environment, report["reopened_captures"], "b-reopened", **mac_options)
-            report["reopened_b_payload"] = check_installed_b(package_format, binary, bundle, reference, artifact(root / "b", b, target, ".AppImage") if package_format == "appimage" else None, b_version, environment)
+            report["reopened_b_payload"] = check_installed_b(package_format, binary, bundle, reference, artifact(root / "b", b, target, ".AppImage") if package_format == "appimage" else None, b_version, environment, b_installer)
             report["after_reopen"] = retained_state(fixture, environment)
             if default_managed is not None:
                 wait_windows_setup(process, target, output, environment, report, "reopened_b")
-                report["default_after_reopen"] = default_home_readback(binary, managed, environment)
+                report["default_after_reopen"] = default_home_readback(binary.parent / (b_installer + suffix), managed, environment)
                 initial_mtimes = report["default_before"]["selected_mtime_ns"]
                 if any(report[key]["selected_mtime_ns"] != initial_mtimes for key in ("default_after_auto_restart", "default_after_reopen")):
                     raise ValueError("current selected executables were needlessly rewritten")

@@ -60,7 +60,8 @@ class Fixture:
         self.info = owned_file(self.path)
         source = Path(installer)
         owned_file(source)
-        if source.name != ('festival.exe' if os.name == 'nt' else 'festival') or source.samefile(self.path):
+        suffix = '.exe' if os.name == 'nt' else ''
+        if source.name not in ('festival' + suffix, 'festival-app-installer' + suffix) or source.samefile(self.path):
             raise ValueError('foreign fixture source must be the separate verified bundled Installer')
         self.original, self.foreign = self.path.read_bytes(), source.read_bytes()
         if sha(self.original) != rows[0]['hash'] or self.foreign == self.original:

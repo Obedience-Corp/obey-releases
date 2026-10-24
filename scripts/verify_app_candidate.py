@@ -86,9 +86,19 @@ def identity(tag, version, source):
         raise ValueError("App candidate tag must match version and source")
 
 
+def installer_basename(document):
+    """Select an explicit layout; field absence is the original v1 contract."""
+    if 'installer_basename' not in document:
+        return 'festival'
+    if document['installer_basename'] != 'festival-app-installer':
+        raise ValueError('unsupported App installer basename')
+    return document['installer_basename']
+
+
 def checked_manifest(document, version, source):
     if document.get("schema") != "festival-app-candidate/v1" or document.get("source_revision") != source or document.get("version") != version:
         raise ValueError("App candidate identity mismatch")
+    installer_basename(document)
     targets = document.get("targets", {})
     if set(targets) != set(TARGETS):
         raise ValueError("App candidates require exactly four targets")
@@ -181,7 +191,7 @@ def extract_app(archive, destination):
     return destination / "Festival App.app"
 
 
-def mac_install(directory, entries, temporary, environment, report):
+def mac_install(directory, entries, temporary, environment, report, installer_name='festival'):
     dmg = directory / next(item["name"] for item in entries if item["name"].endswith(".dmg"))
     archive = directory / next(item["name"] for item in entries if item["name"].endswith(".app.tar.gz"))
     authenticated = temporary / "authenticated"
@@ -219,7 +229,7 @@ def mac_install(directory, entries, temporary, environment, report):
     report["macos_minimum"] = info["LSMinimumSystemVersion"]
     report["mach_o"] = {}
     expected_arch = "arm64" if report["target"].startswith("aarch64") else "x86_64"
-    for name in ("festival-app", "festival", "festival-activity-engine"):
+    for name in ("festival-app", installer_name, "festival-activity-engine"):
         path = app / "Contents/MacOS" / name
         arches = command(["lipo", "-archs", path], environment).split()
         loads = command(["otool", "-l", path], environment)
@@ -413,12 +423,12 @@ def wait_fresh_setup(process, installer, managed, target, output, environment, r
     return result
 
 
-def extract_appimage_observers(appimage, temporary, environment):
+def extract_appimage_observers(appimage, temporary, environment, installer_name='festival'):
     """Extract authenticated CLI observers; never launch the extracted App."""
     subprocess.run([str(appimage), "--appimage-extract"], cwd=temporary, env=environment,
                    check=True, stdout=subprocess.DEVNULL, timeout=60)
     root = temporary / 'squashfs-root'
-    installers = [path for path in root.rglob('festival') if path.is_file() and os.access(path, os.X_OK)]
+    installers = [path for path in root.rglob(installer_name) if path.is_file() and os.access(path, os.X_OK)]
     if len(installers) != 1:
         raise ValueError('AppImage must bundle exactly one installer executable')
     return installers[0].parent, root
@@ -452,7 +462,9 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
         if not fresh_setup or public_root is None or existing_user != 'none' or login_shell_proof or missing_git_manual or target != 'x86_64-unknown-linux-gnu':
             raise ValueError('local guest requires an unseeded public Linux journey')
         guest_context.validate()
+    installer_name = installer_basename(document)
     report = {"source_revision": document["source_revision"], "version": document["version"], "target": target,
+              "installer_basename": installer_name,
               "runner_platform": native_platform(), "first_use_complete": False, "useful_first_use_verified": False, "native_failure_recovery_verified": False, "license_access_verified": False,
               "reboot_verified": False, "consumer_trust_verified": False, "two_version_update_verified": False, "native_packaging_launch_verified": False, "linux_package_mode": linux_package}
     output.mkdir()
@@ -543,7 +555,7 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
         verify_signature(directory / updater, directory / (updater + ".sig"), temporary, environment)
         report["production_updater_signature_verified"] = True
         if target.endswith("apple-darwin"):
-            binary, commands, resources = mac_install(directory, entries, temporary, environment, report)
+            binary, commands, resources = mac_install(directory, entries, temporary, environment, report, installer_name)
         elif target.endswith("windows-msvc"):
             install_path = Path(os.environ["LOCALAPPDATA"]) / "Festival App"
             if install_path.exists():
@@ -581,7 +593,7 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
             if appimage != directory / updater:
                 shutil.copyfile(directory / updater, appimage)
             appimage.chmod(0o755)
-            image_commands, extracted_root = extract_appimage_observers(appimage, temporary, environment)
+            image_commands, extracted_root = extract_appimage_observers(appimage, temporary, environment, installer_name)
             extracted_appimage = temporary / "squashfs-root/AppRun"
             if linux_package == "appimage":
                 # Extract only to inspect/probe the authenticated bundled CLI
@@ -605,7 +617,7 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
             from linux_window_events import Recorder
             window_events = Recorder(output, environment, report)
         suffix = ".exe" if target.endswith("windows-msvc") else ""
-        installer, activity = commands / ("festival" + suffix), commands / ("festival-activity-engine" + suffix)
+        installer, activity = commands / (installer_name + suffix), commands / ("festival-activity-engine" + suffix)
         for path in (binary, installer, activity):
             if not path.is_file():
                 raise ValueError("installed bundle is missing " + str(path))
@@ -809,7 +821,7 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
     except BaseException as error:
         report["failure"] = str(error)
         if target.endswith("apple-darwin") and (temporary / "installed/Festival App.app").exists():
-            report["mac_diagnostics"] = diagnose_mac_failure(temporary / "installed/Festival App.app", temporary, output, environment, allow_modified_copy=os.environ.get("APP_PROOF_MAC_ENTITLEMENT_DIAGNOSTIC") == "true")
+            report["mac_diagnostics"] = diagnose_mac_failure(temporary / "installed/Festival App.app", temporary, output, environment, allow_modified_copy=os.environ.get("APP_PROOF_MAC_ENTITLEMENT_DIAGNOSTIC") == "true", installer_name=installer_name)
         raise
     finally:
         cleanup_errors = []

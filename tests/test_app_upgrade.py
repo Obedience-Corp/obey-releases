@@ -185,6 +185,17 @@ class UpgradeContracts(unittest.TestCase):
                 upgrade.default_home_readback(Path("/app/festival-app.exe"), Path("/home/.obey/installer"), {})
             receipts.assert_not_called()
 
+    def test_fresh_readback_uses_supplied_private_installer_and_not_suite_sibling(self):
+        import verify_app_candidate as app
+        installer = Path('/app/festival-app-installer')
+        service = {'installed': True, 'loaded': True, 'socket_reachable': True, 'daemon_pid': 42}
+        with patch.object(upgrade, 'command', return_value={}) as invoked, patch.object(upgrade, 'checked_status'), \
+             patch.object(upgrade, 'checked_receipts', return_value={'files': []}), \
+             patch('verify_selected_components.checked_receipts', return_value={'files': []}), \
+             patch.object(app, 'command', return_value=service):
+            app.fresh_setup_readback(installer, Path('/managed'), {})
+        self.assertEqual(invoked.call_args.args[0][0], installer)
+
     def test_public_inputs_require_five_formats_and_both_checksum_contracts(self):
         with tempfile.TemporaryDirectory() as name:
             root = Path(name)
@@ -291,6 +302,15 @@ class UpgradeContracts(unittest.TestCase):
             (actual / "festival-app.exe").write_text("A")
             with self.assertRaisesRegex(ValueError, "authenticated B"):
                 upgrade.check_nsis_payload(actual, expected)
+            (actual / 'festival-app.exe').write_text('B')
+            for directory in (expected, actual):
+                (directory/'festival.exe').rename(directory/'festival-app-installer.exe')
+            upgrade.check_nsis_payload(actual, expected, 'festival-app-installer')
+            with self.assertRaisesRegex(ValueError, 'incomplete authenticated'):
+                upgrade.check_nsis_payload(actual, expected)
+            (actual/'festival-app-installer.exe').write_text('foreign')
+            with self.assertRaisesRegex(ValueError, 'authenticated B'):
+                upgrade.check_nsis_payload(actual, expected, 'festival-app-installer')
             with patch.object(upgrade, "command", return_value="header\n----------\nPath = ../escape\n") as command:
                 with self.assertRaisesRegex(ValueError, "unsafe NSIS"):
                     upgrade.nsis_reference(root / "B.exe", root / "extract", {})

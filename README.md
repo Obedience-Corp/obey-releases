@@ -95,7 +95,16 @@ boundary. No private implementation or private test source is checked out.
 
 Collect four **same-source, same-version** original builder directories, each
 containing its `candidate-<target>.json` and declared artifacts. Preserve those
-inventories. Use a fresh destination with the data-only collector:
+inventories.
+
+New App inventories declare `installer_basename: "festival-app-installer"`.
+All four targets must agree, and the collector preserves that field in the
+aggregate manifest. Historical v1 inventories without the field retain their
+original `festival` layout. Unknown names and mixed layouts are rejected.
+Native, updater and reboot checks use the declared private executable; they
+never select a coexisting system `festival` command as the App's Installer.
+
+Use a fresh destination with the data-only collector:
 
 ```sh
 python scripts/assemble_app_candidate.py --destination app-draft \

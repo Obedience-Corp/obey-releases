@@ -19,6 +19,20 @@ import verify_app_candidate as app
 
 
 class GuestAppControls(unittest.TestCase):
+    def test_debian_reboot_uses_manifest_layout_not_an_external_suite_command(self):
+        import app_upgrade_contract
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root/'config.json').write_text(json.dumps({'package': 'deb', 'source': 'a'*40, 'version': '0.1.1'}))
+            for document, name in [({}, 'festival'), ({'installer_basename': 'festival-app-installer'}, 'festival-app-installer')]:
+                with patch.object(app_upgrade_contract, 'checked_public', return_value=document) as checked:
+                    report = {}
+                    with guest.reboot_payload(root, {}, report) as (installer, binary):
+                        self.assertEqual(installer, Path('/usr/bin')/name)
+                        self.assertEqual(binary, Path('/usr/bin/festival-app'))
+                    checked.assert_called_once_with(root/'public', 'a'*40, '0.1.1')
+                    self.assertEqual(report['installer_basename'], name)
+
     def test_ssh_process_with_correct_display_is_not_a_local_session(self):
         state = {'session': {'Scope': 'session-c2.scope'}, 'environment': {'DISPLAY': ':0', 'XDG_SESSION_ID': 'c2'}}
         env = dict(state['environment'])
@@ -81,6 +95,7 @@ class GuestAppControls(unittest.TestCase):
         # Real isolated processes prove the cleanup contract; no App or provider
         # is emulated as a successful product journey.
         import verify_app_upgrade
+        import app_upgrade_contract
         actual_popen = subprocess.Popen
         foreign = actual_popen([sys.executable, '-c', 'import time; time.sleep(60)'])
         launched = []
@@ -91,7 +106,7 @@ class GuestAppControls(unittest.TestCase):
         try:
             with tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
-                (root / 'config.json').write_text('{"package":"deb"}')
+                (root / 'config.json').write_text(json.dumps({'package': 'deb', 'source': 'a'*40, 'version': '0.1.1'}))
                 (root / 'evidence/install').mkdir(parents=True)
                 selected = {'receipts': {}, 'selected_mtime_ns': {}}
                 (root / 'evidence/install/proof.json').write_text(json.dumps({'default_after_reopen': selected}))
@@ -99,6 +114,7 @@ class GuestAppControls(unittest.TestCase):
                 (root / 'persisted-after-install.json').write_text('{}')
                 output = root / 'reboot'
                 with patch.object(guest, 'local_context', return_value={}), \
+                     patch.object(app_upgrade_contract, 'checked_public', return_value={}), \
                      patch.object(guest, 'persisted_state', return_value={}), \
                      patch.object(app, 'fresh_setup_readback', return_value=selected), \
                      patch.object(app, 'wait_fresh_setup', side_effect=RuntimeError('expected startup failure')), \
@@ -147,6 +163,10 @@ class GuestAppControls(unittest.TestCase):
                 guest.persisted_state()
 
     def test_reboot_uses_original_image_and_discards_only_extracted_observers(self):
+        self.check_reboot_image('festival')
+        self.check_reboot_image('festival-app-installer')
+
+    def check_reboot_image(self, installer_name):
         import app_upgrade_contract
         import hashlib
         with tempfile.TemporaryDirectory() as directory:
@@ -157,11 +177,13 @@ class GuestAppControls(unittest.TestCase):
             image = root / 'public/assets/original.AppImage'
             # This fixture only emulates extraction; it cannot be presented as
             # actual product launch or production-signature evidence.
-            image.write_text('#!/bin/sh\n[ "$1" = --appimage-extract ] || exit 91\nmkdir -p squashfs-root/usr/bin\nprintf observer > squashfs-root/usr/bin/festival\nchmod 755 squashfs-root/usr/bin/festival\n')
+            image.write_text('#!/bin/sh\n[ "$1" = --appimage-extract ] || exit 91\nmkdir -p squashfs-root/usr/bin\nprintf observer > squashfs-root/usr/bin/{0}\nchmod 755 squashfs-root/usr/bin/{0}\n'.format(installer_name))
             image.chmod(0o755)
             original = image.read_bytes()
             digest = hashlib.sha256(original).hexdigest()
             document = {'targets': {guest.TARGET: [{'name': image.name, 'sha256': digest}]}}
+            if installer_name != 'festival':
+                document['installer_basename'] = installer_name
             def validate(*args):
                 if image.read_bytes() != original:
                     raise ValueError('public bytes changed')
@@ -172,6 +194,7 @@ class GuestAppControls(unittest.TestCase):
                 with guest.reboot_payload(root, {}, report) as (installer, binary):
                     self.assertEqual(binary, image)
                     self.assertEqual(installer.read_bytes(), b'observer')
+                    self.assertEqual(installer.name, installer_name)
                     self.assertNotEqual(binary.parent, installer.parent)
                     self.assertEqual(signature.call_args.args[:2], (image, image.with_name(image.name + '.sig')))
                 self.assertFalse(installer.exists())

@@ -85,10 +85,10 @@ def crash_reports(app, output):
     return records
 
 
-def diagnose(app, temporary, output, environment, allow_modified_copy=False):
+def diagnose(app, temporary, output, environment, allow_modified_copy=False, installer_name='festival'):
     report = {"diagnostic_only": True, "original_candidate_accepted": False, "binaries": {}}
     try:
-        for name in ("festival-app", "festival", "festival-activity-engine"):
+        for name in ("festival-app", installer_name, "festival-activity-engine"):
             binary = app / "Contents/MacOS" / name
             if binary.is_file():
                 report["binaries"][name] = {
@@ -102,9 +102,9 @@ def diagnose(app, temporary, output, environment, allow_modified_copy=False):
         report["execution_policy"] = capture(["log", "show", "--style", "compact", "--last", "5m", "--predicate", predicate], environment)
         report["crash_reports"] = crash_reports(app, output)
         report["modified_copy_requested"] = allow_modified_copy
-        original = app / "Contents/MacOS/festival"
-        if allow_modified_copy and "festival" in report["binaries"]:
-            signed = report["binaries"]["festival"]["codesign"]
+        original = app / "Contents/MacOS" / installer_name
+        if allow_modified_copy and installer_name in report["binaries"]:
+            signed = report["binaries"][installer_name]["codesign"]
             entitlements = plistlib.loads(signed.get("stdout", "").encode())
             filtered, removed = without_managed_browser_entitlements(entitlements)
             if not removed:
@@ -149,8 +149,8 @@ def diagnose(app, temporary, output, environment, allow_modified_copy=False):
     except Exception as error:
         report["diagnostic_error"] = str(error)
     finally:
-        original = app / "Contents/MacOS/festival"
-        if original.is_file() and "festival" in report["binaries"]:
-            report["original_cli_bytes_unchanged"] = hashlib.sha256(original.read_bytes()).hexdigest() == report["binaries"]["festival"]["sha256"]
+        original = app / "Contents/MacOS" / installer_name
+        if original.is_file() and installer_name in report["binaries"]:
+            report["original_cli_bytes_unchanged"] = hashlib.sha256(original.read_bytes()).hexdigest() == report["binaries"][installer_name]["sha256"]
         (output / "mac-diagnostics.json").write_text(json.dumps(report, indent=2) + "\n")
     return report

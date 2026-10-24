@@ -23,7 +23,7 @@ SQLITE_HEADER = b'SQLite format 3\0'
 
 def quiescent(environment):
     if os.name == 'nt':
-        script = "$ErrorActionPreference='Stop'; $rows=@(Get-CimInstance Win32_Process -Filter \"Name='festival.exe' OR Name='festival-app.exe'\" | Select-Object ProcessId,Name); ConvertTo-Json -InputObject $rows -Compress"
+        script = "$ErrorActionPreference='Stop'; $rows=@(Get-CimInstance Win32_Process -Filter \"Name='festival.exe' OR Name='festival-app.exe' OR Name='festival-app-installer.exe'\" | Select-Object ProcessId,Name); ConvertTo-Json -InputObject $rows -Compress"
         rows = json.loads(command(['pwsh', '-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script], environment))
         if not isinstance(rows, list):
             raise ValueError('invalid App/Installer process inventory')
@@ -36,7 +36,8 @@ def quiescent(environment):
                     name = (proc/'comm').read_text().strip()
                 except (FileNotFoundError, ProcessLookupError):
                     continue
-                if name in ('festival', 'festival-app'):
+                # Linux comm truncates executable names to 15 bytes.
+                if name in ('festival', 'festival-app', 'festival-app-installer'[:15]):
                     rows.append(name)
     if rows:
         raise ValueError('receipt fixture requires no running App or Installer process: '+json.dumps(rows))

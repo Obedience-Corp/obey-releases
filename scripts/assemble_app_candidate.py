@@ -8,13 +8,14 @@ import hashlib
 import json
 from pathlib import Path
 import shutil
-from verify_app_candidate import TARGETS, checked_manifest, checked_downloads, identity
+from verify_app_candidate import TARGETS, checked_manifest, checked_downloads, identity, installer_basename
 
 
 def assemble(directories, destination):
     if len(directories) != 4:
         raise ValueError("requires four builder inventory directories")
     source = version = None
+    installer_name = None
     targets = {}
     inputs = {}
     for root in directories:
@@ -22,6 +23,11 @@ def assemble(directories, destination):
         if len(inventories) != 1:
             raise ValueError("requires exactly one original builder inventory per directory")
         document = json.loads(inventories[0].read_text())
+        current_installer = installer_basename(document)
+        if installer_name is None:
+            installer_name = current_installer
+        elif current_installer != installer_name:
+            raise ValueError('cannot combine builds with different installer layouts')
         target = document.get("target")
         if target not in TARGETS or target in targets:
             raise ValueError("unknown or duplicate builder target")
@@ -47,6 +53,8 @@ def assemble(directories, destination):
         targets[target] = entries
     document = {"schema": "festival-app-candidate/v1", "source_revision": source, "version": version, "targets": targets,
                 "provenance": "Original reviewed builder inventories; App binaries do not embed Git revision"}
+    if installer_name != 'festival':
+        document['installer_basename'] = installer_name
     identity(f"candidate-app-v{version}-{source[:8]}", version, source)
     files = checked_manifest(document, version, source)
     destination.mkdir()

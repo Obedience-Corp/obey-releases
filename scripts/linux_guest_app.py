@@ -292,13 +292,16 @@ def package_kind(root):
 
 @contextmanager
 def reboot_payload(root, environment, report):
-    if package_kind(root) == 'deb':
-        yield Path('/usr/bin/festival'), Path('/usr/bin/festival-app')
-        return
+    package = package_kind(root)
     from app_upgrade_contract import checked_public
     import verify_app_candidate as app
     config = json.loads((root / 'config.json').read_text())
     document = checked_public(root / 'public', config['source'], config['version'])
+    installer_name = app.installer_basename(document)
+    report['installer_basename'] = installer_name
+    if package == 'deb':
+        yield Path('/usr/bin') / installer_name, Path('/usr/bin/festival-app')
+        return
     entries = document['targets'][TARGET]
     name = next(item['name'] for item in entries if item['name'].endswith('.AppImage'))
     binary = root / 'public/assets' / name
@@ -307,10 +310,10 @@ def reboot_payload(root, environment, report):
     with tempfile.TemporaryDirectory(prefix='reboot-observers-', dir=root / 'temporary') as temporary:
         temporary = Path(temporary)
         app.verify_signature(binary, binary.with_name(name + '.sig'), temporary, environment)
-        commands, _ = app.extract_appimage_observers(binary, temporary, environment)
+        commands, _ = app.extract_appimage_observers(binary, temporary, environment, installer_name)
         report['original_appimage'] = {'path': str(binary), 'sha256': next(item['sha256'] for item in entries if item['name'] == name),
                                       'production_signature_verified': True, 'extracted_app_executed': False}
-        yield commands / 'festival', binary
+        yield commands / installer_name, binary
         # Revalidate the complete immutable download after actual launch/quit.
         checked_public(root / 'public', config['source'], config['version'])
         report['original_appimage']['unchanged_after_reboot_launch'] = True
