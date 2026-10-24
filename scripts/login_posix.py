@@ -46,7 +46,8 @@ def probe_script(fixture, tool, marker, arguments):
     # Resolve the command builtin's external dispatch in a subshell. Removing
     # only the wrapper there preserves the parent invocation and, unlike a
     # forced PATH search, includes an existing shell command-hash override.
-    resolver = f'(builtin unset -f {quoted}; builtin command -v {quoted})'
+    resolver = (f'(if builtin typeset -f {quoted} >/dev/null 2>&1; '
+                f'then builtin unset -f {quoted} || exit 96; fi; builtin command -v {quoted})')
     return (
         f"printf '%s\\n' '{marker}_PROFILE'; {fixture['function']} || exit 91; "
         f"printf '%s\\n' '{marker}_PATH'; {resolver} || exit 92; "
