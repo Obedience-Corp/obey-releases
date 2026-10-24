@@ -452,3 +452,13 @@ fresh0.2.3 scenario retains its strict Windows discovery-log assertion.
 The Windows offline retry verifier uses UIAutomation for managed MenuStrip controls and guarded real pointer input for a Win32 native menu. Native interaction requires the exact owned PID/path/start identity, exact enabled App → Check for app updates labels, owned foreground window, valid menu bounds and an unobscured owned point. It sends no command ID or application event; actual request/proxy failure, unchanged A and same-PID recovery remain independently required. Pointer position is restored and native-menu stage metadata is retained. The disposable fixture includes an actual SetMenu/WM_COMMAND receiving window as well as the previous MenuStrip control; stale identities must fail before input.
 
 The native bounds contract follows Microsoft's [GetMenuItemRect](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getmenuitemrect): popup rectangles are meaningful only after display, and a null HWND resolves the popup menu window. The verifier waits for the displayed popup and independently rejects an input point belonging to another process.
+
+Existing-user setup proof records user preferences separately from App lifecycle
+bookkeeping. An older idle migration must preserve preferences and foreign files,
+replace both old Obey commands, restart the idle daemon, and record matching setup
+completion/update-check timestamps within the observed setup window. A current
+installation and a normal reopen must preserve lifecycle timestamps as well as
+receipts, executable mtimes, service PID and service unit. Raw settings observations
+are retained even when validation fails. Public App inputs are fetched anonymously
+once per workflow matrix and revalidated on each native runner before execution;
+no authenticated API fallback is introduced.

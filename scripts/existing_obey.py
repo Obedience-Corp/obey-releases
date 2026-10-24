@@ -84,12 +84,51 @@ def seed(root, installer, managed, target, environment, output, report, scenario
             raise ValueError('historical runtime version/platform mismatch')
         report['historical_runtime'] = info
         command([obey, 'service', 'install'], environment, timeout=120)
-    fixture['settings']['lastUpdateCheckAt'] = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
-    fixture['settings_path'].write_text(json.dumps(fixture['settings'], indent=2) + '\n')
+    # Lifecycle bookkeeping is not a user preference. Keep the recent check in
+    # the original evidence and validate its transition separately below.
+    settings = dict(fixture['settings'], lastUpdateCheckAt=utc_now())
+    fixture['settings_path'].write_text(json.dumps(settings, indent=2) + '\n')
+    fixture['settings_evidence'] = output / 'existing-settings.jsonl'
     version = '0.2.2' if scenario == 'older-idle' else PACKAGES[OBEY]
     report['existing_before'] = wait_until('seeded idle existing user',
         lambda: ready_readback(fixture, installer, environment, version), seconds=120)
+    before = report['existing_before']
+    elapsed = utc_time(before['observed_at']) - utc_time(before['lifecycle']['lastUpdateCheckAt'])
+    if not 0 <= elapsed.total_seconds() < 24 * 60 * 60:
+        raise ValueError('existing fixture did not seed a recent background check')
     return fixture
+
+
+def utc_now():
+    return datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+
+
+def utc_time(value):
+    if not isinstance(value, str):
+        raise ValueError('missing lifecycle UTC timestamp')
+    result = datetime.strptime(value, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc)
+    if result.strftime('%Y-%m-%dT%H:%M:%SZ') != value:
+        raise ValueError('invalid lifecycle UTC timestamp')
+    return result
+
+
+def settings_readback(fixture):
+    path = fixture['settings_path']
+    if path.is_symlink() or not path.is_file():
+        raise ValueError('existing settings must remain a regular file')
+    actual = json.loads(path.read_text())
+    observed_at = utc_now()
+    # Preserve the actual settings even when the following assertion rejects
+    # them, so a failed native proof can distinguish lost preferences from
+    # legitimate setup bookkeeping without guessing from a stack trace.
+    with fixture['settings_evidence'].open('a') as stream:
+        stream.write(json.dumps({'observed_at': observed_at, 'settings': actual}) + '\n')
+    preserved = verify_persisted(fixture['snapshot'], path, fixture['settings'])
+    lifecycle = {key: actual.get(key) for key in ('lastUpdateCheckAt', 'setupCompletedAt')}
+    utc_time(lifecycle['lastUpdateCheckAt'])
+    if lifecycle['setupCompletedAt'] is not None:
+        utc_time(lifecycle['setupCompletedAt'])
+    return actual, preserved, lifecycle, observed_at
 
 
 def ready_readback(fixture, installer, environment, version):
@@ -106,18 +145,18 @@ def ready_readback(fixture, installer, environment, version):
     sessions = command([obey, 'session', 'list', '--campaign', fixture['camp_id'], '--json'], environment, json_output=True)
     if sessions not in ([], None):
         raise ValueError('idle migration fixture unexpectedly contains sessions')
-    preserved = verify_persisted(fixture['snapshot'], fixture['settings_path'], fixture['settings'])
+    settings, preserved, lifecycle, observed_at = settings_readback(fixture)
     camps = command([fixture['camp'], 'list', '--format', 'json'], environment, json_output=True)
     if not any(row['id'] == fixture['camp_id'] and Path(row['path']).resolve() == fixture['fixture'].resolve() for row in camps):
         raise ValueError('existing user lost registered camp')
-    settings = json.loads(fixture['settings_path'].read_text())
     unit = Path(state['unit_path'])
     if unit.is_symlink() or not unit.is_file() or not unit.resolve().is_relative_to(Path.home().resolve()):
         raise ValueError('existing-user service unit is not an owned regular file')
     unit_state = {'path': str(unit), 'sha256': hashlib.sha256(unit.read_bytes()).hexdigest(), 'mtime_ns': unit.stat().st_mtime_ns}
     return {'receipts': selected, 'mtimes': {row['path']: Path(row['path']).stat().st_mtime_ns for row in selected['files']},
             'service': state, 'installer_status': status, 'preserved': preserved,
-            'unit': unit_state, 'sessions': sessions, 'pending_obey_restart': settings.get('pendingObeyRestart', False)}
+            'unit': unit_state, 'sessions': sessions, 'pending_obey_restart': settings.get('pendingObeyRestart', False),
+            'lifecycle': lifecycle, 'observed_at': observed_at}
 
 
 def compare(before, after, scenario):
@@ -132,9 +171,15 @@ def compare(before, after, scenario):
             if before['mtimes'][row['path']] != after['mtimes'][row['path']]:
                 raise ValueError('current selected executable was needlessly rewritten')
     if scenario == 'current':
+        if before['lifecycle'] != after['lifecycle']:
+            raise ValueError('current setup needlessly changed lifecycle timestamps')
         if before['receipts'] != after['receipts'] or before['service']['daemon_pid'] != after['service']['daemon_pid'] or before['unit'] != after['unit']:
             raise ValueError('current setup changed receipts or restarted the daemon')
     else:
+        completed = utc_time(after['lifecycle']['setupCompletedAt'])
+        checked = utc_time(after['lifecycle']['lastUpdateCheckAt'])
+        if not (utc_time(before['observed_at']) <= completed == checked <= utc_time(after['observed_at'])):
+            raise ValueError('migration completion timestamps do not match the observed setup window')
         if before['service']['daemon_pid'] == after['service']['daemon_pid']:
             raise ValueError('idle migration left the old daemon running')
         old = {row['path']: row['hash'] for row in before['receipts']['files'] if row['receipt_pkg_id'] == OBEY}
