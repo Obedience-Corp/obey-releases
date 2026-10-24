@@ -157,6 +157,20 @@ jobs:
             -e HOME=/tmp -e GTK_MODULES=atk-bridge \
             -v "$PWD:/src:ro" -w /src obey-release-ubuntu-ui:local \
             dbus-run-session -- xvfb-run -a /usr/bin/python3 -W error::ResourceWarning tests/integration_linux_webkit_retry.py
+      - name: Check public daemon Camp import before one session creation
+        shell: bash
+        run: |
+          docker run --rm --read-only --user 10001:10001 --tmpfs /tmp:rw,exec,size=768m,mode=1777 \
+            -e CANDIDATE_TEST_CONTAINER=1 -e PYTHONDONTWRITEBYTECODE=1 \
+            -v "$PWD:/src:ro" -w /tmp obey-release-ubuntu-ui:local \
+            /usr/bin/python3 -W error::ResourceWarning /src/tests/integration_service_campaign_ready.py \
+            | tee "$RUNNER_TEMP/service-campaign-ready-control.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: linux-service-campaign-ready-control
+          path: ${{ runner.temp }}/service-campaign-ready-control.log
+          if-no-files-found: warn
       - name: Check exact lifecycle argv against actual released Obey
         shell: bash
         run: |

@@ -145,3 +145,86 @@ class ServiceRecoveryContracts(unittest.TestCase):
             self.assertEqual(client.lifecycle_events('old'), {'events': []})
         quiet.assert_called_once_with([client.obey, '--no-color', 'session', 'events', 'old',
             '--campaign', 'camp', '--kind', 'session_status_changed', '--limit', '100', '--json'], {}, json_output=True)
+
+    def test_quiet_failure_retains_only_fixed_metadata_and_canonical_grpc_tokens(self):
+        result = subprocess.CompletedProcess([], 1, 'PRIVATE MODEL OUTPUT',
+            'rpc error: code = NotFound desc = PRIVATE MODEL OUTPUT; rpc error: code = SecretToken')
+        with patch.object(active_session.subprocess, 'run', return_value=result):
+            with self.assertRaises(active_session.SessionOperationFailure) as caught:
+                active_session.quiet(['secret argument'], {})
+        self.assertEqual(caught.exception.diagnostics['returncode'], 1)
+        self.assertEqual(caught.exception.diagnostics['canonical_grpc_codes'], ['NotFound'])
+        self.assertNotIn('PRIVATE', str(caught.exception))
+        self.assertNotIn('PRIVATE', str(caught.exception.diagnostics))
+        self.assertNotIn('secret argument', str(caught.exception))
+
+    def campaign_database(self):
+        import sqlite3
+        from contextlib import closing
+        database = self.root/'daemon.db'
+        with closing(sqlite3.connect(database)) as connection:
+            connection.execute('create table campaigns(id text, path text)')
+            connection.commit()
+        camp = self.root/'camp'; camp.mkdir()
+        return database, camp
+
+    def test_readonly_campaign_identity_path_absence_and_ambiguity(self):
+        import sqlite3
+        from contextlib import closing
+        database, camp = self.campaign_database()
+        self.assertIsNone(recovery.campaign_readiness(database, 'expected', camp))
+        with closing(sqlite3.connect(database)) as connection:
+            connection.execute('insert into campaigns values (?,?)', ('expected', str(camp)))
+            connection.commit()
+        self.assertEqual(recovery.campaign_readiness(database, 'expected', camp)['matching_rows'], 1)
+        with self.assertRaises(ValueError): recovery.campaign_readiness(database, 'expected', self.root/'foreign')
+        with closing(sqlite3.connect(database)) as connection:
+            connection.execute('insert into campaigns values (?,?)', ('expected', str(camp)))
+            connection.commit()
+        with self.assertRaises(ValueError): recovery.campaign_readiness(database, 'expected', camp)
+        link = self.root/'linked.db'; link.symlink_to(database)
+        with self.assertRaises(ValueError): recovery.campaign_readiness(link, 'expected', camp)
+        missing = self.root/'absent.db'
+        with self.assertRaises(FileNotFoundError): recovery.campaign_readiness(missing, 'expected', camp)
+        self.assertFalse(missing.exists())
+
+    def test_readiness_wait_observes_actual_row_arrival_without_session_retry(self):
+        import sqlite3
+        import threading
+        from contextlib import closing
+        database, camp = self.campaign_database()
+        failures = []
+        def ingest():
+            try:
+                with closing(sqlite3.connect(database)) as connection:
+                    connection.execute('insert into campaigns values (?,?)', ('expected', str(camp)))
+                    connection.commit()
+            except Exception as error:
+                failures.append(error)
+        timer = threading.Timer(.05, ingest); timer.start()
+        try:
+            record = {}
+            self.assertEqual(recovery.wait_campaign(database, 'expected', camp, record)['matching_rows'], 1)
+        finally:
+            timer.join(timeout=5)
+        self.assertFalse(failures)
+        self.assertTrue(record['database_read_only'])
+        self.assertTrue(record['observations'][-1]['matching_id_and_path'])
+
+    def test_failure_context_queries_are_failure_only_and_never_export_arguments(self):
+        fixture = recovery.Fixture.__new__(recovery.Fixture)
+        fixture.obey = self.root/'obey'; fixture.environment = {}; fixture.fixture = {'camp_id': 'camp', 'fixture': self.root}
+        fixture.database = self.root/'daemon.db'; fixture.report = {}
+        fixture.supervisor = Mock(return_value={'MainPID': 12})
+        fixture.provider_readiness = Mock(side_effect=RuntimeError('PRIVATE PROVIDER TEXT'))
+        with patch.object(active_session, 'quiet', return_value='ok'):
+            self.assertEqual(fixture.call('session', 'send', 'session', 'PRIVATE PROMPT'), 'ok')
+        fixture.supervisor.assert_not_called(); fixture.provider_readiness.assert_not_called()
+        failure = active_session.SessionOperationFailure(subprocess.CompletedProcess([], 1, '', 'rpc error: code = NotFound'))
+        with patch.object(active_session, 'quiet', side_effect=failure), patch.object(recovery.existing_obey, 'service', return_value={'installed': True}), patch.object(recovery, 'campaign_readiness', return_value=None):
+            with self.assertRaises(active_session.SessionOperationFailure):
+                fixture.call('session', 'create', '--agent', 'PRIVATE ARGUMENT')
+        self.assertEqual(fixture.report['cli_failure']['operation'], 'session/create')
+        self.assertEqual(fixture.report['failure_only_readiness']['campaign'], None)
+        self.assertEqual(fixture.report['failure_only_readiness']['provider'], {'query_failure_type': 'RuntimeError'})
+        self.assertNotIn('PRIVATE', str(fixture.report))

@@ -12,12 +12,28 @@ from verify_candidate import command
 from verify_selected_components import checked_receipts, checked_status
 
 
+class SessionOperationFailure(RuntimeError):
+    """Failure metadata without provider text, messages, paths or CLI arguments."""
+    def __init__(self, result):
+        super().__init__('real session CLI operation failed (output withheld); exit=' + str(result.returncode))
+        self.diagnostics = {'returncode': result.returncode}
+        for name in ('stdout', 'stderr'):
+            data = (getattr(result, name) or '').encode()
+            self.diagnostics[name + '_bytes'] = len(data)
+            self.diagnostics[name + '_sha256'] = hashlib.sha256(data).hexdigest()
+        allowed = {'OK', 'Canceled', 'Unknown', 'InvalidArgument', 'DeadlineExceeded', 'NotFound',
+                   'AlreadyExists', 'PermissionDenied', 'ResourceExhausted', 'FailedPrecondition',
+                   'Aborted', 'OutOfRange', 'Unimplemented', 'Internal', 'Unavailable', 'DataLoss', 'Unauthenticated'}
+        self.diagnostics['canonical_grpc_codes'] = sorted(set(re.findall(
+            r'rpc error: code = ([A-Za-z]+)\b', result.stderr or '')) & allowed)
+
+
 def quiet(arguments, environment, timeout=120, json_output=False):
     # Provider replies and session summaries must never reach exported logs.
     result = subprocess.run([str(item) for item in arguments], env=environment,
                             capture_output=True, text=True, timeout=timeout)
     if result.returncode:
-        raise RuntimeError('real session CLI operation failed (output withheld)')
+        raise SessionOperationFailure(result)
     return json.loads(result.stdout) if json_output else result.stdout
 
 

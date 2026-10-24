@@ -3,6 +3,7 @@
 The App is stopped by the caller before crash(). No session CLI is used between
 SIGKILL and systemd/socket recovery; service status is a read-only observer.
 """
+from contextlib import closing
 import hashlib
 import json
 import os
@@ -10,12 +11,13 @@ from pathlib import Path
 import select
 import signal
 import stat
+import sqlite3
 import time
 
 import active_provider
 import active_session as active
 import existing_obey
-from verify_candidate import command
+from verify_candidate import command, wait_until
 from verify_selected_components import checked_receipts, checked_status
 
 PROPERTIES = {'MainPID', 'NRestarts', 'ActiveState', 'SubState', 'Restart', 'FragmentPath'}
@@ -124,6 +126,40 @@ def checked_restart_event(document, session, camp):
                                       'old_status', 'new_status', 'sequence_number', 'timestamp')}
 
 
+def campaign_readiness(database, camp_id, camp_path):
+    """Read the published daemon repository; an empty UUID session list is insufficient."""
+    database, camp_path = Path(database), Path(camp_path)
+    if any(path.is_symlink() for path in [database, *database.parents]):
+        raise ValueError('daemon campaign database path contains a symbolic link')
+    before = database.stat()
+    if not stat.S_ISREG(before.st_mode) or before.st_uid != os.getuid() or before.st_nlink != 1:
+        raise ValueError('daemon campaign database is not exclusively owned')
+    with closing(sqlite3.connect(database.as_uri() + '?mode=ro', uri=True, timeout=2)) as connection:
+        connection.execute('pragma query_only=on')
+        rows = connection.execute('select id,path from campaigns where id=?', (camp_id,)).fetchall()
+    after = database.stat()
+    fields = ('st_dev', 'st_ino', 'st_mode', 'st_uid', 'st_gid', 'st_nlink')
+    if any(getattr(before, key) != getattr(after, key) for key in fields) or any(path.is_symlink() for path in [database, *database.parents]):
+        raise ValueError('daemon campaign database identity changed during read')
+    if not rows:
+        return None
+    if (len(rows) != 1 or rows[0][0] != camp_id or not isinstance(rows[0][1], str) or
+            not Path(rows[0][1]).is_absolute() or Path(rows[0][1]).resolve() != camp_path.resolve()):
+        raise ValueError('daemon campaign import has ambiguous or foreign identity/path')
+    return {'campaign_id': camp_id, 'canonical_path': str(camp_path.resolve()), 'matching_rows': 1}
+
+
+def wait_campaign(database, camp_id, camp_path, record):
+    observations = record['observations'] = []
+    def ready():
+        result = campaign_readiness(database, camp_id, camp_path)
+        observations.append({'matching_id_and_path': result is not None})
+        return result
+    result = wait_until('actual daemon import of fixture camp identity/path', ready, seconds=30)
+    record.update(result, database_read_only=True)
+    return result
+
+
 class Fixture(active.SessionClient):
     def __init__(self, root, installer, managed, target, environment, output, report):
         active_provider.require_isolation()
@@ -135,6 +171,34 @@ class Fixture(active.SessionClient):
         self.obey = self.managed/'bin/obey'
         self.session = self.new_session = None
         self.recovered = None
+
+    def call(self, *arguments, json_output=False):
+        try:
+            return super().call(*arguments, json_output=json_output)
+        except active.SessionOperationFailure as error:
+            allowed = {('session', value) for value in ('create', 'info', 'turns', 'send', 'stop', 'events')}
+            operation = '/'.join(arguments[:2]) if arguments[:2] in allowed else 'unknown'
+            self.report['cli_failure'] = dict(error.diagnostics, operation=operation)
+            context = self.report['failure_only_readiness'] = {}
+            probes = {'service': lambda: existing_obey.service(self.obey, self.environment),
+                      'supervisor': self.supervisor,
+                      'campaign': lambda: campaign_readiness(self.database, self.fixture['camp_id'], self.fixture['fixture']),
+                      'provider': self.provider_readiness}
+            for name, probe in probes.items():
+                try:
+                    context[name] = probe()
+                except Exception as problem:
+                    context[name] = {'query_failure_type': type(problem).__name__}
+            raise
+
+    def provider_readiness(self):
+        # Failure-only HTTP reads never generate text, load a model, or retry work.
+        models = self.provider.get('/api/tags').get('models', [])
+        matches = [row for row in models if row.get('name') == active_provider.MODEL and row.get('digest') == active_provider.MODEL_SHA]
+        return {'owned_process_pid': self.provider.process.pid,
+                'owned_process_exit': self.provider.process.poll(),
+                'runtime_version_matches': self.provider.get('/api/version') == {'version': active_provider.VERSION},
+                'pinned_model_matches': len(matches)}
 
     def seed(self):
         self.report['stage'] = 'qualify_owned_provider'
@@ -162,6 +226,12 @@ class Fixture(active.SessionClient):
         if f'ExecStart="{self.obey}" serve --daemon-mode\n' not in self.unit.read_text():
             raise ValueError('service unit does not launch the exact owned daemon')
         self.config_before = owned_regular(self.config)
+        self.database = Path(self.baseline['service']['socket_path']).parent/'daemon.db'
+        if self.database.parent != Path.home()/'.local/share/obey':
+            raise ValueError('service recovery requires the exact default daemon data directory')
+        self.report['stage'] = 'await_daemon_camp_ingestion'
+        wait_campaign(self.database, self.fixture['camp_id'], self.fixture['fixture'],
+                      self.report.setdefault('campaign_readiness', {}))
         self.report['stage'] = 'complete_initial_provider_work'
         self.session = self.create_session()
         self.turns = self.send(self.session, 1)
