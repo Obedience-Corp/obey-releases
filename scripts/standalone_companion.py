@@ -17,6 +17,11 @@ BINARY_SHA = 'bc0044606d1a6071b7d11d26e59709c0102c7368efce333d78eb98171583a873'
 SOURCE = 'f33d081e0ade7f1faaa739047025a3382fe900bb'
 
 
+def camp_config_directory(environment):
+    return (Path(environment['XDG_CONFIG_HOME'])/'obey/campaign'
+            if environment.get('XDG_CONFIG_HOME') else Path.home()/'.obey/campaign')
+
+
 def bind_state(bind, binary):
     info = bind.lstat()
     if (not stat.S_ISLNK(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1 or
@@ -84,7 +89,7 @@ class Fixture:
         self.optional.write_text('{"fixture":"unselected-user-plugin-config"}\n')
         self.watched = [self.binary, self.plugin/'receipt.json', self.preferences, self.optional]
         # These are actual CLI-created preexisting Camp files, not App-created proof.
-        config = Path.home()/'.config/camp'
+        config = camp_config_directory(self.environment)
         self.watched += [config/'registry.json', config/'starter.json', Path.home()/'campaigns/festival/.campaign/campaign.yaml']
         integration = command([self.bootstrap, '--managed', 'setup', 'integrations', '--enable', '--json'], self.environment, json_output=True)
         if not integration.get('ok') or integration['data'].get('ready') is not True:
