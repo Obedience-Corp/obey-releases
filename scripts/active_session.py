@@ -67,19 +67,8 @@ def process_identity(pid):
     return {'pid': pid, 'start_ticks': start, 'executable_sha256': digest}
 
 
-class Fixture:
-    def __init__(self, root, installer, managed, target, environment, output, report):
-        active_provider.require_isolation()
-        if target != 'x86_64-unknown-linux-gnu':
-            raise ValueError('live native App update proof currently requires Linux x64')
-        self.root, self.installer, self.managed = Path(root), Path(installer), Path(managed)
-        self.environment, self.output, self.report = environment, Path(output), report
-        self.provider = active_provider.Provider(self.root / 'active-provider', environment, report.setdefault('provider', {}))
-        self.obey = self.managed / 'bin/obey'
-        self.session = self.new_session = None
-        self.expect_pending = True
-        self.turns = []
-
+class SessionClient:
+    """Shared real-provider CLI calls; fixtures retain their own lifecycle validators."""
     def call(self, *arguments, json_output=False):
         flags = ['--json'] if json_output else []
         return quiet([self.obey, '--no-color', *arguments, *flags], self.environment, json_output=json_output)
@@ -107,6 +96,20 @@ class Fixture:
         self.session_info(session, 'SESSION_STATUS_RUNNING')
         self.provider.check_cpu()
         return rows
+
+
+class Fixture(SessionClient):
+    def __init__(self, root, installer, managed, target, environment, output, report):
+        active_provider.require_isolation()
+        if target != 'x86_64-unknown-linux-gnu':
+            raise ValueError('live native App update proof currently requires Linux x64')
+        self.root, self.installer, self.managed = Path(root), Path(installer), Path(managed)
+        self.environment, self.output, self.report = environment, Path(output), report
+        self.provider = active_provider.Provider(self.root / 'active-provider', environment, report.setdefault('provider', {}))
+        self.obey = self.managed / 'bin/obey'
+        self.session = self.new_session = None
+        self.expect_pending = True
+        self.turns = []
 
     def seed(self):
         self.provider.start()
