@@ -35,6 +35,16 @@ class GitRemovalPlanTests(unittest.TestCase):
         self.assertEqual(removal_plan('Remv git-lfs [3.4.1-1]\nRemv git [1:2.43.0-1]\n', before),
                          {'git': '1:2.43.0-1', 'git-lfs': '3.4.1-1'})
 
+    def test_observed_hosted_reverse_dependencies_require_exact_installed_versions(self):
+        before = {'gh': '2.102.0', 'git-lfs': '3.8.0', 'git-ftp': '1.6.0+dfsg-1',
+                  'ubuntu-server': '1.539.2', 'git': '1:2.55.0-0ppa1~ubuntu24.04.2'}
+        plan = ''.join(f'Remv {name} [{version}]\n' for name, version in before.items())
+        self.assertEqual(removal_plan(plan, before), before)
+        with self.assertRaises(ValueError):
+            removal_plan(plan.replace('2.102.0', '2.101.0'), before)
+        with self.assertRaises(ValueError):
+            removal_plan(plan + 'Remv unrelated [1]\n', dict(before, unrelated='1'))
+
     def test_foreign_change_install_duplicate_missing_and_version_mismatch_refused(self):
         with self.assertRaises(ValueError):
             removal_plan('Remv git-lfs [1]\n', {'git-lfs': '1'})
