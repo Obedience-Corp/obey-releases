@@ -534,5 +534,12 @@ console control asserts that same invocation contract.
 
 A Linux window timeout now retains bounded read-only per-window Map State and WM
 properties plus root window-manager properties and a post-probe PID/birth check.
-This is diagnostic evidence only: it never maps a window, signals a process,
-changes rendering settings or converts the original launch failure to success.
+These X queries never map a window or change rendering settings.
+After the original failure and a successful App PID/birth recheck, the fresh
+Linux workflow also records a native GDB stack. Attaching briefly pauses the
+owned App; a bounded debugger process detaches afterward. Init scripts, automatic
+binary scripts, remote debuginfo, locals and argument values are disabled. The
+record retains debugger errors and post-attach process identity/state/tracer
+checks. Native isolated fixtures exercise normal detach and debugger timeout,
+including a heartbeat proving that the child resumes. None of this changes the
+original launch failure to success or counts as useful first-use evidence.
