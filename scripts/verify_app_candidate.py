@@ -394,6 +394,17 @@ def wait_fresh_setup(process, installer, managed, target, output, environment, r
     return result
 
 
+def extract_appimage_observers(appimage, temporary, environment):
+    """Extract authenticated CLI observers; never launch the extracted App."""
+    subprocess.run([str(appimage), "--appimage-extract"], cwd=temporary, env=environment,
+                   check=True, stdout=subprocess.DEVNULL, timeout=60)
+    root = temporary / 'squashfs-root'
+    installers = [path for path in root.rglob('festival') if path.is_file() and os.access(path, os.X_OK)]
+    if len(installers) != 1:
+        raise ValueError('AppImage must bundle exactly one installer executable')
+    return installers[0].parent, root
+
+
 def native(directory, document, target, output, linux_package="both", fresh_setup=False, public_root=None, existing_user="none", login_shell_proof=False, missing_git_manual=False, login_shell_kind='default', guest_context=None):
     require_clean_host({"aarch64-apple-darwin": "macOS-arm64", "x86_64-apple-darwin": "macOS-x86_64", "x86_64-unknown-linux-gnu": "linux-x86_64", "x86_64-pc-windows-msvc": "windows-x86_64"}.get(target))
     if existing_user not in ("none", "older-idle", "current", "missing-companion", "corrupt-integrations", "foreign-companion", "corrupt-receipts") or existing_user != "none" and not fresh_setup:
@@ -412,8 +423,8 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
     if any(os.environ.get(name) for name in ("GH_TOKEN", "GITHUB_TOKEN")):
         raise RuntimeError("App native execution must not receive a draft credential")
     if guest_context is not None:
-        if not fresh_setup or public_root is None or existing_user != 'none' or login_shell_proof or missing_git_manual or target != 'x86_64-unknown-linux-gnu' or linux_package != 'both':
-            raise ValueError('local guest requires the unseeded public Linux Deb journey')
+        if not fresh_setup or public_root is None or existing_user != 'none' or login_shell_proof or missing_git_manual or target != 'x86_64-unknown-linux-gnu':
+            raise ValueError('local guest requires an unseeded public Linux journey')
         guest_context.validate()
     report = {"source_revision": document["source_revision"], "version": document["version"], "target": target,
               "runner_platform": native_platform(), "first_use_complete": False, "useful_first_use_verified": False, "native_failure_recovery_verified": False, "license_access_verified": False,
@@ -533,19 +544,18 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
                     raise ValueError("installed deb version mismatch")
                 report["deb_installed_version"] = installed_version
                 report["deb_install_with_dependency_resolution"] = True
-            appimage = temporary / updater
-            shutil.copyfile(directory / updater, appimage)
+            # The guest retains its original public download through reboot.
+            # Ordinary hosted proofs still own a temporary copy.
+            appimage = directory / updater if guest_context is not None and linux_package == 'appimage' else temporary / updater
+            if appimage != directory / updater:
+                shutil.copyfile(directory / updater, appimage)
             appimage.chmod(0o755)
-            subprocess.run([str(appimage), "--appimage-extract"], cwd=temporary, env=environment, check=True, stdout=subprocess.DEVNULL, timeout=60)
+            image_commands, extracted_root = extract_appimage_observers(appimage, temporary, environment)
             extracted_appimage = temporary / "squashfs-root/AppRun"
             if linux_package == "appimage":
                 # Extract only to inspect/probe the authenticated bundled CLI
                 # resources; the App itself launches the original image below.
-                extracted_root = temporary / "squashfs-root"
-                installers = [path for path in extracted_root.rglob("festival") if path.is_file() and os.access(path, os.X_OK)]
-                if len(installers) != 1:
-                    raise ValueError("AppImage must bundle exactly one installer executable")
-                binary, commands, resources = appimage, installers[0].parent, extracted_root
+                binary, commands, resources = appimage, image_commands, extracted_root
                 report["deb_install_exercised"] = False
             else:
                 binary, commands, resources = Path("/usr/bin/festival-app"), Path("/usr/bin"), Path("/usr/lib")

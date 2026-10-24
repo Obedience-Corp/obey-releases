@@ -91,6 +91,7 @@ class GuestAppControls(unittest.TestCase):
         try:
             with tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
+                (root / 'config.json').write_text('{"package":"deb"}')
                 (root / 'evidence/install').mkdir(parents=True)
                 selected = {'receipts': {}, 'selected_mtime_ns': {}}
                 (root / 'evidence/install/proof.json').write_text(json.dumps({'default_after_reopen': selected}))
@@ -144,6 +145,47 @@ class GuestAppControls(unittest.TestCase):
             settings.symlink_to(foreign)
             with patch.object(Path, 'home', return_value=home), self.assertRaisesRegex(RuntimeError, 'settings symlink'):
                 guest.persisted_state()
+
+    def test_reboot_uses_original_image_and_discards_only_extracted_observers(self):
+        import app_upgrade_contract
+        import hashlib
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'temporary').mkdir()
+            (root / 'public/assets').mkdir(parents=True)
+            (root / 'config.json').write_text(json.dumps({'package': 'appimage', 'source': 'a'*40, 'version': '0.1.1'}))
+            image = root / 'public/assets/original.AppImage'
+            # This fixture only emulates extraction; it cannot be presented as
+            # actual product launch or production-signature evidence.
+            image.write_text('#!/bin/sh\n[ "$1" = --appimage-extract ] || exit 91\nmkdir -p squashfs-root/usr/bin\nprintf observer > squashfs-root/usr/bin/festival\nchmod 755 squashfs-root/usr/bin/festival\n')
+            image.chmod(0o755)
+            original = image.read_bytes()
+            digest = hashlib.sha256(original).hexdigest()
+            document = {'targets': {guest.TARGET: [{'name': image.name, 'sha256': digest}]}}
+            def validate(*args):
+                if image.read_bytes() != original:
+                    raise ValueError('public bytes changed')
+                return document
+            report = {}
+            with patch.object(app_upgrade_contract, 'checked_public', side_effect=validate), \
+                 patch.object(app, 'verify_signature') as signature:
+                with guest.reboot_payload(root, {}, report) as (installer, binary):
+                    self.assertEqual(binary, image)
+                    self.assertEqual(installer.read_bytes(), b'observer')
+                    self.assertNotEqual(binary.parent, installer.parent)
+                    self.assertEqual(signature.call_args.args[:2], (image, image.with_name(image.name + '.sig')))
+                self.assertFalse(installer.exists())
+                self.assertEqual(image.read_bytes(), original)
+                self.assertTrue(report['original_appimage']['unchanged_after_reboot_launch'])
+                with self.assertRaisesRegex(ValueError, 'public bytes changed'):
+                    with guest.reboot_payload(root, {}, {}) as (_, binary):
+                        binary.write_bytes(b'changed during actual journey')
+
+    def test_appimage_selection_without_release_is_rejected_before_vm_start(self):
+        import linux_guest
+        with patch.object(linux_guest.linux_kvm, 'probe') as probe, self.assertRaisesRegex(ValueError, 'public App'):
+            linux_guest.prove(Path('/unused'), {}, app_package='appimage')
+        probe.assert_not_called()
 
 
 class Node:

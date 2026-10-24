@@ -801,3 +801,18 @@ execution or cleanup failure. This is a controlled manual-backup/relaunch journe
 not automatic database repair, an in-place Retry-button proof or a claim that
 customers already possess such a backup. Useful work, licensing, trust, reboot
 and broad failure recovery remain separate.
+
+The clean Linux VM workflow also accepts `app_package=appimage` with the immutable
+public App source/version. Each run starts a separate clean clone without a Debian
+App installation. The original authenticated download remains executable in the
+guest through actual reboot; temporary extraction supplies only bundled CLI
+observers. The App always launches from the original image. Before the reboot
+launch, public inventory/digests and the production signature are checked again.
+After launch/normal quit the retained public bytes must still match.
+
+This mode requires the App's automatic, descendant Git installation request and
+the ordinary OS password dialog. It cannot substitute the Deb Retry helper,
+extracted AppRun, a rendering override or preinstalled ecosystem tools. The same
+service-before-App, selected receipt/mtime and persisted setting checks apply
+after reboot. A successful run still requires original screen and state review;
+licensing, useful work and other-platform acceptance remain separate.

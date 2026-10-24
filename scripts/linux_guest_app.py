@@ -5,6 +5,7 @@ in the App environment, command arguments or public evidence. OS authorization
 remains normal sudo/polkit; the outer VM owns final machine disposal.
 """
 import argparse
+from contextlib import contextmanager, ExitStack
 import hashlib
 import json
 import os
@@ -12,6 +13,7 @@ import re
 from pathlib import Path
 import stat
 import subprocess
+import tempfile
 import time
 
 from verify_candidate import command, require_disposable, wait_until
@@ -200,6 +202,15 @@ class Context:
         Atspi.set_timeout(1000, 5000)
         command(['import', '-window', 'root', output / 'git-missing-desktop.png'], environment)
         request = pkexec_child(process.pid, missing_ok=True)
+        if request is None and binary.suffix == '.AppImage':
+            # The image runtime may own a child App process. Require the exact
+            # automatic descendant request; the Deb Retry helper authenticates
+            # a same-file executable and must not be weakened for this format.
+            def automatic_request():
+                if process.poll() is not None:
+                    raise RuntimeError('original AppImage exited before Git authorization')
+                return pkexec_child(process.pid, missing_ok=True)
+            request = wait_until('AppImage automatic Git request', automatic_request, seconds=45)
         if request is not None:
             # Initial setup already invokes prerequisites. While the OS dialog
             # is pending the Retry button correctly stays disabled. Do not
@@ -272,6 +283,39 @@ def responsive_readback(installer, managed, environment):
         return None
 
 
+def package_kind(root):
+    value = json.loads((root / 'config.json').read_text()).get('package', 'deb')
+    if value not in ('deb', 'appimage'):
+        raise ValueError('invalid guest App package')
+    return value
+
+
+@contextmanager
+def reboot_payload(root, environment, report):
+    if package_kind(root) == 'deb':
+        yield Path('/usr/bin/festival'), Path('/usr/bin/festival-app')
+        return
+    from app_upgrade_contract import checked_public
+    import verify_app_candidate as app
+    config = json.loads((root / 'config.json').read_text())
+    document = checked_public(root / 'public', config['source'], config['version'])
+    entries = document['targets'][TARGET]
+    name = next(item['name'] for item in entries if item['name'].endswith('.AppImage'))
+    binary = root / 'public/assets' / name
+    if not os.access(binary, os.X_OK):
+        raise RuntimeError('retained original AppImage lost executable permission')
+    with tempfile.TemporaryDirectory(prefix='reboot-observers-', dir=root / 'temporary') as temporary:
+        temporary = Path(temporary)
+        app.verify_signature(binary, binary.with_name(name + '.sig'), temporary, environment)
+        commands, _ = app.extract_appimage_observers(binary, temporary, environment)
+        report['original_appimage'] = {'path': str(binary), 'sha256': next(item['sha256'] for item in entries if item['name'] == name),
+                                      'production_signature_verified': True, 'extracted_app_executed': False}
+        yield commands / 'festival', binary
+        # Revalidate the complete immutable download after actual launch/quit.
+        checked_public(root / 'public', config['source'], config['version'])
+        report['original_appimage']['unchanged_after_reboot_launch'] = True
+
+
 def reboot_readback(root, output):
     import verify_app_candidate as app
     import verify_app_upgrade as upgrade
@@ -279,6 +323,7 @@ def reboot_readback(root, output):
     report = {'reboot_verified': False, 'useful_first_use_verified': False, 'consumer_trust_verified': False}
     output.mkdir()
     process = None
+    payloads = ExitStack()
     before = json.loads((root / 'evidence/install/proof.json').read_text())
     try:
         report['local_session'] = local_context(environment)
@@ -288,7 +333,7 @@ def reboot_readback(root, output):
             raise RuntimeError('App reboot proof did not cross an actual OS boot')
         report.update(previous_boot_id=old['boot_id'], boot_id=current)
         managed = Path.home() / '.obey/installer'
-        installer, binary = Path('/usr/bin/festival'), Path('/usr/bin/festival-app')
+        installer, binary = payloads.enter_context(reboot_payload(root, environment, report))
         report['before_app_launch'] = wait_until('installed user service returns after real reboot',
             lambda: responsive_readback(installer, managed, environment), seconds=90)
         report['persisted_before_launch'] = persisted_state()
@@ -322,6 +367,12 @@ def reboot_readback(root, output):
                 cleanup_error = error
                 report['cleanup_failure'] = str(error)
                 report['reboot_verified'] = False
+        try:
+            payloads.close()
+        except Exception as error:
+            cleanup_error = error
+            report['payload_cleanup_failure'] = str(error)
+            report['reboot_verified'] = False
         (output / 'proof.json').write_text(json.dumps(report, indent=2) + '\n')
         if cleanup_error is not None:
             raise RuntimeError('owned post-reboot App cleanup failed') from cleanup_error
@@ -358,7 +409,9 @@ def main():
             context = Context(root)
             (root / 'install-boot.json').write_text(json.dumps({'boot_id': Path('/proc/sys/kernel/random/boot_id').read_text().strip()}))
             app.native(root / 'public/assets', document, TARGET, output,
+                       linux_package='appimage' if package_kind(root) == 'appimage' else 'both',
                        fresh_setup=True, public_root=root / 'public', guest_context=context)
+            checked_public(root / 'public', config['source'], config['version'])
             (root / 'persisted-after-install.json').write_text(json.dumps(persisted_state(), indent=2))
         else:
             reboot_readback(root, output)
