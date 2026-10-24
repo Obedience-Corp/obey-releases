@@ -49,8 +49,7 @@ class UpdateProxy:
                         owner._record(("<unselected>", 0), "denied")
                         self.send_error(403, "Target outside owned release allowlist")
                         return
-                    with owner._lock:
-                        allowed = owner._allowed and not owner._closed
+                    allowed = owner._allow_request(target, self.client_address)
                     if not allowed:
                         owner._record(target, "blocked")
                         self.send_error(502, "Owned offline test fault")
@@ -97,6 +96,11 @@ class UpdateProxy:
             if self._closed:
                 raise RuntimeError("owned update proxy is closed")
             self._allowed = True
+
+    def _allow_request(self, target, peer):
+        """Original policy; specialized fixtures may additionally authenticate peer ownership."""
+        with self._lock:
+            return self._allowed and not self._closed
 
     def _record(self, target, outcome):
         with self._lock:

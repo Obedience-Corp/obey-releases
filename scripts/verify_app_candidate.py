@@ -434,8 +434,13 @@ def extract_appimage_observers(appimage, temporary, environment, installer_name=
     return installers[0].parent, root
 
 
-def native(directory, document, target, output, linux_package="both", fresh_setup=False, public_root=None, existing_user="none", login_shell_proof=False, missing_git_manual=False, login_shell_kind='default', guest_context=None):
+def native(directory, document, target, output, linux_package="both", fresh_setup=False, public_root=None, existing_user="none", login_shell_proof=False, missing_git_manual=False, login_shell_kind='default', guest_context=None, partial_install_retry=False):
     require_clean_host({"aarch64-apple-darwin": "macOS-arm64", "x86_64-apple-darwin": "macOS-x86_64", "x86_64-unknown-linux-gnu": "linux-x86_64", "x86_64-pc-windows-msvc": "windows-x86_64"}.get(target))
+    if partial_install_retry and (not fresh_setup or public_root is None or
+            target != 'x86_64-unknown-linux-gnu' or linux_package != 'both' or
+            existing_user != 'none' or login_shell_proof or missing_git_manual or
+            login_shell_kind != 'default' or guest_context is not None):
+        raise ValueError('partial install Retry requires unseeded public Linux Deb mode')
     if existing_user not in ("none", "older-idle", "older-active", "current", "missing-companion", "corrupt-integrations", "foreign-companion", "corrupt-receipts", "external-suite-old", "external-suite-minimum", "external-suite-current", "external-suite-mixed-fest") or existing_user != "none" and not fresh_setup:
         raise ValueError("existing-user scenario requires public default-home proof")
     if existing_user in ("corrupt-integrations", "foreign-companion") and target != "x86_64-pc-windows-msvc":
@@ -488,6 +493,8 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
     receipt_accessibility = None
     external_fixture = None
     active_fixture = None
+    partial_fixture = None
+    report['partial_selected_install_retry_verified'] = False
     report['active_session_update_verified'] = False
     report["corrupt_receipt_manual_recovery_verified"] = False
     report["foreign_companion_manual_recovery_verified"] = False
@@ -684,9 +691,17 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
             tools = mac_window_tools.prepare(temporary, output, environment)
             report['mac_window_tools'] = tools.identity
             mac_options['mac_tools'] = tools
+        app_environment = environment
+        if partial_install_retry:
+            import partial_setup
+            partial_fixture = partial_setup.Fixture(installer, default_managed, output, environment,
+                                                    report.setdefault('partial_selected_install', {}))
+            app_environment = partial_fixture.prepare()
         with (output / "app.log").open("w") as log:
-            process = subprocess.Popen([str(binary)], env=environment, stdout=log, stderr=subprocess.STDOUT, start_new_session=os.name != "nt")
+            process = subprocess.Popen([str(binary)], env=app_environment, stdout=log, stderr=subprocess.STDOUT, start_new_session=os.name != "nt")
             report["pid"] = process.pid
+            if partial_fixture is not None:
+                partial_fixture.bind(process, binary)
             def alive_window():
                 if process.poll() is not None:
                     raise RuntimeError("App exited before window capture: " + (output / "app.log").read_text())
@@ -696,6 +711,8 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
             if process.poll() is not None or not (output / "app.png").is_file() or (output / "app.png").stat().st_size == 0:
                 raise RuntimeError("App did not retain a live captured window")
             if fresh_setup:
+                if partial_fixture is not None:
+                    partial_fixture.fail_and_retry(lambda path: window_capture(process, target, path, environment))
                 if integration_fixture is not None:
                     def diagnosed():
                         if process.poll() is not None:
@@ -751,6 +768,8 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
                 if guest_context is not None:
                     guest_context.install_git(process, binary, installer, environment, output, report)
                 report["default_after_setup"] = wait_fresh_setup(process, installer, default_managed, target, output, environment, report, "fresh", external_suite=external_fixture, active_session=active_fixture, **mac_options)
+                if partial_fixture is not None:
+                    partial_fixture.preserved(report['default_after_setup'])
                 if active_fixture is not None:
                     active_fixture.after_update()
                 if receipt_fixture is not None:
@@ -772,6 +791,11 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
                 process = subprocess.Popen([str(binary)], env=environment, stdout=log, stderr=subprocess.STDOUT, start_new_session=os.name != "nt")
                 report["reopened_pid"] = process.pid
                 report["default_after_reopen"] = wait_fresh_setup(process, installer, default_managed, target, output, environment, report, "reopened", external_suite=external_fixture, active_session=active_fixture, **mac_options)
+                if partial_fixture is not None:
+                    partial_fixture.preserved(report['default_after_reopen'])
+                    if report['default_after_setup'] != report['default_after_reopen']:
+                        raise ValueError('partial Retry completed state changed on normal reopen')
+                    report['partial_selected_install_retry_verified'] = True
                 if receipt_fixture is not None:
                     report["receipt_database_after_reopen"] = receipt_fixture.healthy()
                     report["corrupt_receipt_manual_recovery_verified"] = True
@@ -836,6 +860,8 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
         actions = []
         if process is not None and process.poll() is None:
             actions.append(lambda: stop_owned(process, environment))
+        if partial_fixture is not None:
+            actions.append(partial_fixture.close)
         if integration_fixture is not None:
             def restore_owned_preferences():
                 if process is not None and process.poll() is None:
@@ -921,6 +947,7 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
         if cleanup_errors:
             report["cleanup_failure"] = cleanup_errors
         report["native_packaging_launch_verified"] = "failure" not in report and not cleanup_errors
+        report['partial_selected_install_retry_verified'] = report['partial_selected_install_retry_verified'] and report['native_packaging_launch_verified']
         report["fresh_default_setup_verified"] = report["fresh_default_setup_verified"] and report["native_packaging_launch_verified"]
         report["external_suite_compatibility_verified"] = report["external_suite_compatibility_verified"] and report["native_packaging_launch_verified"]
         report['active_session_update_verified'] = report['active_session_update_verified'] and report['native_packaging_launch_verified']
@@ -957,6 +984,7 @@ def main():
     parser.add_argument("--verify-login-shell", action="store_true")
     parser.add_argument('--login-shell', choices=('default', 'windows-powershell', 'zsh'), default='default')
     parser.add_argument('--verify-missing-git-manual', action='store_true')
+    parser.add_argument('--verify-partial-install-retry', action='store_true')
     parser.add_argument("--existing-user", choices=("none", "older-idle", "older-active", "current", "missing-companion", "corrupt-integrations", "foreign-companion", "corrupt-receipts", "external-suite-old", "external-suite-minimum", "external-suite-current", "external-suite-mixed-fest"), default="none")
     for name in ("version", "source"):
         parser.add_argument("--" + name, required=True)
@@ -967,6 +995,10 @@ def main():
     args = parser.parse_args()
     if args.verify_login_shell and (args.mode != "verify-fresh" or args.existing_user != "none"):
         raise ValueError("login shell proof requires unseeded verify-fresh")
+    if args.verify_partial_install_retry and (args.mode != 'verify-fresh' or args.target != 'x86_64-unknown-linux-gnu' or
+            args.linux_package != 'both' or args.existing_user != 'none' or args.verify_login_shell or
+            args.verify_missing_git_manual or args.login_shell != 'default'):
+        raise ValueError('partial install Retry requires unseeded public Linux Deb mode')
     if args.existing_user != "none" and args.mode != "verify-fresh":
         raise ValueError("existing-user scenarios require verify-fresh public inputs")
     if args.verify_missing_git_manual and (args.mode != 'verify-fresh' or args.target != 'x86_64-unknown-linux-gnu' or args.linux_package != 'both' or args.existing_user != 'none' or args.verify_login_shell):
@@ -982,7 +1014,7 @@ def main():
             fetch_public(args.directory, args.source, args.version)
         else:
             document = checked_public(args.directory, args.source, args.version)
-            native((args.directory / "assets").resolve(), document, args.target, args.output.resolve(), args.linux_package, fresh_setup=True, public_root=args.directory.resolve(), existing_user=args.existing_user, login_shell_proof=args.verify_login_shell, missing_git_manual=args.verify_missing_git_manual, login_shell_kind=args.login_shell)
+            native((args.directory / "assets").resolve(), document, args.target, args.output.resolve(), args.linux_package, fresh_setup=True, public_root=args.directory.resolve(), existing_user=args.existing_user, login_shell_proof=args.verify_login_shell, missing_git_manual=args.verify_missing_git_manual, login_shell_kind=args.login_shell, partial_install_retry=args.verify_partial_install_retry)
     elif args.mode == "fetch":
         fetch(args.tag, args.version, args.source, args.directory)
     else:

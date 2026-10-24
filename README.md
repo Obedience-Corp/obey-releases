@@ -988,3 +988,34 @@ must reach both markers. This control runs in its own step with an independent
 immediate exit-code check, so a broken wrapper cannot mask its own failed control. Controls use task-owned Python files to avoid legacy
 command-line quote handling. The5.1 CIM row decoder uses explicit array assignment
 and foreach rather than pipeline enumeration.
+
+## Published partial selected-package failure and same-process Retry
+
+`verify-app-fresh-setup.yml` accepts opt-in `verify_partial_install_retry=true`
+only with unseeded `platform_scope=deb`, normal login selection and no other
+journey flags. Default matrices are unchanged. This runs the authenticated public
+App and bundled Installer, not a mock or a privately rebuilt App.
+
+An owned loopback proxy tunnels original TLS to the public release hosts. For
+artifact-host requests it authenticates the client socket's exact Installer
+executable/known install argv and every App ancestry birth edge. Only the required
+companion's transport is blocked, after real Suite and Obey placement. Unknown,
+ambiguous, reused or unreadable ownership and unrelated denied hosts disqualify
+the proof. No endpoint, certificate, signed catalog, checksum or updater key is
+changed; no selected package is preseeded.
+
+The App's existing setup-report output must show the failed Install step, fresh
+facts, installed Suite/Obey, failed/missing required companion and the optional
+unselected Camp Graph row. Actual owned AT-SPI text and original screenshots are
+retained. The verifier opens transport and invokes one normal visible Retry in
+that exact failed row, while the same App PID/birth/executable remains alive.
+Retry must complete the required set and real companion protocol checks; earlier
+receipts and physical executable identities must remain exact, as must a foreign
+user note. Normal quit/reopen and service/fixture cleanup are independently checked.
+
+Container controls include actual GTK action/stale/ambiguous refusal on Debian
+and Ubuntu24, strict process/socket ownership negatives, and actual released
+Installer0.3.8 installation/fault/recovery on supported Linux x64. That component
+control is not native App acceptance; inspect the subsequently dispatched public
+App originals before setting the dedicated partial-retry flag. Licensing, useful
+App work, reboot and other-platform negative cases retain their separate scope.

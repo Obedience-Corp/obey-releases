@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 import linux_git_retry as retry
 import linux_receipt_ui as receipt_ui
 import corrupt_receipts as receipts
+import linux_setup_retry as setup_retry
 from linux_accessibility import ToolkitSetting
 import gi
 
@@ -35,6 +36,20 @@ if len(sys.argv) == 3 and sys.argv[1] == '--fixture':
         box.show_all()
     button.connect('clicked', clicked)
     box.pack_start(button, True, True, 0)
+    installs = Gtk.ListBox()
+    install_row = Gtk.ListBoxRow()
+    install_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+    for text in (setup_retry.LABEL, 'Failed', setup_retry.CODE):
+        install_box.pack_start(Gtk.Label(label=text), True, True, 0)
+    install_button = Gtk.Button(label='Retry')
+    def install_clicked(_):
+        Path(sys.argv[2]).with_name('install-clicked').write_text('normal Install Retry invoked\n')
+        install_box.pack_start(Gtk.Button(label='Retry'), True, True, 0)
+        install_box.show_all()
+    install_button.connect('clicked', install_clicked)
+    install_box.pack_start(install_button, True, True, 0)
+    install_row.add(install_box); installs.add(install_row)
+    box.pack_start(installs, True, True, 0)
     window.add(box)
     window.connect('destroy', Gtk.main_quit)
     window.show_all()
@@ -88,6 +103,25 @@ with tempfile.TemporaryDirectory() as temporary:
         assert observed.returncode == 0, observed.stderr
         observation = json.loads(observed.stdout)
         assert observation['pid'] == process.pid and observation['birth'] == birth
+        setup_helper = Path(setup_retry.__file__).resolve()
+        def setup_action(action, expected_birth=birth):
+            return subprocess.run([sys.executable, '-I', str(setup_helper), '--pid', str(process.pid),
+                                   '--birth', str(expected_birth), '--executable', sys.executable,
+                                   '--action', action], env=observer_environment,
+                                  capture_output=True, text=True, timeout=15)
+        inspected = setup_action('inspect')
+        assert inspected.returncode == 0, inspected.stderr
+        assert setup_retry.LABEL in json.loads(inspected.stdout)['row_text']
+        assert setup_action('retry', birth + 1).returncode != 0
+        assert not marker.with_name('install-clicked').exists()
+        invoked = setup_action('retry')
+        assert invoked.returncode == 0, invoked.stderr
+        deadline = time.monotonic()+5
+        while not marker.with_name('install-clicked').exists() and time.monotonic() < deadline:
+            time.sleep(.05)
+        assert marker.with_name('install-clicked').read_text() == 'normal Install Retry invoked\n'
+        assert setup_action('retry').returncode != 0  # Actual callback created an ambiguous row.
+        print('Actual owned install-row inspect/action, stale birth and duplicate Retry refusals PASS', flush=True)
         assert observation['owned_accessibility_verified'] is True
         assert receipts.MESSAGE in observation['visible_text']
         assert 'hidden receipt diagnostic' not in observation['visible_text']

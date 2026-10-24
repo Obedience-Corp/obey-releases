@@ -152,3 +152,24 @@ jobs:
             -e HOME=/tmp -e GTK_MODULES=atk-bridge \
             -v "$PWD:/src:ro" -w /src obey-release-ubuntu-ui:local \
             dbus-run-session -- xvfb-run -a /usr/bin/python3 -W error::ResourceWarning tests/integration_linux_git_retry.py
+      - name: Prove targeted transport failure with the actual released x64 Installer
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/partial-installer-input"
+          curl --fail --location --silent --show-error \
+            https://github.com/Obedience-Corp/festival-installer/releases/download/v0.3.8/festival-linux-amd64 \
+            -o "$RUNNER_TEMP/partial-installer-input/festival-app-installer"
+          echo "ae68d564dd6b5ed7877161598ffdb413d4a1f71e4cc6f16976b69b81bd379199  $RUNNER_TEMP/partial-installer-input/festival-app-installer" | sha256sum -c -
+          docker run --rm --read-only --user 10001:10001 --tmpfs /tmp:rw,exec,size=1g,mode=1777 --tmpfs /run \
+            -e CANDIDATE_TEST_CONTAINER=1 -e PYTHONDONTWRITEBYTECODE=1 \
+            -e PARTIAL_INSTALLER=/input/festival-app-installer \
+            -v "$RUNNER_TEMP/partial-installer-input:/input:ro" \
+            -v "$PWD:/src:ro" -w /src obey-release-ubuntu-ui:local \
+            /usr/bin/python3 -W error::ResourceWarning tests/integration_partial_transport.py \
+            | tee "$RUNNER_TEMP/partial-transport-control.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: linux-partial-transport-control
+          path: ${{ runner.temp }}/partial-transport-control.log
+          if-no-files-found: warn
