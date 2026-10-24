@@ -19,11 +19,14 @@ class LoginSelectionContracts(unittest.TestCase):
             stock = root/'System32/WindowsPowerShell/v1.0/powershell.exe'
             stock.parent.mkdir(parents=True); stock.write_bytes(b'fixture path only')
             response = {'major': 5, 'version': '5.1.26100.1', 'profile': str(root/'profile.ps1')}
-            with patch.object(login_shell, 'command', return_value=response) as run, patch.object(login_shell.shutil, 'which', side_effect=AssertionError('foreign PATH queried')):
-                shell, kind, actual = login_shell.windows_runtime({'SystemRoot': str(root), 'PATH': '/foreign'}, 'windows-powershell')
-            self.assertTrue(Path(shell).samefile(stock))
-            self.assertEqual(kind, 'powershell'); self.assertEqual(actual, response)
-            self.assertEqual(run.call_args.args[0][0], str(stock))
+            for key in ('SystemRoot', 'SYSTEMROOT'):
+                with self.subTest(key=key), patch.object(login_shell, 'command', return_value=response) as run, patch.object(login_shell.shutil, 'which', side_effect=AssertionError('foreign PATH queried')):
+                    shell, kind, actual = login_shell.windows_runtime({key: str(root), 'PATH': '/foreign'}, 'windows-powershell')
+                self.assertTrue(Path(shell).samefile(stock))
+                self.assertEqual(kind, 'powershell'); self.assertEqual(actual, response)
+                self.assertEqual(run.call_args.args[0][0], str(stock))
+            with self.assertRaisesRegex(RuntimeError, 'ambiguous'):
+                login_shell.windows_runtime({'SystemRoot': str(root), 'SYSTEMROOT': '/foreign'}, 'windows-powershell')
 
     def test_missing_relative_and_wrong_edition_refused(self):
         with patch.object(login_shell, 'command', side_effect=AssertionError('unvalidated executable ran')):

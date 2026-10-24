@@ -53,7 +53,13 @@ def seed_profile(path, home, shell):
 
 def windows_runtime(environment, requested_shell):
     if requested_shell == 'windows-powershell':
-        system = Path(environment.get('SystemRoot', ''))
+        # Windows os.environ exposes uppercase keys; a plain dict copy no
+        # longer supplies its case-insensitive lookup. Refuse conflicting
+        # duplicates instead of guessing which root reaches the child.
+        roots = [value for key, value in environment.items() if key.upper() == 'SYSTEMROOT']
+        if len(roots) != 1:
+            raise RuntimeError('Windows system-root environment is missing or ambiguous')
+        system = Path(roots[0])
         legacy = system/'System32/WindowsPowerShell/v1.0/powershell.exe'
         if not system.is_absolute() or not legacy.is_file():
             raise RuntimeError('stock Windows PowerShell executable is unavailable')
