@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import time
 
 
 def process_inventory(root_pid, proc=Path('/proc')):
@@ -44,16 +45,46 @@ def capture_failure(process, output, environment, error):
     # Only display-selector values are recorded; no full environment, credentials,
     # command arguments or unrelated OS logs are dumped.
     commands = [['xdotool', 'search', '--pid', str(process.pid)], ['wmctrl', '-lpG'], ['xwininfo', '-root', '-tree'],
+                ['xprop', '-root', '_NET_SUPPORTING_WM_CHECK', '_NET_CLIENT_LIST', '_NET_ACTIVE_WINDOW'],
                 ['import', '-window', 'root', str(output.with_name(output.stem + '.diagnostic-desktop.png'))]]
     record['probes'] = []
-    for arguments in commands:
+    deadline = time.monotonic() + 30
+    def run_probe(arguments):
         probe = {'command': arguments}
         try:
-            result = subprocess.run(arguments, env=environment, capture_output=True, text=True, timeout=10)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(arguments, 30)
+            result = subprocess.run(arguments, env=environment, capture_output=True, text=True, timeout=min(5, remaining))
             probe.update(exit=result.returncode, stdout=result.stdout[:65536], stderr=result.stderr[:65536])
         except (OSError, subprocess.TimeoutExpired) as failure:
             probe['error'] = str(failure)
         record['probes'].append(probe)
+        return probe
+    for arguments in commands:
+        run_probe(arguments)
+    search = record['probes'][0]
+    windows = []
+    if search.get('exit') == 0:
+        for value in search['stdout'].splitlines():
+            if value.isascii() and value.isdecimal() and 0 < int(value) <= 0xffffffff:
+                value = str(int(value))
+                if value not in windows: windows.append(value)
+    record['owned_pid_window_ids'] = windows
+    record['window_queries_truncated'] = len(windows) > 4
+    for window in windows[:4]:
+        run_probe(['xwininfo', '-id', window])
+        run_probe(['xprop', '-id', window, '_NET_WM_PID', 'WM_STATE', '_NET_WM_STATE', '_NET_WM_WINDOW_TYPE'])
+    record['post_probe_root_returncode'] = process.poll()
+    if record['post_probe_root_returncode'] is None and record.get('root_and_descendants'):
+        try:
+            before = next(row for row in record['root_and_descendants'] if row['pid'] == process.pid)
+            after = next(row for row in process_inventory(process.pid) if row['pid'] == process.pid)
+            record['post_probe_root_identity_verified'] = before['start_ticks'] == after['start_ticks']
+            if not record['post_probe_root_identity_verified']:
+                record['post_probe_identity_error'] = 'App root PID birth changed; window attribution is stale'
+        except (OSError, ValueError, IndexError, KeyError, StopIteration, RuntimeError) as failure:
+            record['post_probe_identity_error'] = str(failure)
     destination = output.with_name(output.stem + '.window-diagnostics.json')
     destination.write_text(json.dumps(record, indent=2) + '\n')
     return destination

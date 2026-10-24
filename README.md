@@ -519,3 +519,20 @@ Disposable Windows CI must prove positive ordinary startup, timeout cleanup and
 premature-adapter cleanup before this transport can qualify an App journey.
 Stock Windows PowerShell5.1, cmd, Windows Terminal UI and consumer policy remain
 outside this installed-PowerShell7 case.
+
+
+Login readback compares the complete validated camp-app version envelope except
+its canonical per-call UUIDv7 requestId. Schema, outcome, build, version, protocol
+and capabilities remain required and retained; raw output still contains the
+original request identity. Other commands retain their complete version text.
+POSIX function definitions are encoded by the verifier's absolute isolated Python
+before crossing the PTY, then strictly decoded and compared byte-for-byte against
+the installed binary's generated definition. This preserves literal source CR
+bytes while avoiding terminal CR/LF ambiguity. PowerShell version probes use a
+variable-array splat so functions receive ordinary string arguments; the native
+console control asserts that same invocation contract.
+
+A Linux window timeout now retains bounded read-only per-window Map State and WM
+properties plus root window-manager properties and a post-probe PID/birth check.
+This is diagnostic evidence only: it never maps a window, signals a process,
+changes rendering settings or converts the original launch failure to success.

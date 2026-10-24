@@ -1,8 +1,11 @@
 """Verify ordinary POSIX command dispatch, including the installed navigation wrappers."""
+import base64
+import binascii
 import hashlib
 import os
 from pathlib import Path
 import shlex
+import sys
 import tempfile
 
 
@@ -19,6 +22,25 @@ def sections(data, marker, names):
     return {name: lines[positions[i] + 1:positions[i + 1]] for i, name in enumerate(names)}
 
 
+def definition_dump(tool):
+    # Capture builtin output before the terminal's CR/LF processing. The
+    # ordinary command still executes through its unchanged installed wrapper.
+    encoder = "import base64,sys; print(base64.b64encode(sys.stdin.buffer.read()).decode('ascii'))"
+    return f'builtin typeset -f {shlex.quote(tool)} | {shlex.join([sys.executable, "-I", "-c", encoder])}'
+
+
+def definition_bytes(lines):
+    try:
+        # Only transport line boundaries are joined; source whitespace and CR
+        # bytes are encoded, retained and compared exactly after decoding.
+        value = base64.b64decode(''.join(lines), validate=True)
+    except (binascii.Error, ValueError) as error:
+        raise ValueError('POSIX function definition encoding is invalid') from error
+    if not value:
+        raise ValueError('POSIX function definition is empty')
+    return value
+
+
 def probe_script(fixture, tool, marker, arguments):
     quoted = shlex.quote(tool)
     # Resolve the command builtin's external dispatch in a subshell. Removing
@@ -33,7 +55,7 @@ def probe_script(fixture, tool, marker, arguments):
         f"elif builtin typeset -f {quoted} >/dev/null 2>&1; then printf 'function\\n'; "
         "else printf 'executable\\n'; fi; "
         f"printf '%s\\n' '{marker}_DEFINITION'; "
-        f"if builtin typeset -f {quoted} >/dev/null 2>&1; then builtin typeset -f {quoted}; fi; "
+        f"if builtin typeset -f {quoted} >/dev/null 2>&1; then {definition_dump(tool)}; fi; "
         f"printf '%s\\n' '{marker}_VERSION'; {shlex.join([tool, *arguments])} || exit 93; "
         f"printf '%s\\n' '{marker}_END'"
     )
@@ -62,20 +84,21 @@ def reference_definition(fixture, tool, expected, environment, output, stage, ma
             completion + '__fa_init=$("$1" shell-init "$2") || exit 94; '
             'eval "$__fa_init" || exit 95; '
             f"printf '%s\\n' '{marker}_DEFINITION'; "
-            'builtin typeset -f "$3" || exit 96; '
+            + definition_dump(tool) + '; '
             f"printf '%s\\n' '{marker}_END'"
         )
         pty_run([fixture['shell'], *flags, '-c', script, 'fa0027-reference',
-                 str(expected), fixture['kind'], tool], clean, destination)
+                 str(expected), fixture['kind']], clean, destination)
     definition = sections(destination.read_bytes(), marker, ('DEFINITION',))['DEFINITION']
     if not definition:
         raise ValueError('installed executable did not generate its navigation wrapper')
-    return definition
+    return definition_bytes(definition)
 
 
 def verify_tool(fixture, tool, managed, environment, output, stage):
     import re
     from login_shell import TOOLS, pty_run
+    from login_version import version_record
     if fixture['kind'] not in ('bash', 'zsh') or tool not in TOOLS:
         raise ValueError('unsupported POSIX shell probe')
     if not re.fullmatch(r'fa0027_keep_[0-9a-f]{12}', fixture['function']):
@@ -102,13 +125,12 @@ def verify_tool(fixture, tool, managed, environment, output, stage):
         raise ValueError('ordinary POSIX command is shadowed or missing its intended wrapper')
     if wrapper:
         reference = reference_definition(fixture, tool, expected, environment, output, stage, marker)
+        definition = definition_bytes(definition)
         if definition != reference:
             raise ValueError('ordinary POSIX wrapper differs from the installed executable definition')
     elif definition:
         raise ValueError('ordinary POSIX executable has an unexpected function definition')
     version = '\n'.join(result['VERSION'])
-    if not re.search(r'(?<![0-9.])' + re.escape(TOOLS[tool][0]) + r'(?![0-9.])', version):
-        raise ValueError('ordinary POSIX command reported an unexpected version')
-    return {'path': paths[0], 'version_output': version, 'profile_sentinel_verified': True,
+    return {'path': paths[0], 'version_output': version_record(tool, version), 'profile_sentinel_verified': True,
             'dispatch': result['KIND'][0], 'installed_wrapper_verified': wrapper,
-            'wrapper_sha256': hashlib.sha256('\n'.join(definition).encode()).hexdigest() if wrapper else None}
+            'wrapper_sha256': hashlib.sha256(definition).hexdigest() if wrapper else None}

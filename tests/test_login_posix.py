@@ -15,13 +15,14 @@ import login_shell
 
 
 class PosixLoginContracts(unittest.TestCase):
-    def fixture(self, root, kind='bash', tool='camp', extra=''):
+    def fixture(self, root, kind='bash', tool='camp', extra='', definition=None):
         home = root / 'home'; home.mkdir()
         managed = home / '.obey/installer'; binary = managed / 'bin' / tool
         binary.parent.mkdir(parents=True)
         output = root / 'proof'; output.mkdir()
         wrapped = tool in ('camp', 'fest')
-        definition = f'{tool}() {{ FA0027_WRAPPER_CALLED=yes command {tool} "$@"; }}'
+        if definition is None:
+            definition = f'{tool}() {{ FA0027_WRAPPER_CALLED=yes command {tool} "$@"; }}'
         if kind == 'zsh':
             definition += f'\ncompdef _fixture {tool}'
         version = login_shell.TOOLS[tool][0]
@@ -58,6 +59,52 @@ class PosixLoginContracts(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'differs from'):
                 login_posix.verify_tool(args[0], 'camp', *args[1:], 'spoof')
             self.assertIn(b'v0.16.2', (args[3] / 'spoof-login-camp.terminal.log').read_bytes())
+
+    def test_terminal_carriage_return_cannot_change_encoded_definition(self):
+        import re
+        from unittest.mock import patch
+        original = login_shell.pty_run
+        def terminal_carriage_return(args, environment, output, **kwargs):
+            original(args, environment, output, **kwargs)
+            if '.reference.' not in output.name:
+                raw = output.read_bytes()
+                changed, count = re.subn(
+                    rb'(FA0027_[^\r\n]+_DEFINITION\r\n[^\r\n]+)\r\n',
+                    rb'\1\r\r\n', raw, count=1)
+                self.assertEqual(count, 1)
+                output.write_bytes(changed)
+        with tempfile.TemporaryDirectory() as directory:
+            args = self.fixture(Path(directory))
+            with patch.object(login_shell, 'pty_run', side_effect=terminal_carriage_return):
+                result = login_posix.verify_tool(args[0], 'camp', *args[1:], 'terminal-cr')
+            self.assertTrue(result['installed_wrapper_verified'])
+            self.assertIn(b'\r\r\n', (args[3] / 'terminal-cr-login-camp.terminal.log').read_bytes())
+
+    def test_literal_source_carriage_return_is_preserved_and_changes_are_rejected(self):
+        definition = 'camp() { FA0027_WRAPPER_CALLED=yes command camp "$@"; : "first\r\nlast"; }'
+        for extra, fails in (('', False), (definition.replace('\r', ''), True)):
+            with self.subTest(fails=fails), tempfile.TemporaryDirectory() as directory:
+                args = self.fixture(Path(directory), definition=definition, extra=extra)
+                if fails:
+                    with self.assertRaisesRegex(ValueError, 'differs from'):
+                        login_posix.verify_tool(args[0], 'camp', *args[1:], 'source-cr')
+                else:
+                    self.assertTrue(login_posix.verify_tool(args[0], 'camp', *args[1:], 'source-cr')['installed_wrapper_verified'])
+
+    def test_malformed_encoded_definition_is_rejected(self):
+        for encoded in (['not base64!'], ['\x1b[31mYQ=='], []):
+            with self.assertRaises(ValueError):
+                login_posix.definition_bytes(encoded)
+
+    def test_foreign_python_module_cannot_forge_wrapper_encoding(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            foreign = root / 'foreign-python'; foreign.mkdir()
+            (foreign / 'base64.py').write_text('def b64encode(value): return b"Zm9yZ2Vk"\n')
+            args = self.fixture(root, extra="camp() { printf 'v0.16.2\\n'; }")
+            args[2]['PYTHONPATH'] = str(foreign)
+            with self.assertRaisesRegex(ValueError, 'differs from'):
+                login_posix.verify_tool(args[0], 'camp', *args[1:], 'python-spoof')
 
     def test_wrong_external_path_fails_even_with_matching_wrapper_and_version(self):
         with tempfile.TemporaryDirectory() as directory:
