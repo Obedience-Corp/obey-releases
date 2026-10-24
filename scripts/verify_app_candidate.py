@@ -396,9 +396,9 @@ def wait_fresh_setup(process, installer, managed, target, output, environment, r
 
 def native(directory, document, target, output, linux_package="both", fresh_setup=False, public_root=None, existing_user="none", login_shell_proof=False, missing_git_manual=False, login_shell_kind='default', guest_context=None):
     require_clean_host({"aarch64-apple-darwin": "macOS-arm64", "x86_64-apple-darwin": "macOS-x86_64", "x86_64-unknown-linux-gnu": "linux-x86_64", "x86_64-pc-windows-msvc": "windows-x86_64"}.get(target))
-    if existing_user not in ("none", "older-idle", "current", "missing-companion", "corrupt-integrations", "foreign-companion") or existing_user != "none" and not fresh_setup:
+    if existing_user not in ("none", "older-idle", "current", "missing-companion", "corrupt-integrations", "foreign-companion", "corrupt-receipts") or existing_user != "none" and not fresh_setup:
         raise ValueError("existing-user scenario requires public default-home proof")
-    if existing_user in ("corrupt-integrations", "foreign-companion") and target != "x86_64-pc-windows-msvc":
+    if existing_user in ("corrupt-integrations", "foreign-companion", "corrupt-receipts") and target != "x86_64-pc-windows-msvc":
         raise ValueError("manual existing-user diagnostic/recovery currently requires native Windows")
     if login_shell_proof and (not fresh_setup or existing_user != "none"):
         raise ValueError("new login shell proof requires unseeded public fresh setup")
@@ -435,6 +435,8 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
     git_fixture = None
     integration_fixture = None
     foreign_fixture = None
+    receipt_fixture = None
+    report["corrupt_receipt_manual_recovery_verified"] = False
     report["foreign_companion_manual_recovery_verified"] = False
     report["corrupt_integration_manual_recovery_verified"] = False
     report['missing_git_manual_recovery_verified'] = False
@@ -576,7 +578,7 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
         report["runtime_config"] = str(runtime[0])
         if existing_user != "none":
             import existing_obey
-            existing_fixture = existing_obey.seed(temporary, installer, default_managed, target, environment, output, report, "current" if existing_user in ("corrupt-integrations", "foreign-companion") else existing_user)
+            existing_fixture = existing_obey.seed(temporary, installer, default_managed, target, environment, output, report, "current" if existing_user in ("corrupt-integrations", "foreign-companion", "corrupt-receipts") else existing_user)
             if existing_user == "corrupt-integrations":
                 import corrupt_integrations
                 integration_fixture = corrupt_integrations.Fixture(default_managed, temporary / "integration-rollback", report.setdefault("integration_preferences_fixture", {}))
@@ -587,6 +589,11 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
                 foreign_fixture = foreign_companion.Fixture(default_managed, installer, temporary / "companion-rollback", report.setdefault("foreign_companion_fixture", {}))
                 foreign_fixture.substitute()
                 report["foreign_companion_probe"] = foreign_companion.probe(installer, foreign_fixture, environment, output)
+        if existing_user == "corrupt-receipts":
+            import corrupt_receipts
+            receipt_fixture = corrupt_receipts.Fixture(default_managed, temporary / "receipt-rollback", report.setdefault("corrupt_receipt_fixture", {}), environment)
+            receipt_fixture.corrupt()
+            report["corrupt_receipt_installer_status"] = corrupt_receipts.probe(installer, receipt_fixture, report["existing_before"], environment, output)
         if guest_context is not None:
             guest_context.before_launch(installer, environment, output, report)
         if missing_git_manual:
@@ -642,6 +649,19 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
                     foreign_fixture.restore()
                     process = subprocess.Popen([str(binary)], env=environment, stdout=log, stderr=subprocess.STDOUT)
                     report["foreign_recovery_pid"] = process.pid
+                if receipt_fixture is not None:
+                    def receipt_diagnosed():
+                        if process.poll() is not None:
+                            raise RuntimeError("App exited instead of reporting unreadable receipt state")
+                        frame = window_capture(process, target, output / "corrupt-receipt.png", environment)
+                        report["corrupt_receipt_window"] = frame
+                        return frame if corrupt_receipts.error_window(frame) else None
+                    wait_until("actual App reports unreadable installer state", receipt_diagnosed, seconds=180)
+                    report["corrupt_receipt_preserved_user"] = corrupt_receipts.preserved_user(existing_fixture, report["existing_before"], receipt_fixture, environment)
+                    upgrade.normal_quit(process, binary, None, target, environment, output)
+                    receipt_fixture.restore()
+                    process = subprocess.Popen([str(binary)], env=environment, stdout=log, stderr=subprocess.STDOUT)
+                    report["receipt_recovery_pid"] = process.pid
                 if git_fixture is not None:
                     report['git_missing_ui'] = missing_git.interact(process, binary, environment, 'inspect')
                     missing_capture = output/'git-missing'; missing_capture.mkdir()
@@ -652,6 +672,8 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
                 if guest_context is not None:
                     guest_context.install_git(process, binary, installer, environment, output, report)
                 report["default_after_setup"] = wait_fresh_setup(process, installer, default_managed, target, output, environment, report, "fresh", **mac_options)
+                if receipt_fixture is not None:
+                    report["receipt_database_after_setup"] = receipt_fixture.healthy()
                 if foreign_fixture is not None:
                     report["companion_after_setup"] = foreign_fixture.healthy()
                 if integration_fixture is not None:
@@ -662,11 +684,14 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
                     report["existing_after_setup"] = existing_obey.ready_readback(existing_fixture, installer, environment, "0.2.3")
                     if report["existing_after_setup"] is None:
                         raise RuntimeError("updated existing-user service was not ready")
-                    existing_obey.compare(report["existing_before"], report["existing_after_setup"], "current" if existing_user in ("corrupt-integrations", "foreign-companion") else existing_user)
+                    existing_obey.compare(report["existing_before"], report["existing_after_setup"], "current" if existing_user in ("corrupt-integrations", "foreign-companion", "corrupt-receipts") else existing_user)
                 upgrade.normal_quit(process, binary, binary.parent.parent.parent if target.endswith("apple-darwin") else None, target, environment, output, **mac_options)
                 process = subprocess.Popen([str(binary)], env=environment, stdout=log, stderr=subprocess.STDOUT, start_new_session=os.name != "nt")
                 report["reopened_pid"] = process.pid
                 report["default_after_reopen"] = wait_fresh_setup(process, installer, default_managed, target, output, environment, report, "reopened", **mac_options)
+                if receipt_fixture is not None:
+                    report["receipt_database_after_reopen"] = receipt_fixture.healthy()
+                    report["corrupt_receipt_manual_recovery_verified"] = True
                 if foreign_fixture is not None:
                     report["companion_after_reopen"] = foreign_fixture.healthy()
                 if integration_fixture is not None:
@@ -732,6 +757,12 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
                     raise RuntimeError("refusing companion rollback while owned App remains live")
                 foreign_fixture.restore()
             actions.append(restore_owned_companion)
+        if receipt_fixture is not None:
+            def restore_owned_receipts():
+                if process is not None and process.poll() is None:
+                    raise RuntimeError("refusing receipt rollback while owned App remains live")
+                receipt_fixture.restore()
+            actions.append(restore_owned_receipts)
         if account_fixture is not None:
             actions.append(account_fixture.restore)
         if git_fixture is not None:
@@ -789,6 +820,7 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
         report["new_login_shell_verified"] = report["new_login_shell_verified"] and report["native_packaging_launch_verified"]
         report["automatic_git_authorization_verified"] = report["automatic_git_authorization_verified"] and report["native_packaging_launch_verified"]
         report["corrupt_integration_manual_recovery_verified"] = report["corrupt_integration_manual_recovery_verified"] and report["native_packaging_launch_verified"]
+        report["corrupt_receipt_manual_recovery_verified"] = report["corrupt_receipt_manual_recovery_verified"] and report["native_packaging_launch_verified"]
         report["foreign_companion_manual_recovery_verified"] = report["foreign_companion_manual_recovery_verified"] and report["native_packaging_launch_verified"]
         report["existing_user_reconciliation_verified"] = report["existing_user_reconciliation_verified"] and report["native_packaging_launch_verified"]
         report["missing_companion_repair_verified"] = report["missing_companion_repair_verified"] and report["native_packaging_launch_verified"]
@@ -818,7 +850,7 @@ def main():
     parser.add_argument("--verify-login-shell", action="store_true")
     parser.add_argument('--login-shell', choices=('default', 'windows-powershell', 'zsh'), default='default')
     parser.add_argument('--verify-missing-git-manual', action='store_true')
-    parser.add_argument("--existing-user", choices=("none", "older-idle", "current", "missing-companion", "corrupt-integrations", "foreign-companion"), default="none")
+    parser.add_argument("--existing-user", choices=("none", "older-idle", "current", "missing-companion", "corrupt-integrations", "foreign-companion", "corrupt-receipts"), default="none")
     for name in ("version", "source"):
         parser.add_argument("--" + name, required=True)
     parser.add_argument("--target")

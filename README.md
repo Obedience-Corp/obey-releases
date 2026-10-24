@@ -763,3 +763,41 @@ current receipts/files and the original companion bytes/mtime. Cleanup is requir
 before `foreign_companion_manual_recovery_verified` can pass. This is bounded
 preservation and explicit manual recovery, not automatic foreign-file adoption,
 arbitrary uninstall, other-OS acceptance, consumer trust or useful licensed work.
+
+### Receipt corruption fixture qualification
+
+Automation CI also exercises a real Windows SQLite database, descriptor-bound
+byte/mtime restoration, and refusal to restore while an owned Installer-name
+process remains alive. Fixture executables and receipts are synthetic and never
+establish production package or App recovery. The helper requires no App or
+Installer process and no SQLite sidecars before backup, corruption or restoration.
+Its initial immutable read explicitly asserts this already-verified quiescence;
+normal live receipt readback keeps its existing read-only behavior. Recovered
+readback may record a zero-byte WAL and ephemeral shared index without removing
+them; any WAL transaction bytes remain a refusal. Packaged App corruption/retry
+acceptance requires a separate original native journey.
+
+### Packaged unreadable receipt-state manual recovery
+
+`verify-app-fresh-setup.yml` accepts `existing_user=corrupt-receipts` only with
+Windows scope, the default shell, and login/Git proof disabled. Use a separately
+qualified signed public candidate containing the App unreadable-state guard
+(source `8b19ce6ffe2f2e747dd6b2ab2d78ee34869d3ef0` or reviewed successor).
+The older B3 candidate does not establish this behavior.
+
+The existing current-user seed supplies genuine selected packages and a service.
+The fixture requires a closed, validated database with no WAL/SHM/journal before
+its private backup and header corruption. The actual Installer must retain healthy
+live tool facts while reporting incomplete receipt state. The App must show the
+authenticated `E_INSTALLER_STATE_UNREADABLE` failure and recovery guidance while
+all selected executable hashes/mtimes, existing settings, camp registration,
+service identity and corrupted database bytes remain unchanged.
+
+Only after normal App quit and an actual no-App/no-Installer check can the fixture
+restore its known private backup byte-for-byte and restore the original mtime on
+a verified held handle. Two healthy launches and complete existing-user readbacks
+must then pass. `corrupt_receipt_manual_recovery_verified` stays false on any
+execution or cleanup failure. This is a controlled manual-backup/relaunch journey,
+not automatic database repair, an in-place Retry-button proof or a claim that
+customers already possess such a backup. Useful work, licensing, trust, reboot
+and broad failure recovery remain separate.

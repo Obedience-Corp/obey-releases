@@ -43,16 +43,25 @@ def checked_bootstrap(data, checksums, name):
     return digest
 
 
-def checked_receipts(home, *, obey_version=None):
+def checked_receipts(home, *, obey_version=None, immutable=False):
+    # Only an independently quiescent fixture may assert immutable storage.
+    # This does not discover or lock out writers. Normal live readback stays ro.
+    def no_sidecars():
+        if any(os.path.lexists(str(home / 'state.db') + suffix) for suffix in ('-wal', '-shm', '-journal')):
+            raise ValueError('immutable receipt read refuses SQLite sidecars')
+    if immutable:
+        no_sidecars()
     expected = dict(PACKAGES)
     if obey_version is not None:
         if obey_version not in ("0.2.2", PACKAGES["obedience-corp/obey"]):
             raise ValueError("unsupported existing Obey fixture version")
         expected["obedience-corp/obey"] = obey_version
-    with closing(sqlite3.connect((home / "state.db").as_uri() + "?mode=ro", uri=True)) as database:
+    with closing(sqlite3.connect((home / "state.db").as_uri() + ("?mode=ro&immutable=1" if immutable else "?mode=ro"), uri=True)) as database:
         database.row_factory = sqlite3.Row
         receipts = [dict(row) for row in database.execute("select * from receipts order by package_id")]
         files = [dict(row) for row in database.execute("select * from receipt_files order by path")]
+    if immutable:
+        no_sidecars()
     if {row["package_id"]: row["version"] for row in receipts} != expected:
         raise ValueError("receipt selection/version differs from the App's three selected packages")
     if any(row["source"] != "official-obey" or row["channel"] != "stable" for row in receipts):
