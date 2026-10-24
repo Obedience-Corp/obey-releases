@@ -1,0 +1,11 @@
+{
+  "version": "0.1.1",
+  "notes": "FA0027 isolated Windows signature-rejection fixture. Not a release channel. Intentionally mismatched signature; installation must fail.",
+  "pub_date": "2026-10-24T16:36:01Z",
+  "platforms": {
+    "windows-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUbEtmR0c0QTZJb0luU3pGTXh6Z1RDMnJ2ZUNyMjRweTZRN1hzK1J5WWhtY0hVcUkzL1ZLM3NpUlRFc3QydjdCNzhlY2l0UndrUVFCTTlJUThZM25vMStMMFk4c0pGelFZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyNzk0MzAxCWZpbGU6RmVzdGl2YWwgQXBwXzAuMS4xX3g2NC1zZXR1cC5leGUKUTU5VG5MOG5kRS9XVnQ2NklNL0xFR2lIRTdTSGk2aDlxOFcxdGpGbHNUZThvUVZ3czR0c2ZEbVhTdG9ub1U0YlZRWGllTlFQSllHb21OS2hERUZGQUE9PQo=",
+      "url": "https://github.com/Obedience-Corp/obey-releases/releases/download/app-test-d23fef7655462c7dfe6b8b1b6954a918a90e994b/Festival.App_0.1.1_x64-setup.exe"
+    }
+  }
+}

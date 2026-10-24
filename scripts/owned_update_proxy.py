@@ -138,3 +138,32 @@ class UpdateProxy:
         with self._lock:
             if not self._lock.wait_for(lambda: not self._sockets, timeout=12) or self._thread.is_alive():
                 raise RuntimeError("owned update proxy did not release all connections/thread")
+
+
+class SignatureFallbackProxy(UpdateProxy):
+    """Original TLS to immutable feeds, then refuse only the defective feed host."""
+    BAD_FEED_TARGET = ("raw.githubusercontent.com", 443)
+
+    def __init__(self):
+        self._bad_feed_blocked = False
+        super().__init__(PUBLIC_RELEASE_TARGETS | {self.BAD_FEED_TARGET})
+        self.allow_release_tunnels()
+
+    def block_bad_feed(self):
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("owned update proxy is closed")
+            self._bad_feed_blocked = True
+            # A fresh check must establish a new CONNECT; close prior keepalive
+            # tunnels so the client cannot bypass the explicit phase transition.
+            connections = list(self._sockets)
+        for connection in connections:
+            try:
+                connection.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+
+    def _allow_request(self, target, peer):
+        with self._lock:
+            return self._allowed and not self._closed and not (
+                self._bad_feed_blocked and target == self.BAD_FEED_TARGET)

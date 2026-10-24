@@ -127,6 +127,47 @@ class UpgradeContracts(unittest.TestCase):
                 self.assertEqual(report["same_pid_retry_identity"], identity)
                 self.assertTrue(report["offline_check_preserved_a"])
 
+    def test_signature_failure_requires_payload_transport_and_preserves_a_before_retry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            binary = output / "festival-app.exe"
+            binary.write_bytes(b"original-A")
+            process = Mock(pid=123)
+            identity = {"pid": 123, "started": "42", "path": str(binary)}
+            frame = {"visible_names": ["Update download failed: signature verification failed"]}
+            rows = [{"host": host, "outcome": "tunneled"} for host in ("raw.githubusercontent.com", "release-assets.githubusercontent.com")]
+            proxy = Mock()
+            proxy.snapshot.return_value = {"requests": rows}
+            def once(description, predicate, seconds):
+                if not predicate():
+                    raise RuntimeError("expected visible signature rejection")
+            with patch.object(upgrade, "menu_update_check", return_value={"invoked": True}) as menu, patch.object(upgrade, "retained_state", return_value={"selected": "unchanged"}), patch.object(upgrade.app, "window_capture", return_value=frame), patch.object(upgrade, "wait_until", side_effect=once), patch.object(upgrade, "windows_query", return_value=identity):
+                for requests in ([], rows[:1], rows + [{"host": "<unselected>", "outcome": "denied"}]):
+                    proxy.snapshot.return_value = {"requests": requests}
+                    with self.assertRaisesRegex(RuntimeError, "transport"):
+                        upgrade.signature_check_then_retry(process, binary, {}, proxy, "windows", output, {}, {}, identity)
+                    proxy.block_bad_feed.assert_not_called()
+                proxy.snapshot.return_value = {"requests": rows}
+                with patch.object(upgrade.app, "window_capture", return_value={"visible_names": [*frame["visible_names"], "Restart now"]}):
+                    with self.assertRaisesRegex(RuntimeError, "offered"):
+                        upgrade.signature_check_then_retry(process, binary, {}, proxy, "windows", output, {}, {}, identity)
+                with patch.object(upgrade, "windows_query", return_value=dict(identity, started="99")):
+                    with self.assertRaisesRegex(RuntimeError, "process"):
+                        upgrade.signature_check_then_retry(process, binary, {}, proxy, "windows", output, {}, {}, identity)
+                def damage(*args):
+                    binary.write_bytes(b"changed")
+                    return frame
+                with patch.object(upgrade.app, "window_capture", side_effect=damage):
+                    with self.assertRaisesRegex(ValueError, "changed A"):
+                        upgrade.signature_check_then_retry(process, binary, {}, proxy, "windows", output, {}, {}, identity)
+                binary.write_bytes(b"original-A")
+                report = {}
+                upgrade.signature_check_then_retry(process, binary, {}, proxy, "windows", output, {}, report, identity)
+                proxy.block_bad_feed.assert_called_once()
+                self.assertTrue(report["signature_rejection_preserved_a"])
+                self.assertEqual(report["signature_retry_request_offset"], 2)
+                self.assertEqual(report["same_pid_retry_identity"], identity)
+
     def test_default_home_refuses_existing_state_or_environment_override(self):
         with tempfile.TemporaryDirectory() as name:
             home = Path(name)

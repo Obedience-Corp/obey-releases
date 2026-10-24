@@ -4,6 +4,7 @@ No private checkout, replacement trust root, endpoint override or test backdoor.
 Only fresh hosted accounts may execute; original package failures stay failures.
 """
 import argparse
+import base64
 import json
 import os
 from pathlib import Path
@@ -16,7 +17,7 @@ import time
 import verify_app_candidate as app
 from app_upgrade_contract import checked_upgrade_pair, checked_public, fetch_public, persisted_snapshot, sha256, verify_persisted
 from verify_candidate import command, native_platform, wait_until
-from owned_update_proxy import UpdateProxy
+from owned_update_proxy import UpdateProxy, SignatureFallbackProxy
 from verify_selected_components import TARGETS as COMPONENT_TARGETS, checked_bootstrap, checked_receipts, checked_status, fetch, require_clean_host
 
 SCRIPT = Path(__file__).resolve().parent
@@ -278,6 +279,59 @@ def offline_check_then_retry(process, binary, fixture, proxy, target, output, en
     report["offline_check_preserved_a"] = True
 
 
+
+
+def verify_signature_fixture(root, b, work, environment):
+    fixture_path = SCRIPT.parent / "tests/fixtures/updater-signature/bad-signature.json"
+    fixture = json.loads(fixture_path.read_text())
+    good = json.loads((root / "b/latest.json").read_text())
+    bad_entry = fixture.get("platforms", {}).get("windows-x86_64", {})
+    good_entry = good["platforms"]["windows-x86_64"]
+    payload = artifact(root / "b", b, "x86_64-pc-windows-msvc", "-setup.exe")
+    if (fixture.get("version") != "0.1.1" or set(fixture.get("platforms", {})) != {"windows-x86_64"}
+            or bad_entry.get("url") != good_entry["url"] or bad_entry.get("signature") == good_entry["signature"]
+            or sha256(payload) != "409e7244e51c4c5b303d3fa35569e2b83e05f9b8e15756507e8934740027d924"):
+        raise ValueError("signature fixture differs from original B9 payload/expected mismatch")
+    signature = work / "expected-mismatched.minisig"
+    signature.write_bytes(base64.b64decode(bad_entry["signature"], validate=True))
+    result = subprocess.run(["minisign", "-Vm", str(payload), "-P", app.PUBLIC_KEY, "-x", str(signature)],
+                            env=environment, capture_output=True, text=True, timeout=60)
+    if result.returncode != 1 or "Signature verification failed" not in result.stderr:
+        raise RuntimeError("prepared fixture did not produce the expected cryptographic rejection")
+    return {"fixture_sha256": sha256(fixture_path), "payload_sha256": sha256(payload),
+            "mismatched_signature_sha256": sha256(signature), "minisign_exit": result.returncode}
+
+def signature_check_then_retry(process, binary, fixture, proxy, target, output, environment, report, identity):
+    before_payload = tree(binary.parent)
+    before_state = retained_state(fixture, environment)
+    report["signature_menu_action"] = menu_update_check(process, binary, environment, identity, output)
+    def failure_window():
+        frame = app.window_capture(process, target, output / "signature-rejection.png", environment)
+        report["signature_failure_window"] = frame
+        names = frame.get("visible_names", [])
+        error = next((name for name in names if "Update download failed:" in name and "signature" in name.lower()), None)
+        if error and any(name == "Update ready" or name == "Restart now" for name in names):
+            raise RuntimeError("signature failure incorrectly offered update installation")
+        return frame if error else None
+    wait_until("visible native updater signature rejection", failure_window, seconds=300)
+    snapshot = proxy.snapshot()
+    if (not any(row["host"] == "raw.githubusercontent.com" and row["outcome"] == "tunneled" for row in snapshot["requests"])
+            or not any(row["host"] in ("release-assets.githubusercontent.com", "objects.githubusercontent.com") and row["outcome"] == "tunneled" for row in snapshot["requests"])
+            or any(row["outcome"] != "tunneled" for row in snapshot["requests"])):
+        raise RuntimeError("signature rejection lacks original feed/payload transport or has unrelated failures")
+    if windows_query("identity", environment, APP_UPGRADE_PID=str(process.pid)) != identity:
+        raise RuntimeError("signature rejection changed the owned App process")
+    if tree(binary.parent) != before_payload or retained_state(fixture, environment) != before_state:
+        raise ValueError("signature rejection changed A payload or retained user/component state")
+    report["signature_original_payload"] = before_payload
+    report["signature_preserved_state"] = before_state
+    report["proxy_after_failure"] = snapshot
+    proxy.block_bad_feed()
+    report["same_pid_retry_action"] = menu_update_check(process, binary, environment, identity, output)
+    report["same_pid_retry_identity"] = identity
+    report["signature_rejection_preserved_a"] = True
+    report["signature_retry_request_offset"] = len(snapshot["requests"])
+
 def native(root, target, package_format, a_source, a_version, b_source, b_version, output, installation_context="redirected", failure_mode="none"):
     require_clean_host(MACHINES.get(target))
     if target not in MACHINES or native_platform() != app.TARGETS[target][0] or package_format not in FORMATS:
@@ -287,8 +341,10 @@ def native(root, target, package_format, a_source, a_version, b_source, b_versio
         raise ValueError("unsupported native package format")
     if installation_context not in ("redirected", "default-home") or installation_context == "default-home" and package_format != "nsis":
         raise ValueError("default-home acceptance currently requires the native NSIS leg")
-    if failure_mode not in ("none", "offline-check") or failure_mode == "offline-check" and (package_format != "nsis" or installation_context != "redirected"):
-        raise ValueError("offline-check proof requires the Windows NSIS redirected fixture")
+    if failure_mode not in ("none", "offline-check", "signature-fallback") or failure_mode != "none" and (package_format != "nsis" or installation_context != "redirected"):
+        raise ValueError("failure proof requires the Windows NSIS redirected fixture")
+    if failure_mode == "signature-fallback" and (b_source != "d23fef7655462c7dfe6b8b1b6954a918a90e994b" or b_version != "0.1.1"):
+        raise ValueError("signature fixture is bound to original public B9")
     if any(os.environ.get(key) for key in ("GH_TOKEN", "GITHUB_TOKEN")):
         raise RuntimeError("native upgrade must not receive GitHub credentials")
     if tuple(map(int, a_version.split("."))) >= tuple(map(int, b_version.split("."))):
@@ -325,6 +381,8 @@ def native(root, target, package_format, a_source, a_version, b_source, b_versio
                     payload = directory / "assets" / item["name"]
                     app.verify_signature(payload, payload.with_name(payload.name + ".sig"), work, environment)
         report["production_signatures_verified"] = True
+        if failure_mode == "signature-fallback":
+            report["signature_fixture_control"] = verify_signature_fixture(root, b, work, environment)
         report["original_a_payload_sha256"] = sha256(artifact(root / "a", a, target, FORMATS[package_format]))
         fixture = bootstrap_fixture(work, environment, MACHINES[target], managed)
         report["before"] = retained_state(fixture, environment)
@@ -377,11 +435,11 @@ def native(root, target, package_format, a_source, a_version, b_source, b_versio
                 binary = work / "Festival.App.AppImage"
                 shutil.copyfile(artifact(root / "a", a, target, ".AppImage"), binary)
                 binary.chmod(0o755)
-        if failure_mode == "offline-check":
+        if failure_mode != "none":
             proxy_names = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy")
             if any(environment.get(name) for name in proxy_names):
                 raise RuntimeError("owned transport proof refuses inherited proxy configuration")
-            proxy = UpdateProxy()
+            proxy = SignatureFallbackProxy() if failure_mode == "signature-fallback" else UpdateProxy()
             environment.update(HTTPS_PROXY=proxy.url, HTTP_PROXY=proxy.url, NO_PROXY="127.0.0.1,localhost")
             report["owned_proxy_url"] = proxy.url
         if target.endswith('apple-darwin'):
@@ -402,7 +460,7 @@ def native(root, target, package_format, a_source, a_version, b_source, b_versio
             if package_format == "nsis":
                 initial = windows_query("identity", environment, APP_UPGRADE_PID=str(process.pid))
                 if proxy is not None:
-                    offline_check_then_retry(process, binary, fixture, proxy, target, output, environment, report, initial)
+                    (signature_check_then_retry if failure_mode == "signature-fallback" else offline_check_then_retry)(process, binary, fixture, proxy, target, output, environment, report, initial)
                 report["restart_control"] = wait_until("real Restart now control", lambda: (value if (value := windows_query("restart", environment, APP_UPGRADE_PID=str(process.pid), APP_UPGRADE_EXE=str(binary), APP_UPGRADE_STARTED=initial["started"], APP_UPGRADE_VERSION=b_version)).get("invoked") else None), seconds=600)
                 process.wait(timeout=120)
                 found = wait_until("NSIS installed and relaunched B", lambda: windows_query("find", environment, APP_UPGRADE_EXE=str(binary), APP_UPGRADE_OLD_PID=str(process.pid), APP_UPGRADE_AFTER=initial["started"]), seconds=300)
@@ -445,9 +503,17 @@ def native(root, target, package_format, a_source, a_version, b_source, b_versio
                 report["default_home_relaunch_verified"] = True
             if proxy is not None:
                 report["proxy_after_recovery"] = proxy.snapshot()
-                if not report.get("offline_check_preserved_a") or not any(row["outcome"] == "tunneled" for row in report["proxy_after_recovery"]["requests"]):
+                if not report.get("signature_rejection_preserved_a" if failure_mode == "signature-fallback" else "offline_check_preserved_a") or not any(row["outcome"] == "tunneled" for row in report["proxy_after_recovery"]["requests"]):
                     raise RuntimeError("same-process recovery did not use the owned original TLS tunnel")
-                report["verified_failure_cases"] = ["offline-update-check"]
+                if failure_mode == "signature-fallback":
+                    rows = report["proxy_after_recovery"]["requests"]
+                    retry_rows = rows[report["signature_retry_request_offset"]:]
+                    if (any(row["outcome"] == "denied" for row in rows)
+                            or not any(row["host"] == "raw.githubusercontent.com" and row["outcome"] == "blocked" for row in retry_rows)
+                            or not any(row["host"] == "github.com" and row["outcome"] == "tunneled" for row in retry_rows)
+                            or any(row["outcome"] == "blocked" and row["host"] != "raw.githubusercontent.com" for row in rows)):
+                        raise RuntimeError("signature retry lacks exact first-feed refusal or denied an unrelated host")
+                report["verified_failure_cases"] = ["updater-signature-fallback" if failure_mode == "signature-fallback" else "offline-update-check"]
                 report["native_failure_recovery_verified"] = True
             report["two_version_update_verified"] = True
         finally:
@@ -514,7 +580,7 @@ if __name__ == "__main__":
     for label in ("a", "b"):
         parser.add_argument("--" + label + "-source", required=True)
         parser.add_argument("--" + label + "-version", required=True)
-    parser.add_argument("--failure-mode", choices=("none", "offline-check"), default="none")
+    parser.add_argument("--failure-mode", choices=("none", "offline-check", "signature-fallback"), default="none")
     parser.add_argument("--target")
     parser.add_argument("--format", choices=tuple(FORMATS))
     parser.add_argument("--installation-context", choices=("redirected", "default-home"), default="redirected")
