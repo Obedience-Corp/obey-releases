@@ -26,10 +26,12 @@ def visible_text(applications, pid, api):
             values = [node.get_name()]
             text = node.get_text_iface()
             if text is not None:
-                length = text.get_character_count()
+                length = api.Text.get_character_count(text)
                 if not 0 <= length <= 65536:
                     raise RuntimeError('owned accessibility text exceeds observation bound')
-                values.append(text.get_text(0, length))
+                # Some GI releases return Accessible here; its deprecated
+                # get_text() getter shadows Text.get_text(start, end).
+                values.append(api.Text.get_text(text, 0, length))
             for value in values:
                 if not isinstance(value, str) or len(value) > 65536:
                     raise RuntimeError('invalid owned accessibility text')
