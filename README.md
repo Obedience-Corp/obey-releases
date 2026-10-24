@@ -475,3 +475,9 @@ an exact current no-op readback. Its explicit `missing_companion_repair_verified
 flag stays false on any native or cleanup failure. This is a missing-owned-file
 case; it does not claim foreign-file overwrite, corrupt database recovery,
 active-session continuity or licensed useful work.
+
+The anonymous release metadata request honors explicit GitHub Retry-After and
+exhausted-limit reset headers, with at most three retries and a one-hour reset
+budget. Permission failures without rate-limit evidence, artifact failures,
+invalid bytes and oversized inputs still fail immediately. Waits are logged;
+there is no token fallback.

@@ -3,6 +3,8 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import time
+import urllib.error
 import urllib.request
 
 from verify_app_candidate import checked_downloads
@@ -31,10 +33,51 @@ def sha256(path):
     return digest.hexdigest()
 
 
-def anonymous_download(url, destination, limit):
+def rate_limit_delay(error, now):
+    """Only explicit server rate-limit headers authorize another anonymous GET."""
+    if error.code not in (403, 429):
+        return None
+    retry = error.headers.get('Retry-After')
+    reset = error.headers.get('X-RateLimit-Reset')
+    waits = []
+    if retry is not None:
+        if not retry.isdigit():
+            return None
+        waits.append(int(retry))
+    if error.headers.get('X-RateLimit-Remaining') == '0':
+        if reset is None or not reset.isdigit():
+            return None
+        waits.append(max(0, int(reset) - now) + 1)
+    return max(1, *waits) if waits else None
+
+
+def open_anonymous(request, retry_rate_limit):
+    deadline = time.monotonic() + 3605
+    for attempt in range(4):
+        try:
+            return urllib.request.urlopen(request, timeout=120)
+        except urllib.error.HTTPError as error:
+            delay = rate_limit_delay(error, time.time()) if retry_rate_limit else None
+            error.close()
+            if delay is None or attempt == 3:
+                raise
+            if delay > deadline - time.monotonic():
+                raise RuntimeError('anonymous release API rate-limit reset exceeds bounded retry window') from error
+            print(f'Anonymous release API rate limited; waiting {delay:.0f}s for server reset (retry {attempt + 1}/3)', flush=True)
+            remaining = delay
+            while remaining > 0:
+                interval = min(60, remaining)
+                time.sleep(interval)
+                remaining -= interval
+                if remaining > 0:
+                    print(f'Anonymous release API reset wait: {remaining:.0f}s remaining', flush=True)
+    raise AssertionError('unreachable anonymous retry state')
+
+
+def anonymous_download(url, destination, limit, *, retry_rate_limit=False):
     request = urllib.request.Request(url, headers={"User-Agent": "festival-app-native-upgrade-proof"})
     count = 0
-    with urllib.request.urlopen(request, timeout=120) as response, destination.open("xb") as stream:
+    with open_anonymous(request, retry_rate_limit) as response, destination.open("xb") as stream:
         if response.status != 200:
             raise RuntimeError("immutable public App bytes unavailable")
         while chunk := response.read(1024 * 1024):
@@ -100,7 +143,7 @@ def checked_public(directory, source, version):
 def fetch_public(directory, source, version):
     tag = release_identity(source, version)
     directory.mkdir()
-    anonymous_download(f"https://api.github.com/repos/{REPOSITORY}/releases/tags/{tag}", directory / "release.json", 1024**2)
+    anonymous_download(f"https://api.github.com/repos/{REPOSITORY}/releases/tags/{tag}", directory / "release.json", 1024**2, retry_rate_limit=True)
     metadata = json.loads((directory / "release.json").read_text())
     assets = release_assets(metadata, source, version)
     (directory / "assets").mkdir()
