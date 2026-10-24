@@ -721,3 +721,26 @@ disks and provisioning logs are never uploaded. This is a documented cloud-image
 plus desktop fixture, not an unmodified retail OS installation. Graphical user
 login, public App installation/use, authorization dialogs and service recovery
 after App installation still require their separate journeys.
+
+### Foreign companion: preserve and recover the original selected command
+
+`existing_user=foreign-companion` is Windows-only with default shell, no login
+proof and no missing-Git mode. It starts with the same current public selected
+packages and responsive service. The fixture verifies the owned camp-app receipt,
+privately backs up its exact original file, then substitutes the authenticated
+candidate's genuine bundled Installer at that path. This is explicit fixture
+preparation, not a new companion release, forged version or provider emulator.
+The Installer's real `version --json` parser refuses the incompatible invocation;
+the selected-plugin update must report `unmanaged`/`E_PLUGIN_FOREIGN` without
+adopting or replacing it.
+
+The original App must visibly explain the failed required-companion check and
+its existing-owner remedy. While that error is present, the foreign bytes/mtime,
+original receipt metadata, other selected files, service PID/unit, settings,
+registered camp and foreign user files must remain unchanged. After normal App
+quit, only the authenticated private original may be restored; unknown target or
+backup changes refuse rollback. Two normal recovered launches must retain exact
+current receipts/files and the original companion bytes/mtime. Cleanup is required
+before `foreign_companion_manual_recovery_verified` can pass. This is bounded
+preservation and explicit manual recovery, not automatic foreign-file adoption,
+arbitrary uninstall, other-OS acceptance, consumer trust or useful licensed work.
