@@ -9,13 +9,19 @@ if os.name != 'nt' or os.environ.get('CANDIDATE_NATIVE_DISPOSABLE') != '1' or os
     raise RuntimeError('console integration requires disposable hosted Windows')
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 from windows_console import run_prompt
+from login_windows import version_invocation
 
 output=Path(os.environ['RUNNER_TEMP'])/'ordinary-console-proof'
 output.mkdir()
 shell=shutil.which('pwsh')
 if not shell:raise RuntimeError('installed PowerShell7 missing')
-document=run_prompt(shell,'@{answer=(6*7)}',dict(os.environ),output,'positive')
+body=("function fest { if ($args.Count -ne 2 -or $args[0] -isnot [string] -or "
+      "$args[0] -ne 'version' -or $args[1] -ne '--short') { throw 'ordinary argv was nested or altered' }; "
+      "$global:LASTEXITCODE=0; 'v0.9.8' }; " + version_invocation('fest') +
+      "@{answer=(6*7);ordinary_version=$version.Trim()}")
+document=run_prompt(shell,body,dict(os.environ),output,'positive')
 assert document['data']['answer']==42
+assert document['data']['ordinary_version']=='v0.9.8'
 assert document['guard']['input_redirected'] is False
 assert not document['guard']['probe_marker']
 transport=json.loads((output/'positive.transport.json').read_text())

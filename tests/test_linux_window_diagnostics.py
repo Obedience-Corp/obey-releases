@@ -32,7 +32,7 @@ class LinuxWindowDiagnosticsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary); process = Mock(pid=10); process.poll.return_value=None
             result = Mock(returncode=1,stdout='owned display tree',stderr='no matching window')
-            with patch.object(diagnostics,'process_inventory',return_value=[{'pid':10}]), patch.object(diagnostics.subprocess,'run',side_effect=[result,FileNotFoundError('wmctrl absent'),result,result]):
+            with patch.object(diagnostics,'process_inventory',return_value=[{'pid':10,'start_ticks':1000}]), patch.object(diagnostics.subprocess,'run',side_effect=[result,FileNotFoundError('wmctrl absent'),result,result,result]):
                 path = diagnostics.capture_failure(process,root/'a.png',{'DISPLAY':':99','WAYLAND_DISPLAY':'wayland-0','GH_TOKEN':'must-not-leak'},RuntimeError('owned App window timed out'))
             record=json.loads(path.read_text())
             self.assertTrue(record['diagnostic_only'])
@@ -41,6 +41,37 @@ class LinuxWindowDiagnosticsTests(unittest.TestCase):
             self.assertNotIn('must-not-leak',path.read_text())
             self.assertIn('wmctrl absent',record['probes'][1]['error'])
             process.kill.assert_not_called();process.terminate.assert_not_called()
+
+    def test_queries_only_bounded_numeric_windows_and_reports_stale_identity(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            process=Mock(pid=10);process.poll.return_value=None
+            found=Mock(returncode=0,stdout='17\n18\n17\n--root\n0\n4294967296\n19\n20\n21\n',stderr='')
+            result=Mock(returncode=0,stdout='Map State: IsUnMapped',stderr='')
+            with patch.object(diagnostics,'process_inventory',side_effect=[
+                    [{'pid':10,'start_ticks':1000}],[{'pid':10,'start_ticks':2000}]]), \
+                    patch.object(diagnostics.subprocess,'run',side_effect=[found]+[result]*12) as run:
+                path=diagnostics.capture_failure(process,Path(temporary)/'a.png',{'DISPLAY':':99'},RuntimeError('original window failure'))
+            record=json.loads(path.read_text())
+            self.assertEqual(record['owned_pid_window_ids'],['17','18','19','20','21'])
+            self.assertTrue(record['window_queries_truncated'])
+            per_window=[call.args[0] for call in run.call_args_list if '-id' in call.args[0]]
+            self.assertEqual([args[2] for args in per_window],['17','17','18','18','19','19','20','20'])
+            self.assertTrue(any('WM_STATE' in args for args in per_window))
+            self.assertFalse(record['post_probe_root_identity_verified'])
+            self.assertIn('stale',record['post_probe_identity_error'])
+            self.assertEqual(record['failure'],'original window failure')
+            process.kill.assert_not_called();process.terminate.assert_not_called()
+
+    def test_exhausted_diagnostic_budget_records_failure_without_more_commands(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            process=Mock(pid=10);process.poll.return_value=1
+            with patch.object(diagnostics.time,'monotonic',side_effect=[0,31,31,31,31,31]), \
+                    patch.object(diagnostics.subprocess,'run') as run:
+                path=diagnostics.capture_failure(process,Path(temporary)/'a.png',{'DISPLAY':':99'},RuntimeError('original window failure'))
+            run.assert_not_called()
+            record=json.loads(path.read_text())
+            self.assertTrue(all('error' in probe for probe in record['probes']))
+            self.assertEqual(record['failure'],'original window failure')
 
     def test_diagnostic_error_never_masks_original_window_failure(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -27,9 +27,8 @@ def validate_tool(data, tool, managed, foreign, reference=None):
     definition = normalized_definition(data.get('definition')) if wrapped else None
     if wrapped and definition != normalized_definition(reference):
         raise ValueError('PowerShell wrapper differs from the authenticated installed shell-init definition')
-    version = data.get('version_output', '').strip()
-    if not re.search(r'(?<![0-9.])' + re.escape(TOOLS[tool][0]) + r'(?![0-9.])', version):
-        raise ValueError('ordinary PowerShell command reported an unexpected version')
+    from login_version import version_record
+    version = version_record(tool, data.get('version_output', ''))
     return {'path': str(actual), 'version_output': version, 'profile_sentinel_verified': True,
             'dispatch': 'function' if wrapped else 'executable', 'installed_wrapper_verified': wrapped,
             'wrapper_sha256': hashlib.sha256(definition.encode()).hexdigest() if wrapped else None}
@@ -53,17 +52,26 @@ def reference_definition(fixture, tool, managed, environment, output, stage):
     return definition
 
 
+def version_invocation(tool):
+    from login_shell import TOOLS
+    if tool not in TOOLS: raise ValueError('invalid fixed ordinary version command')
+    arguments = ','.join(quote(value) for value in TOOLS[tool][1])
+    # Inline @() is an array argument to a PowerShell function, not argument
+    # splatting. Use a variable splat so navigation wrappers receive real argv.
+    return (f"$fa0027VersionArgs=@({arguments}); "
+            f"$version=(& {quote(tool)} @fa0027VersionArgs 2>&1 | Out-String); "
+            "if ($LASTEXITCODE -ne 0) { throw 'ordinary command failed' }; ")
+
+
 def verify_tool(fixture, tool, managed, environment, output, stage):
     from login_shell import TOOLS
     if tool not in TOOLS or not re.fullmatch(r'fa0027_keep_[0-9a-f]{12}', fixture['function']):
         raise ValueError('invalid fixed PowerShell probe')
     reference = reference_definition(fixture, tool, managed, environment, output, stage) if tool in ('camp', 'fest') else None
-    args = ','.join(quote(value) for value in TOOLS[tool][1])
     body = (f"$foreign=@(& {quote(fixture['function'])}); "
             f"$effective=Get-Command {quote(tool)} -ErrorAction Stop; "
             f"$native=Get-Command {quote(tool)} -CommandType Application -ErrorAction Stop | Select-Object -First 1; "
-            f"$version=(& {quote(tool)} @({args}) 2>&1 | Out-String); "
-            "if ($LASTEXITCODE -ne 0) { throw 'ordinary command failed' }; "
+            + version_invocation(tool) +
             "$definition=if ($effective.CommandType -eq 'Function') { $effective.Definition } else { $null }; "
             "@{foreign=$foreign;kind=$effective.CommandType.ToString();native_path=$native.Source;definition=$definition;version_output=$version}")
     document = run_prompt(fixture['shell'], body, environment, output, f'{stage}-login-{tool}')
