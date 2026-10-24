@@ -6,6 +6,8 @@ import os
 from pathlib import Path
 import sqlite3
 import sys
+import stat
+from types import SimpleNamespace
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -20,6 +22,20 @@ from verify_selected_components import checked_receipts
 
 
 class ForeignCompanionContracts(unittest.TestCase):
+    def test_only_windows_fixed_executable_filename_bits_are_reconciled(self):
+        values = dict(st_dev=1, st_ino=2, st_mode=stat.S_IFREG | 0o666, st_uid=3, st_gid=4, st_nlink=1)
+        info = SimpleNamespace(**values)
+        expected = dict(values, st_mode=stat.S_IFREG | 0o777)
+        self.assertEqual(foreign.descriptor_identity(info, 'camp-app.exe', windows=True), expected)
+        self.assertEqual(foreign.descriptor_identity(info, 'camp-app.exe', windows=False), values)
+        readonly = SimpleNamespace(**dict(values, st_mode=stat.S_IFREG | 0o444))
+        self.assertNotEqual(foreign.descriptor_identity(readonly, 'camp-app.exe', windows=True), expected)
+        for changed in ('st_ino', 'st_dev', 'st_uid', 'st_gid', 'st_nlink'):
+            other = SimpleNamespace(**dict(values, **{changed: 99}))
+            self.assertNotEqual(foreign.descriptor_identity(other, 'camp-app.exe', windows=True), expected)
+        with self.assertRaises(ValueError):
+            foreign.descriptor_identity(info, 'other.exe', windows=True)
+
     def prepare(self, root):
         home = selected.SelectedContracts().fixture(root)
         source = root/'festival'; source.write_bytes(b'known public Installer fixture bytes; never executed in unit contracts')

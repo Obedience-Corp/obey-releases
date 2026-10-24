@@ -29,6 +29,7 @@ jobs:
           ./tests/integration_windows_capture.ps1
           python tests/integration_windows_console.py
           python tests/integration_corrupt_integrations.py
+          python tests/integration_foreign_companion.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -38,6 +39,7 @@ jobs:
             ${{ runner.temp }}/capture-fixture-*
             ${{ runner.temp }}/ordinary-console-proof/
             ${{ runner.temp }}/corrupt-integration-control/
+            ${{ runner.temp }}/foreign-companion-control/
           if-no-files-found: ignore
   mac-window-tools:
     strategy:
