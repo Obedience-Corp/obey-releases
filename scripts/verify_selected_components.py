@@ -51,7 +51,7 @@ def checked_receipts(home, *, obey_version=None, immutable=False, external_suite
             raise ValueError('immutable receipt read refuses SQLite sidecars')
     if immutable:
         no_sidecars()
-    if external_suite not in (None, '0.3.9', '0.3.10', '0.3.24'):
+    if external_suite not in (None, '0.3.10', '0.3.24'):
         raise ValueError('unsupported external suite fixture')
     expected = dict(PACKAGES)
     if external_suite is not None:
@@ -106,7 +106,7 @@ def record_windows_discovery_snapshot(source, output, report):
 
 
 def checked_status(document, home, *, obey_version=None, external_suite=None):
-    if external_suite not in (None, '0.3.10', '0.3.24'):
+    if external_suite not in (None, '0.3.24'):
         raise ValueError('unsupported compatible external suite fixture')
     required_obey = PACKAGES["obedience-corp/obey"] if obey_version is None else obey_version
     if required_obey not in ("0.2.2", PACKAGES["obedience-corp/obey"]):
@@ -114,7 +114,7 @@ def checked_status(document, home, *, obey_version=None, external_suite=None):
     if not document.get("ok"):
         raise ValueError("status failed")
     tools = document["data"]["tools"]
-    suite_versions = {'camp': '0.10.1', 'fest': '0.8.0'} if external_suite == '0.3.10' else {'camp': '0.16.2', 'fest': '0.9.8'}
+    suite_versions = {'camp': '0.16.2', 'fest': '0.9.8'}
     for name, version in dict(suite_versions, obey=required_obey, **{'camp-app': '0.1.0'}).items():
         matches = [tool for tool in tools if tool.get("tool") == name]
         if len(matches) != 1 or not matches[0].get("present") or matches[0].get("version") != version:

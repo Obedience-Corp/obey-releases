@@ -50,7 +50,7 @@ class ExternalSuite(unittest.TestCase):
         return {'ok': True, 'data': {'tools': tools}}
 
     def test_optin_external_selection_is_exact_and_default_still_requires_managed_suite(self):
-        for version in ['0.3.10', '0.3.24']:
+        for version in ['0.3.24']:
             document = self.status(version)
             selected.checked_status(document, self.home, external_suite=version)
             result = selected.checked_receipts(self.home, external_suite=version)
@@ -67,6 +67,12 @@ class ExternalSuite(unittest.TestCase):
                 changed['data']['tools'][0][field] = value
                 with self.assertRaises(ValueError, msg=field):
                     selected.checked_status(changed, self.home, external_suite=version)
+
+    def test_former_minimum_is_only_a_pre_app_receipt_fixture(self):
+        self.assertEqual(external.SPECS['external-suite-old'][0], '0.3.10')
+        selected.checked_receipts(self.home, external_suite='0.3.10')
+        with self.assertRaisesRegex(ValueError, 'unsupported compatible'):
+            selected.checked_status(self.status('0.3.10'), self.home, external_suite='0.3.10')
 
     def test_suite_receipt_or_orphan_files_and_corrupt_owned_payload_are_rejected(self):
         with closing(sqlite3.connect(self.home / 'state.db')) as db:
@@ -230,7 +236,7 @@ class ExternalSuite(unittest.TestCase):
         fixture.settings.write_text(json.dumps({'lastUpdateCheckAt': stamp, 'setupCompletedAt': stamp}))
         with self.assertRaisesRegex(ValueError, 'foreground setup'):
             fixture.settings_readback()
-        fixture.version = '0.3.9'
+        fixture.version = '0.3.10'
         fixture.settings_readback()
         fixture.settings.write_text(json.dumps({'lastUpdateCheckAt': stamp, 'setupCompletedAt': None}))
         with self.assertRaisesRegex(ValueError, 'did not complete foreground'):
@@ -242,9 +248,9 @@ class ExternalSuite(unittest.TestCase):
     def test_final_readback_requires_unchanged_responsive_service_and_all_state(self):
         fixture = external.Fixture.__new__(external.Fixture)
         service = {'installed': True, 'loaded': True, 'socket_reachable': True, 'daemon_pid': 42}
-        fixture.report = {'service_before_app': service}
+        fixture.report = {'service_before_app': service, 'starter_absent_before_app': True}
         fixture.unchanged = Mock(return_value={'package': 'unchanged'})
-        reading = {'service': service, 'receipt': 'unchanged'}
+        reading = {'service': service, 'receipt': 'unchanged', 'starter': {'state': 'verified'}}
         fixture.finish(reading, copy.deepcopy(reading))
         changed = copy.deepcopy(reading); changed['receipt'] = 'changed'
         with self.assertRaisesRegex(ValueError, 'App relaunch changed'):
@@ -256,6 +262,78 @@ class ExternalSuite(unittest.TestCase):
         changed = copy.deepcopy(reading); changed['service']['daemon_pid'] = 99
         with self.assertRaisesRegex(ValueError, 'already-ready CLI service'):
             fixture.finish(changed, changed)
+
+    def starter_fixture(self):
+        fixture = external.Fixture.__new__(external.Fixture)
+        fixture.camp_config = self.home / 'config/obey/campaign'
+        fixture.starter = self.home / 'campaigns/festival'
+        return fixture
+
+    def write_starter(self, fixture):
+        fixture.camp_config.mkdir(parents=True)
+        (fixture.camp_config/'starter.json').write_text(json.dumps({
+            'version': 1, 'completed': True, 'path': str(fixture.starter), 'ready': True}))
+        (fixture.camp_config/'registry.json').write_text(json.dumps({
+            'version': 2, 'campaigns': {'camp-id': {'name': 'festival', 'path': str(fixture.starter)}}}))
+        (fixture.starter/'.campaign').mkdir(parents=True)
+        (fixture.starter/'.campaign/campaign.yaml').write_text('id: camp-id\nname: festival\n')
+        (fixture.starter/'festivals/.festival').mkdir(parents=True)
+
+    def test_starter_observation_cannot_create_or_repair_missing_setup(self):
+        fixture = self.starter_fixture()
+        fixture.require_no_starter()
+        with patch.object(external, 'command') as invoked:
+            with self.assertRaises(FileNotFoundError):
+                fixture.starter_readback()
+            invoked.assert_not_called()
+        self.assertFalse(fixture.camp_config.exists())
+        self.assertFalse(fixture.starter.exists())
+        self.write_starter(fixture)
+        with self.assertRaisesRegex(ValueError, 'preexisting starter'):
+            fixture.require_no_starter()
+        with patch.object(external, 'command') as invoked:
+            first = fixture.starter_readback()
+            self.assertEqual(first, fixture.starter_readback())
+            invoked.assert_not_called()
+
+    def test_incomplete_corrupt_or_unpublished_starter_cannot_pass(self):
+        fixture = self.starter_fixture()
+        self.write_starter(fixture)
+        path = fixture.camp_config/'starter.json'
+        original = path.read_text()
+        for change in ({'completed': False}, {'completed': 1}, {'version': True},
+                       {'version': 2}, {'path': '/foreign'}, {'staging': '/unfinished'}):
+            value = json.loads(original); value.update(change); path.write_text(json.dumps(value))
+            with self.assertRaisesRegex(ValueError, 'did not complete and publish'):
+                fixture.starter_readback()
+        for invalid in ('[]', '{broken'):
+            path.write_text(invalid)
+            with self.assertRaises(ValueError):
+                fixture.starter_readback()
+        path.write_text(original)
+        (fixture.starter/'festivals/.festival').rmdir()
+        with self.assertRaisesRegex(ValueError, 'lacks Festival initialization'):
+            fixture.starter_readback()
+
+    def test_starter_completion_without_matching_registration_is_rejected(self):
+        fixture = self.starter_fixture()
+        self.write_starter(fixture)
+        path = fixture.camp_config/'registry.json'
+        for camps in ({}, [], {'id': {'name': 'festival', 'path': '/foreign'}},
+                      {'id': {'name': 'wrong', 'path': str(fixture.starter)}},
+                      {'first': {}, 'second': {}}):
+            path.write_text(json.dumps({'campaigns': camps}))
+            with self.assertRaisesRegex(ValueError, 'registered camp|different camp'):
+                fixture.starter_readback()
+
+    def test_finish_refuses_missing_or_preseeded_starter_evidence(self):
+        fixture = external.Fixture.__new__(external.Fixture)
+        fixture.report = {}
+        with self.assertRaisesRegex(ValueError, 'App-created starter evidence'):
+            fixture.finish({'starter': {'state': 'already exists'}}, {})
+        fixture.report['starter_absent_before_app'] = True
+        with self.assertRaisesRegex(ValueError, 'App-created starter evidence'):
+            fixture.finish({}, {})
 
     def test_wrong_platform_and_mixed_journeys_refused_before_fixture_mutation(self):
         for target, package in [('aarch64-apple-darwin', 'both'), ('x86_64-pc-windows-msvc', 'both'), ('x86_64-unknown-linux-gnu', 'appimage')]:

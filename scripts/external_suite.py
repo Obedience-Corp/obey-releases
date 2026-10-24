@@ -11,8 +11,8 @@ from verify_candidate import command, wait_until
 from verify_selected_components import checked_bootstrap, checked_status, checked_receipts, fetch
 
 SPECS = {
-    'external-suite-old': ('0.3.9', 31575640, '74154bc2ebe8d35098d209156d20f4117f5acd6ec0050f0a4e32dfd24a5a3f33', '0.9.1', '0.7.0'),
-    'external-suite-minimum': ('0.3.10', 31611390, 'd676fa77ae20773771e2475c08ff5222fbfbafb1177e984bf052cd9aa8cd463f', '0.10.1', '0.8.0'),
+    'external-suite-old': ('0.3.10', 31611390, 'd676fa77ae20773771e2475c08ff5222fbfbafb1177e984bf052cd9aa8cd463f', '0.10.1', '0.8.0'),
+    'external-suite-minimum': ('0.3.24', 32913268, 'a5299b615bec4aa331b4ae1af123a31e6d4fc14606f8b8b4191c7cf9ba2cab2c', '0.16.2', '0.9.8'),
     'external-suite-current': ('0.3.24', 32913268, 'a5299b615bec4aa331b4ae1af123a31e6d4fc14606f8b8b4191c7cf9ba2cab2c', '0.16.2', '0.9.8'),
 }
 PACKAGE = 'obedience-festival'
@@ -53,6 +53,10 @@ class Fixture:
         self.environment, self.output, self.report = environment, Path(output), report
         self.settings = Path.home() / '.obey/festival-app/settings.json'
         self.note = Path.home() / '.fa0027-external-suite-preserve.txt'
+        self.camp_config = (Path(environment['XDG_CONFIG_HOME']) / 'obey/campaign'
+                            if environment.get('XDG_CONFIG_HOME') else Path.home() / '.obey/campaign')
+        self.starter = Path.home() / 'campaigns/festival'
+        self.require_no_starter()
         if package_info(environment) is not None or any(os.path.lexists('/usr/bin/' + name) for name in TOOLS):
             raise RuntimeError('refusing preexisting external suite/package files')
         if os.path.lexists(self.settings) or os.path.lexists(self.note):
@@ -62,11 +66,11 @@ class Fixture:
         self.original = None
         self.note_record = None
         report.update({'version': self.version, 'package': PACKAGE, 'first_launch_settings_absent': True,
-                       'seeded_background_timestamp': False, 'managed_correction_expected': self.version == '0.3.9'})
+                       'seeded_background_timestamp': False, 'managed_correction_expected': self.external_mode is None})
 
     @property
     def external_mode(self):
-        return None if self.version == '0.3.9' else self.version
+        return None if self.version == SPECS['external-suite-old'][0] else self.version
 
     def install_package(self):
         """Install the existing user's Suite before the App package exists."""
@@ -137,6 +141,8 @@ class Fixture:
     def before_launch(self):
         if os.path.lexists(self.settings):
             raise ValueError('fixture must not create App settings or a background-check timestamp')
+        self.require_no_starter()
+        self.report['starter_absent_before_app'] = True
         status = command([self.installer, '--managed', 'status', '--plugin', 'obedience-corp/camp-app', '--json'],
                          self.environment, json_output=True)
         if status.get('ok') is not True or status.get('data', {}).get('setup', {}).get('signals_incomplete'):
@@ -151,6 +157,48 @@ class Fixture:
         self.report['before_app_utc'] = utc_now()
         self.report['status_before_app'] = status
         self.report['before_app'] = self.unchanged()
+
+    def require_no_starter(self):
+        # CLI fixture preparation must not do the App's first-use work for it.
+        paths = [self.camp_config / name for name in ('config.json', 'registry.json', 'starter.json')]
+        if any(os.path.lexists(path) for path in [*paths, self.starter]):
+            raise ValueError('external first-launch fixture refuses preexisting starter/config/registry')
+
+    def starter_readback(self):
+        """Observe App-created starter state without invoking a setup command."""
+        def document(path):
+            before = physical(path)
+            if Path(path).stat().st_size > 1024 * 1024:
+                raise ValueError('starter state exceeds bounded readback')
+            data = Path(path).read_bytes()
+            if hashlib.sha256(data).hexdigest() != before['sha256'] or physical(path) != before:
+                raise ValueError('starter state changed during readback')
+            value = json.loads(data)
+            if not isinstance(value, dict):
+                raise ValueError('starter state must be an object')
+            return value, before
+
+        state, state_file = document(self.camp_config / 'starter.json')
+        if (type(state.get('version')) is not int or state['version'] != 1 or
+                state.get('completed') is not True or state.get('path') != str(self.starter) or
+                state.get('staging')):
+            raise ValueError('App did not complete and publish the starter camp')
+        registry, registry_file = document(self.camp_config / 'registry.json')
+        camps = registry.get('campaigns')
+        if not isinstance(camps, dict) or len(camps) != 1:
+            raise ValueError('App starter requires exactly one registered camp')
+        identity, entry = next(iter(camps.items()))
+        if (not identity or not isinstance(entry, dict) or entry.get('name') != 'festival' or
+                entry.get('path') != str(self.starter)):
+            raise ValueError('App starter registry points to a different camp')
+        if self.starter.is_symlink() or not self.starter.is_dir():
+            raise ValueError('App starter must be a real published directory')
+        marker = physical(self.starter / '.campaign/campaign.yaml')
+        festival_markers = [self.starter / 'festivals' / name for name in ('.festival', 'fest.yaml', '.fest')]
+        if not any(path.exists() and not path.is_symlink() for path in festival_markers):
+            raise ValueError('App starter lacks Festival initialization')
+        return {'state': state, 'state_file': state_file, 'registry': registry,
+                'registry_file': registry_file, 'camp_marker': marker}
 
     def non_suite_preserved(self, receipts):
         expected = self.report['managed_receipts_before_app']
@@ -197,9 +245,12 @@ class Fixture:
         return {'installer_status': status, 'receipts': receipts,
                 'selected_mtime_ns': {row['path']: Path(row['path']).stat().st_mtime_ns for row in receipts['files']},
                 'external_suite': self.unchanged(), 'app_settings': self.settings_readback(),
-                'non_suite_preserved': self.non_suite_preserved(receipts)}
+                'non_suite_preserved': self.non_suite_preserved(receipts),
+                'starter': self.starter_readback()}
 
     def finish(self, before, after):
+        if self.report.get('starter_absent_before_app') is not True or not before.get('starter'):
+            raise ValueError('external suite proof requires App-created starter evidence')
         for reading in (before, after):
             service = reading.get('service', {})
             if (any(service.get(key) is not True for key in ('installed', 'loaded', 'socket_reachable')) or

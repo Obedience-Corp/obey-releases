@@ -867,7 +867,7 @@ The fresh setup workflow has three explicit Debian-only `existing_user` cases:
 They require `platform_scope=deb`, default shell, no login-shell proof and no Git
 recovery mode. Defaults and the ordinary full matrix are unchanged.
 
-The fixture verifies pinned public Suite0.3.9/0.3.10/0.3.24 Debian bytes against
+The fixture verifies pinned public Suite0.3.10/0.3.24 Debian bytes against
 release checksums and installs the genuine package **before installing the App
 Debian package**. It compares the original Suite files immediately after the App
 package install. Once the App's bundled Installer is available, it provisions
@@ -880,7 +880,7 @@ Minimum/current cases must still have no setup-completion timestamp, proving the
 App did not mask the background path through successful foreground setup. The old
 case instead requires matching foreground setup/check timestamps.
 
-Old0.3.9 must receive a compatible managed suite while the three original package
+Old0.3.10 must receive a compatible managed suite while the three original package
 executables remain exact. Minimum/current copies must stay resolved from
 `/usr/bin`, with no managed suite receipt or shadow executables. An explicit
 external readback validates the two remaining managed receipts; default validators
@@ -891,6 +891,23 @@ owned App/service teardown. Changed or replaced package state fails cleanup.
 Failed Suite or App installation still runs the owned partial-install cleanup;
 the original installation error is retained. Proof records distinguish the
 pre-App package snapshot, post-App package snapshot, and first App launch.
+
+Package preservation alone is insufficient: B7 accepted Suite0.3.10 but visibly
+failed starter creation because Camp0.10.1 has no `setup` command. External cases
+now also refuse preexisting starter/config/registry state and require the App
+to write a completed starter journal, register its published `festival` camp,
+and create the Camp marker and Festival initialization. The verifier only reads
+these files; it never invokes `camp setup` or repairs the starter itself. Both
+launches must preserve the observed starter state. A missing command, failed
+scaffold, partial journal or absent registration cannot pass on package/service
+readiness alone. This evidence still does not prove licensed workspace use.
+
+The supported minimum is now Suite0.3.24, whose Camp0.16.2 supplies the App's
+required settings catalog/document API. Minimum and current scenario inputs
+currently coincide; qualify that identical version once, not as two independent
+compatibility results. The old case retains the previously accepted0.3.10 to
+regress the actual missing-setup defect. Earlier0.3.9/0.3.10 reports remain
+historical evidence tied to their original verifier revision.
 
 `external_suite_compatibility_verified` is separate from fresh-machine, useful
 work, licensing, reboot and consumer trust. Source/tests and fixture setup do not
