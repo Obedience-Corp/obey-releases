@@ -5,6 +5,7 @@ on:
       - '.github/workflows/verify-linux-clean-vm.yml'
       - 'scripts/linux_kvm.py'
       - 'scripts/linux_guest.py'
+      - 'scripts/linux_guest_session.py'
       - 'scripts/verify_candidate.py'
   workflow_dispatch:
 permissions:

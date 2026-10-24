@@ -1,7 +1,7 @@
 """Boot a verified Ubuntu desktop baseline, cold clone it and reboot the clone.
 
 The guest starts without Git or Obedience tools. This prepares the native test
-machine; it does not claim App, graphical login or consumer installation proof.
+machine and real local login; it does not claim App or consumer installation proof.
 Credentials, seed disks and guest disks are private and never uploaded.
 """
 import argparse
@@ -173,27 +173,54 @@ class Guest:
             time.sleep(3)
         raise TimeoutError('guest readiness timed out: ' + last_error)
 
-    def screenshot(self, destination):
+    def qmp_commands(self, commands, delay=0):
         with socket.socket(socket.AF_UNIX) as connection:
             connection.settimeout(15)
             connection.connect(str(self.qmp))
             with connection.makefile('rwb') as stream:
                 json.loads(stream.readline())
-                for command in ({'execute': 'qmp_capabilities'},
-                                {'execute': 'screendump', 'arguments': {'filename': str(destination.with_suffix('.ppm'))}}):
+                for command in [{'execute': 'qmp_capabilities'}, *commands]:
                     stream.write(json.dumps(command).encode() + b'\n'); stream.flush()
                     for _ in range(100):
                         response = json.loads(stream.readline())
                         if 'error' in response:
-                            raise RuntimeError('owned QMP capture failed: ' + str(response['error']))
+                            raise RuntimeError('owned QMP command failed: ' + str(response['error']))
                         if 'return' in response:
                             break
                     else:
-                        raise RuntimeError('owned QMP capture did not acknowledge')
+                        raise RuntimeError('owned QMP command did not acknowledge')
+                    if delay:
+                        time.sleep(delay)
+
+    def screenshot(self, destination):
+        self.qmp_commands([{'execute': 'screendump', 'arguments': {'filename': str(destination.with_suffix('.ppm'))}}])
         from PIL import Image
         with Image.open(destination.with_suffix('.ppm')) as frame:
             frame.save(destination)
         destination.with_suffix('.ppm').unlink()
+
+    def login(self, password):
+        # The qualified baseline's greeter has tester selected and the empty
+        # password field focused. Use its real keyboard authentication, never
+        # autologin, a new display server or an SSH-created graphical session.
+        if not password or any(letter not in string.ascii_lowercase + string.digits for letter in password):
+            raise ValueError('unexpected fixture keyboard alphabet')
+        script = Path(__file__).with_name('linux_guest_session.py').read_text()
+        if json.loads(self.ssh('python3 -', input=script).stdout) is not None:
+            raise RuntimeError('refusing to type a password into an already logged-in desktop')
+        if json.loads(self.ssh('python3 - --greeter', input=script).stdout) is not True:
+            raise RuntimeError('password input requires the current active LightDM greeter seat')
+        def key(values):
+            return {'execute': 'send-key', 'arguments': {
+                'keys': [{'type': 'qcode', 'data': value} for value in values], 'hold-time': 50}}
+        self.qmp_commands([key(['ctrl', 'a']), *[key([letter]) for letter in password], key(['ret'])], delay=.1)
+        deadline = time.monotonic() + 90
+        while time.monotonic() < deadline:
+            state = json.loads(self.ssh('python3 -', input=script).stdout)
+            if state is not None:
+                return state
+            time.sleep(1)
+        raise TimeoutError('normal LightDM login did not produce an active local Xfce session')
 
     def power(self, action, password):
         if action not in ('poweroff', 'reboot'):
@@ -260,16 +287,20 @@ def prove(output, report):
             if report['clone']['package_sha256'] != report['baseline']['package_sha256']:
                 raise ValueError('cold clone changed the baseline package inventory')
             report['guest_clone_verified'] = True
+            report['clone_login'] = guest.login(password)
+            guest.screenshot(output / 'clone-logged-in.png')
             guest.power('reboot', password)
             report['reboot'] = guest.wait(old_boot=report['clone']['boot_id'])
             guest.screenshot(output / 'reboot-desktop.png')
             if report['reboot']['package_sha256'] != report['clone']['package_sha256']:
                 raise ValueError('reboot changed the baseline package inventory')
+            report['reboot_login'] = guest.login(password)
+            guest.screenshot(output / 'reboot-logged-in.png')
             guest.power('poweroff', password)
             report['clone_cleanup'] = guest.close(); guest = None
             if digest(disk) != baseline_hash or digest(variables) != variables_hash:
                 raise ValueError('clone execution modified the powered-off baseline')
-            report.update(guest_reboot_verified=True, baseline_unchanged=True)
+            report.update(guest_reboot_verified=True, graphical_login_verified=True, baseline_unchanged=True)
         finally:
             if guest is not None:
                 report['failure_cleanup'] = guest.close()
