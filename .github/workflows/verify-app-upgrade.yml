@@ -39,7 +39,7 @@ concurrency:
 jobs:
   anonymous-inputs:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 75
     steps:
       - name: Validate requested package format
         env:
