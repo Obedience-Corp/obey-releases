@@ -18,6 +18,12 @@ document=run_prompt(shell,'@{answer=(6*7)}',dict(os.environ),output,'positive')
 assert document['data']['answer']==42
 assert document['guard']['input_redirected'] is False
 assert not document['guard']['probe_marker']
+transport=json.loads((output/'positive.transport.json').read_text())
+assert transport['backend_name']=='pywinpty-3.1.0-ConPTY' and transport['dimensions']==[120,40]
+assert transport['adapter_returncode']==0 and transport['shell_exit']['shell_returncode']==0
+assert transport['shell_exit']['shell_pid']==document['console_process']['pid']
+assert transport['owned_console_exit_verified'] is True
+assert (output/'positive.terminal.log').stat().st_size>0
 print('PASS: actual owned console starts ordinary PowerShell with unredirected input and no startup/readiness override')
 try:
     body="[IO.File]::WriteAllText('"+str(output/'timeout.body-started').replace("'","''")+"','sleep begun'); Start-Sleep -Seconds 30; @{unexpected=$true}"

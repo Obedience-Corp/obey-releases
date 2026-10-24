@@ -1,10 +1,10 @@
-"""Owned installed winpty console transport; never changes a startup guard."""
+"""Owned ConPTY console transport; never changes a startup guard."""
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
-import shutil
+import sys
 import subprocess
 import time
 
@@ -16,15 +16,57 @@ def quote(value):
 
 
 def find_backend(environment):
-    candidates = [shutil.which('winpty', path=environment.get('PATH'))]
-    git = shutil.which('git', path=environment.get('PATH'))
-    if git: candidates.append(str(Path(git).parent.parent / 'usr/bin/winpty.exe'))
-    if environment.get('ProgramFiles'):
-        candidates.append(str(Path(environment['ProgramFiles']) / 'Git/usr/bin/winpty.exe'))
-    for candidate in candidates:
-        if candidate and Path(candidate).is_file() and Path(candidate).name.lower() == 'winpty.exe':
-            return Path(candidate).resolve()
-    raise RuntimeError('installed Git-for-Windows winpty console transport is unavailable')
+    from importlib.metadata import version
+    import winpty._winpty as backend
+    if version('pywinpty') != '3.1.0':
+        raise RuntimeError('ordinary console requires pinned pywinpty 3.1.0')
+    return Path(backend.__file__).resolve()
+
+
+def conpty_adapter(shell, status_path):
+    """Separate owned process: fixed-size native ConPTY, never a TTY ioctl."""
+    import codecs
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+    from winpty import PTY
+    from winpty.enums import Backend
+    terminal = PTY(120, 40, backend=Backend.ConPTY)
+    if not terminal.spawn(shell, cmdline=' -NoLogo', cwd=os.getcwd(),
+                          env='\0'.join(f'{k}={v}' for k, v in os.environ.items()) + '\0'):
+        raise RuntimeError('ConPTY failed to spawn ordinary PowerShell')
+    # Poll the adapter's owned anonymous input pipe. A blocked daemon reader on
+    # sys.stdin could hold Python's buffered-IO lock during interpreter shutdown.
+    peek = ctypes.WinDLL('kernel32', use_last_error=True).PeekNamedPipe
+    peek.argtypes = [wintypes.HANDLE, wintypes.LPVOID, wintypes.DWORD,
+                     wintypes.LPVOID, ctypes.POINTER(wintypes.DWORD), wintypes.LPVOID]
+    peek.restype = wintypes.BOOL
+    handle = wintypes.HANDLE(msvcrt.get_osfhandle(sys.stdin.fileno()))
+    decode = codecs.getincrementaldecoder('utf-8')()
+    while terminal.isalive():
+        available = wintypes.DWORD()
+        if not peek(handle, None, 0, None, ctypes.byref(available), None):
+            raise ctypes.WinError(ctypes.get_last_error())
+        if available.value:
+            value = os.read(sys.stdin.fileno(), min(available.value, 65536))
+            if not value:
+                raise RuntimeError('ConPTY controller input closed before shell exit')
+            text = decode.decode(value)
+            if text: terminal.write(text)
+        chunk = terminal.read(blocking=False)
+        if chunk:
+            sys.stdout.buffer.write(chunk.encode('utf-8')); sys.stdout.buffer.flush()
+        time.sleep(0.01)
+    # Retain final terminal output and the actual spawned shell status.
+    chunk = terminal.read(blocking=False)
+    if chunk:
+        sys.stdout.buffer.write(chunk.encode('utf-8')); sys.stdout.buffer.flush()
+    status = terminal.get_exitstatus()
+    Path(status_path).write_text(json.dumps({'shell_pid': terminal.pid, 'shell_returncode': status,
+        'backend': 'ConPTY', 'columns': 120, 'rows': 40}) + '\n')
+    if type(status) is not int:
+        raise RuntimeError('ConPTY shell exit status unavailable')
+    return status
 
 
 def validate_startup(document, shell):
@@ -67,7 +109,8 @@ def run_prompt(shell, body, environment, output, stem, timeout=60):
     ready = output / (stem + '.started.json')
     acknowledge = output / (stem + '.owned')
     adapter_record = output / (stem + '.adapter.json')
-    for path in [script, result, raw, ready, acknowledge, adapter_record, Path(str(result) + '.tmp'), Path(str(ready) + '.tmp')]:
+    shell_exit = output / (stem + '.shell-exit.json')
+    for path in [script, result, raw, ready, acknowledge, adapter_record, shell_exit, Path(str(result) + '.tmp'), Path(str(ready) + '.tmp')]:
         if path.exists() or path.is_symlink(): raise RuntimeError('refusing existing console evidence output')
     script.write_text("""$ErrorActionPreference='Stop'
 $owned=Get-Process -Id $PID
@@ -91,6 +134,7 @@ $json=$record | ConvertTo-Json -Depth 16 -Compress
     snapshot = []
     root_identity = None
     transport = {'backend': str(backend), 'backend_sha256': hashlib.sha256(backend.read_bytes()).hexdigest(),
+                 'backend_name': 'pywinpty-3.1.0-ConPTY', 'dimensions': [120, 40],
                  'ordinary_startup_verified': False, 'owned_console_exit_verified': False}
     def capture_owned():
         rows = command(observer, dict(environment, APP_PROOF_PROCESS_MODE='snapshot',
@@ -108,11 +152,11 @@ $json=$record | ConvertTo-Json -Depth 16 -Compress
 
     try:
         with raw.open('xb') as stream:
-            # winpty gives pwsh a real owned console. Only its adapter sees
-            # redirected pipes; the child has no -Command/-File/-EncodedCommand,
-            # -NonInteractive or readiness-marker startup override.
-            process = subprocess.Popen([str(backend), '-Xallow-non-tty', str(shell), '-NoLogo'],
-                env=environment, stdin=subprocess.PIPE, stdout=stream, stderr=subprocess.STDOUT)
+            # Only this separate adapter sees redirected pipes. The spawned
+            # PowerShell receives a fixed-size native ConPTY and normal startup.
+            process = subprocess.Popen([sys.executable, '-u', str(Path(__file__).resolve()),
+                '--conpty-adapter', str(shell), str(shell_exit)], env=environment, stdin=subprocess.PIPE,
+                stdout=stream, stderr=subprocess.STDOUT)
             transport['adapter_pid'] = process.pid
             root_identity = {'pid': process.pid, 'started': process_birth(process)}
             snapshot.append(root_identity)
@@ -160,6 +204,10 @@ $json=$record | ConvertTo-Json -Depth 16 -Compress
             if document.get('ok') is not True:
                 raise RuntimeError('ordinary console readback failed: ' + document.get('error', 'unknown error'))
             if process.returncode: raise RuntimeError('ordinary console adapter returned failure')
+            exit_record = json.loads(shell_exit.read_text())
+            if exit_record.get('shell_pid') != identity['pid'] or exit_record.get('shell_returncode') != 0:
+                raise RuntimeError('ordinary console shell did not report a successful owned exit')
+            transport['shell_exit'] = exit_record
             return document
     except BaseException as original:
         transport['failure'] = str(original)
@@ -187,7 +235,17 @@ $json=$record | ConvertTo-Json -Depth 16 -Compress
             raise RuntimeError(f'ordinary console failed: {original}; cleanup: {transport["cleanup_failure"]}') from original
         raise
     finally:
+        if process is not None:
+            transport['adapter_returncode'] = process.poll()
+        if shell_exit.is_file():
+            transport['shell_exit'] = json.loads(shell_exit.read_text())
         if process is not None and process.stdin is not None:
             try: process.stdin.close()
             except BrokenPipeError as close: transport['stdin_close_error'] = str(close)
         (output / (stem + '.transport.json')).write_text(json.dumps(transport, indent=2) + '\n')
+
+
+if __name__ == '__main__':
+    if len(sys.argv) != 4 or sys.argv[1] != '--conpty-adapter':
+        raise SystemExit('invalid fixed ConPTY adapter invocation')
+    raise SystemExit(conpty_adapter(sys.argv[2], sys.argv[3]))

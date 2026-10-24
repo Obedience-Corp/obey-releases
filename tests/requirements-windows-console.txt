@@ -1,0 +1,1 @@
+pywinpty==3.1.0 --hash=sha256:cc51bc690f58a969eab7dcc8d070321187ed47d5f076edc3b4a56076b38831f3

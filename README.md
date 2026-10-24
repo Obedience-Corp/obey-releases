@@ -507,8 +507,8 @@ foreign commands and wrong external file identities fail. POSIX reference shells
 have an isolated HOME/startup context; the actual login environment is unchanged.
 Real Bash and Zsh tests run in the contracts Docker image.
 
-The installed PowerShell7 proof uses Git for Windows' installed winpty console
-backend with only `pwsh -NoLogo` startup. It does not use a noninteractive/encoded
+The installed PowerShell7 proof uses hash-pinned PyWinpty 3.1.0's native ConPTY
+backend with explicit 120x40 dimensions with only `pwsh -NoLogo` startup. It does not use a noninteractive/encoded
 startup or the Installer readiness override. A native identity handshake proves
 ConsoleHost, unredirected input, ordinary startup flags and an owned process tree
 before any command readback. Raw terminal bytes remain unmodified; structured
