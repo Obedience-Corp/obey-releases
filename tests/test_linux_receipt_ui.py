@@ -8,7 +8,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 import linux_receipt_ui as ui
 import linux_accessibility as settings
 
-API = SimpleNamespace(StateType=SimpleNamespace(SHOWING=1, VISIBLE=2))
+API = SimpleNamespace(StateType=SimpleNamespace(SHOWING=1, VISIBLE=2),
+                      Text=SimpleNamespace(
+                          get_character_count=lambda text: text.get_character_count(),
+                          get_text=lambda text, start, end: text.read_text(start, end)))
 
 
 def node(name='', pid=42, children=(), visible=True):
@@ -27,7 +30,10 @@ class LinuxReceiptUI(unittest.TestCase):
         text = node()
         text.get_text_iface.return_value = Mock()
         text.get_text_iface.return_value.get_character_count.return_value = 10
-        text.get_text_iface.return_value.get_text.return_value = 'diagnostic'
+        text.get_text_iface.return_value.read_text.return_value = 'diagnostic'
+        # Ubuntu GI exposes Accessible.get_text(), a zero-argument interface
+        # getter, on this same object. The observer must dispatch via Text.
+        text.get_text_iface.return_value.get_text.side_effect = AssertionError('shadowed Accessible getter')
         owned = node('owned', children=(node('hidden', visible=False), text))
         values, count = ui.visible_text([node('foreign', pid=99), owned], 42, API)
         self.assertEqual(set(values), {'owned', 'diagnostic'})

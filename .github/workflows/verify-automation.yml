@@ -131,3 +131,11 @@ jobs:
             -e CANDIDATE_TEST_CONTAINER=1 -e PYTHONDONTWRITEBYTECODE=1 \
             -v "$PWD:/src:ro" -w /src obey-release-git-ui:local \
             /usr/bin/python3 -W error::ResourceWarning tests/integration_missing_git.py
+      - name: Verify actual GTK text interface on the native Ubuntu baseline
+        run: |
+          docker build --build-arg BASE_IMAGE=ubuntu:24.04 -t obey-release-ubuntu-ui:local - < tests/Dockerfile.git-ui
+          docker run --rm --network none --read-only --user 10001:10001 --tmpfs /tmp:rw,exec --tmpfs /run \
+            -e CANDIDATE_TEST_CONTAINER=1 -e PYTHONDONTWRITEBYTECODE=1 \
+            -e HOME=/tmp -e GTK_MODULES=atk-bridge \
+            -v "$PWD:/src:ro" -w /src obey-release-ubuntu-ui:local \
+            dbus-run-session -- xvfb-run -a /usr/bin/python3 -W error::ResourceWarning tests/integration_linux_git_retry.py
