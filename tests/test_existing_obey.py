@@ -130,3 +130,52 @@ class ExistingObeyContracts(unittest.TestCase):
             evidence = [json.loads(line) for line in fixture['settings_evidence'].read_text().splitlines()]
             self.assertEqual(len(evidence), 2)
             self.assertEqual(evidence[-1]['settings'], actual)
+
+    def test_missing_companion_fixture_removes_only_the_verified_owned_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = fixtures.SelectedContracts().fixture(Path(directory))
+            before = checked_receipts(home)
+            removed = existing_obey.remove_owned_companion(home)
+            self.assertTrue(removed['absent_before_launch'])
+            self.assertEqual(removed['path'], str(home / 'bin/camp-app'))
+            self.assertFalse((home / 'bin/camp-app').exists())
+            for row in before['files']:
+                if row['receipt_pkg_id'] != existing_obey.COMPANION:
+                    self.assertEqual(hashlib.sha256(Path(row['path']).read_bytes()).hexdigest(), row['hash'])
+            # Receipt retained: the App must observe and repair a real partial
+            # installation, not a preseeded replacement falsely called repair.
+            with self.assertRaisesRegex(ValueError, 'differs from'):
+                checked_receipts(home)
+
+    def test_missing_companion_refuses_a_foreign_replacement_or_symlink(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = fixtures.SelectedContracts().fixture(Path(directory))
+            companion = home / 'bin/camp-app'
+            companion.write_bytes(b'foreign replacement')
+            with self.assertRaisesRegex(ValueError, 'differs from'):
+                existing_obey.remove_owned_companion(home)
+            self.assertEqual(companion.read_bytes(), b'foreign replacement')
+            companion.unlink()
+            foreign = home / 'foreign'; foreign.write_bytes(b'foreign data')
+            companion.symlink_to(foreign)
+            with self.assertRaisesRegex(ValueError, 'outside'):
+                existing_obey.remove_owned_companion(home)
+            self.assertTrue(companion.is_symlink())
+            self.assertEqual(foreign.read_bytes(), b'foreign data')
+
+    def test_companion_repair_preserves_other_packages_and_running_service(self):
+        after = self.state(); before = copy.deepcopy(after)
+        for state in [before, after]:
+            state['receipts']['receipts'].append({'package_id': existing_obey.COMPANION, 'version': '0.1.0'})
+            state['receipts']['files'].append({'receipt_pkg_id': existing_obey.COMPANION, 'path': 'camp-app', 'hash': 'official-companion'})
+            state['mtimes']['camp-app'] = 1
+        before['observed_at'] = '2026-10-24T00:00:02Z'
+        before['lifecycle'] = {'lastUpdateCheckAt': '2026-10-24T00:00:01Z', 'setupCompletedAt': None}
+        after['mtimes']['camp-app'] = 2
+        existing_obey.compare(before, after, 'missing-companion')
+        mutations = [lambda s: s['service'].update(daemon_pid=21), lambda s: s['unit'].update(mtime_ns=2),
+                     lambda s: s['mtimes'].update(ob=3), lambda s: s['receipts']['files'][-1].update(hash='foreign'),
+                     lambda s: s['preserved']['files'].update(foreign='lost')]
+        for mutate in mutations:
+            broken = copy.deepcopy(after); mutate(broken)
+            with self.assertRaises(ValueError): existing_obey.compare(before, broken, 'missing-companion')
