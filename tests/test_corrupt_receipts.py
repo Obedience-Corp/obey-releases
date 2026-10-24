@@ -114,22 +114,35 @@ class ReceiptCorruptionContracts(unittest.TestCase):
             fixture=receipts.Fixture(home,root/'private',{},dict(os.environ));fixture.corrupt()
             data={'home':str(home),'bin_dir':str(home/'bin'),'marketplace_source':'official-obey','origin':'managed',
                   'prerequisites':[{'name':'git','present':True}],
-                  'tools':[{'tool':'camp','present':True,'version':'0.16.2','path':str(home/'bin/camp'),'receipt_version':'0.3.24'}]}
+                  'tools':[{'tool':'camp','present':True,'version':'0.16.2','path':str(home/'bin/camp'),'origin':'managed','receipt_version':'0.3.24'},
+                           {'tool':'camp-app','package':'obedience-corp/camp-app','present':True,'version':'0.1.0','path':str(home/'bin/camp-app'),'managed':str(home/'bin/camp-app'),'origin':'managed','protocol_major':1,'capabilities':['status','open'],'receipt_version':'0.1.0'}]}
             before={'installer_status':{'ok':True,'data':data},'receipts':fixture.receipts,'mtimes':{name:row['mtime_ns'] for name,row in fixture.physical.items()}}
             document={'ok':True,'data':copy.deepcopy(data)}
             document['data']['setup']={'signals_incomplete':True}
-            document['data']['tools'][0].pop('receipt_version')
+            for tool in document['data']['tools']:tool.pop('receipt_version')
+            document['data']['tools'][1]['origin']='leftover'
             try:
                 with patch.object(receipts,'command',return_value=document):
                     self.assertEqual(receipts.probe(root/'festival',fixture,before,{},root),document)
-                for kind in ('signal','tool','receipt','route'):
+                for kind in ('signal','tool','receipt','route','other-origin','companion-origin','companion-package','companion-path','companion-version','companion-protocol','companion-capabilities'):
                     bad=copy.deepcopy(document)
                     if kind=='signal':bad['data']['setup']['signals_incomplete']=False
                     elif kind=='tool':bad['data']['tools'][0]['version']='unrelated'
                     elif kind=='receipt':bad['data']['tools'][0]['receipt_version']='0.3.24'
-                    else:bad['data']['home']='/another/home'
+                    elif kind=='route':bad['data']['home']='/another/home'
+                    elif kind=='other-origin':bad['data']['tools'][0]['origin']='leftover'
+                    else:
+                        key={'companion-origin':'origin','companion-package':'package','companion-path':'path','companion-version':'version','companion-protocol':'protocol_major','companion-capabilities':'capabilities'}[kind]
+                        bad['data']['tools'][1][key]=['unrelated'] if key=='capabilities' else 'unrelated'
                     with patch.object(receipts,'command',return_value=bad),self.assertRaises(ValueError):
                         receipts.probe(root/'festival',fixture,before,{},root)
+                target=home/'bin/camp-app';original=target.read_bytes();info=target.stat()
+                try:
+                    target.write_bytes(b'unknown replacement reporting the same version')
+                    with patch.object(receipts,'command',return_value=document),self.assertRaisesRegex(ValueError,'physical files'):
+                        receipts.probe(root/'festival',fixture,before,{},root)
+                finally:
+                    target.write_bytes(original);os.utime(target,ns=(info.st_atime_ns,info.st_mtime_ns))
             finally:fixture.restore()
 
     def test_authenticated_specific_unreadable_state_row_is_required(self):

@@ -147,6 +147,12 @@ class Fixture:
         self.broken_mtime = self.path.stat().st_mtime_ns
         self.report.update(stage=self.stage, corrupted_mtime_ns=self.broken_mtime)
 
+    def unchanged_selected(self):
+        for name, expected in self.physical.items():
+            path = Path(name)
+            if owned_executable(path).st_mtime_ns != expected['mtime_ns'] or sha(path.read_bytes()) != expected['sha256']:
+                raise ValueError('receipt diagnostic changed selected physical files')
+
     def unchanged(self):
         self.no_sidecars()
         if (self.stage != 'corrupted' or identity(owned(self.path)) != identity(self.info) or
@@ -194,6 +200,7 @@ CODE = 'E_INSTALLER_STATE_UNREADABLE'
 
 def probe(installer, fixture, before, environment, output):
     fixture.unchanged()
+    fixture.unchanged_selected()
     document = command([installer, '--managed', 'status', '--plugin', 'obedience-corp/camp-app', '--json'], environment, json_output=True)
     (output/'corrupt-receipt-status.json').write_text(json.dumps(document, indent=2)+'\n')
     data = document.get('data', {})
@@ -205,13 +212,33 @@ def probe(installer, fixture, before, environment, output):
     for key in ('home', 'bin_dir', 'marketplace_source', 'origin', 'flavor', 'prerequisites'):
         if data.get(key) != baseline.get(key):
             raise ValueError('corrupt receipt diagnostic changed unrelated Installer status facts')
+    before_companion = [row for row in baseline['tools'] if row.get('tool') == 'camp-app']
+    after_companion = [row for row in data.get('tools', []) if row.get('tool') == 'camp-app']
+    owned_rows = [row for row in fixture.receipts['files'] if row['receipt_pkg_id'] == 'obedience-corp/camp-app']
+    if (len(before_companion) != 1 or len(after_companion) != 1 or len(owned_rows) != 1 or
+            before_companion[0].get('origin') != 'managed' or after_companion[0].get('origin') != 'leftover' or
+            before_companion[0].get('package') != 'obedience-corp/camp-app' or
+            before_companion[0].get('path') != owned_rows[0]['path'] or
+            before_companion[0].get('managed') != owned_rows[0]['path']):
+        raise ValueError('unreadable companion did not retain its verified receipt-derived origin transition')
+    # Installer0.3.7 statusplugin.go promotes only a resolved plugin with a
+    # readable receipt to managed. Keep this unknown-ownership observation;
+    # every other field and every other tool origin must remain exact.
     def without_receipts(rows):
-        return sorted([{key: value for key, value in row.items() if key not in ('receipt_version', 'receipt_channel')} for row in rows], key=lambda row: row['tool'])
+        result = []
+        for row in rows:
+            omitted = {'receipt_version', 'receipt_channel'}
+            if row.get('tool') == 'camp-app':
+                omitted.add('origin')
+            result.append({key: value for key, value in row.items() if key not in omitted})
+        return sorted(result, key=lambda row: row['tool'])
     if without_receipts(data.get('tools', [])) != without_receipts(baseline['tools']):
         raise ValueError('corrupt receipt diagnostic changed selected live tool facts')
     if any(row.get('receipt_version') or row.get('receipt_channel') for row in data['tools']):
         raise ValueError('unreadable receipt state unexpectedly reported readable receipt rows')
     fixture.unchanged()
+    fixture.unchanged_selected()
+    fixture.report['receipt_derived_companion_origin'] = {'before': 'managed', 'unreadable': 'leftover', 'receipt_rows_readable': False}
     return document
 
 
