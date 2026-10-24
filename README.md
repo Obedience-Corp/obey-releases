@@ -544,6 +544,15 @@ checks. Native isolated fixtures exercise normal detach and debugger timeout,
 including a heartbeat proving that the child resumes. None of this changes the
 original launch failure to success or counts as useful first-use evidence.
 
+The debugger runs with the owned App's UID/GID so it can read user-owned FUSE
+mounts. Its only inherited, ambient, effective and bounding capability is
+SYS_PTRACE; the original elevated timeout remains outside that restricted child.
+The actual debugger reports those identities for verification. No file capability,
+FUSE allow-other option or system ptrace policy is changed. A disposable FUSE
+fixture proves root cannot read the mounted executable, while the same-UID
+debugger obtains a symbolized stack and detaches. Only that fixture container
+receives mount permissions; normal App verification retains its existing policy.
+
 macOS query and normal-quit helpers are compiled once after artifact/sidecar
 checks and before launching the App. Every capture executes the prepared native
 helper, with no `swift -e` fallback. Build evidence records compiler invocation
