@@ -114,7 +114,8 @@ class WindowsLoginContracts(unittest.TestCase):
             def read(self,blocking):self.eof=True;raise ReadFailure('')
         terminal=Terminal();records=[]
         self.assertIsNone(windows_console.read_terminal(terminal,ReadFailure,records.append))
-        self.assertEqual(records,[{'alive':False,'status':0,'iseof':True,'event':'read-error','error_type':'ReadFailure','error':''}])
+        self.assertEqual(records[0],{'alive':False,'status':0,'iseof':True,'event':'read-error','error_type':'ReadFailure','error':''})
+        self.assertEqual(records[-1]['event'],'post-error-eof-readback')
         for changes in [{'alive':True},{'status':None}]:
             terminal=Terminal()
             for key,value in changes.items():setattr(terminal,key,value)
@@ -127,3 +128,25 @@ class WindowsLoginContracts(unittest.TestCase):
         def no_eof(blocking):raise ReadFailure('')
         terminal.read=no_eof
         with self.assertRaises(ReadFailure):windows_console.read_terminal(terminal,ReadFailure)
+
+    def test_post_exit_empty_error_waits_only_for_bounded_authoritative_eof(self):
+        from unittest.mock import patch
+        class ReadFailure(Exception):pass
+        class Terminal:
+            count=0
+            def isalive(self):return False
+            def get_exitstatus(self):return 0
+            def iseof(self):self.count+=1;return self.count>=4
+            def read(self,blocking):raise ReadFailure('')
+        records=[]
+        with patch.object(windows_console.time,'sleep'):
+            self.assertIsNone(windows_console.read_terminal(Terminal(),ReadFailure,records.append,
+                windows_console.time.monotonic()+1))
+        self.assertFalse(records[0]['iseof'])
+        self.assertTrue(records[-1]['iseof'])
+        terminal=Terminal();terminal.iseof=lambda:False
+        records=[]
+        with self.assertRaises(ReadFailure):
+            windows_console.read_terminal(terminal,ReadFailure,records.append,
+                windows_console.time.monotonic()-1)
+        self.assertFalse(records[-1]['iseof'])

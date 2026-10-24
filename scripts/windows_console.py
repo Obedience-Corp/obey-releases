@@ -23,7 +23,7 @@ def find_backend(environment):
     return Path(backend.__file__).resolve()
 
 
-def read_terminal(terminal, read_error, diagnostics=None):
+def read_terminal(terminal, read_error, diagnostics=None, eof_deadline=None):
     def state():
         return {'alive': terminal.isalive(), 'status': terminal.get_exitstatus(),
                 'iseof': terminal.iseof()}
@@ -48,15 +48,25 @@ def read_terminal(terminal, read_error, diagnostics=None):
         # Pinned async NTSTATUS -> HRESULT.message() can yield an empty error.
         # Only these two observed EOF forms with independently proven full EOF
         # and actual shell exit are accepted; unrelated errors remain failures.
-        if str(error) in ('Standard out reached EOF', '') and drained(after):
-            return None
+        if str(error) in ('Standard out reached EOF', ''):
+            # The queued async reader error can be observed before its reader
+            # exit event/cleanup closes ConPTY output. Wait only for that proven
+            # post-exit transition, within the caller's existing drain deadline.
+            while (after['alive'] is False and type(after['status']) is int
+                    and not drained(after) and eof_deadline is not None
+                    and time.monotonic() < eof_deadline):
+                time.sleep(0.01)
+                after = state()
+            if diagnostics:
+                diagnostics(dict(after, event='post-error-eof-readback', error=str(error)))
+            if drained(after): return None
         raise
 
 
 def drain_terminal(terminal, read_error, stream, timeout=10, diagnostics=None):
     deadline = time.monotonic() + timeout
     while True:
-        chunk = read_terminal(terminal, read_error, diagnostics)
+        chunk = read_terminal(terminal, read_error, diagnostics, deadline)
         if chunk is None: return
         if chunk:
             stream.write(chunk.encode('utf-8')); stream.flush()
@@ -99,7 +109,7 @@ def conpty_adapter(shell, status_path):
                 raise RuntimeError('ConPTY controller input closed before shell exit')
             text = decode.decode(value)
             if text: terminal.write(text)
-        chunk = read_terminal(terminal, WinptyError, diagnostic)
+        chunk = read_terminal(terminal, WinptyError, diagnostic, time.monotonic() + 10)
         if chunk:
             sys.stdout.buffer.write(chunk.encode('utf-8')); sys.stdout.buffer.flush()
         time.sleep(0.01)
