@@ -1073,3 +1073,15 @@ Failed real-session CLI operations retain only a fixed operation label, exit
 code, output lengths/digests and allowlisted canonical gRPC codes. Failure-only
 service, campaign and task-owned provider metadata helps diagnosis without raw
 provider output, prompts, CLI arguments or recovery retries.
+
+`existing_user=standalone-companion` is a Debian-only preservation journey. It
+uses authentic published Installer0.3.8 and the companion's real self-installer
+before the App package exists. Current Suite/Obey have two managed receipts;
+the compatible PATH companion retains its separate standalone receipt/bind and
+must be reused without managed adoption or duplication. Its binary, symlink,
+configuration, CLI-created Camp state and an unselected user-plugin config marker
+must survive App install, first launch, reopen and App uninstall. The marker does
+not claim optional plugin functionality. Default selected/idle validators remain
+strict; only this explicit profile permits the external companion. No App settings
+are preseeded: the normal first-launch check must complete and compatible tools
+must skip foreground repair. This does not establish licensed useful work.

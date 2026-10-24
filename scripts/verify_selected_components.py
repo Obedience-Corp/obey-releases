@@ -43,7 +43,7 @@ def checked_bootstrap(data, checksums, name):
     return digest
 
 
-def checked_receipts(home, *, obey_version=None, immutable=False, external_suite=None):
+def checked_receipts(home, *, obey_version=None, immutable=False, external_suite=None, standalone_companion=False):
     # Only an independently quiescent fixture may assert immutable storage.
     # This does not discover or lock out writers. Normal live readback stays ro.
     def no_sidecars():
@@ -53,7 +53,11 @@ def checked_receipts(home, *, obey_version=None, immutable=False, external_suite
         no_sidecars()
     if external_suite not in (None, '0.3.10', '0.3.24'):
         raise ValueError('unsupported external suite fixture')
+    if type(standalone_companion) is not bool or standalone_companion and external_suite is not None:
+        raise ValueError('unsupported mixed standalone companion profile')
     expected = dict(PACKAGES)
+    if standalone_companion:
+        expected.pop('obedience-corp/camp-app')
     if external_suite is not None:
         expected.pop('obedience-corp/festival')
     if obey_version is not None:
@@ -78,6 +82,8 @@ def checked_receipts(home, *, obey_version=None, immutable=False, external_suite
             raise ValueError("installed file differs from its verified receipt")
     names = {Path(row["path"]).stem if os.name == "nt" else Path(row["path"]).name for row in files}
     required = {"camp-app", "obey", "ob"} if external_suite is not None else {"camp", "fest", "camp-app", "obey", "ob"}
+    if standalone_companion:
+        required.remove('camp-app')
     if not required <= names or names - required - (set() if external_suite is not None else {"festival"}) or len(files) != len(names):
         raise ValueError("selected executable inventory is incomplete")
     return {"receipts": receipts, "files": files}
@@ -105,9 +111,11 @@ def record_windows_discovery_snapshot(source, output, report):
     evidence['verified'] = True
 
 
-def checked_status(document, home, *, obey_version=None, external_suite=None):
+def checked_status(document, home, *, obey_version=None, external_suite=None, standalone_companion=False):
     if external_suite not in (None, '0.3.24'):
         raise ValueError('unsupported compatible external suite fixture')
+    if type(standalone_companion) is not bool or standalone_companion and external_suite is not None:
+        raise ValueError('unsupported mixed standalone companion status')
     required_obey = PACKAGES["obedience-corp/obey"] if obey_version is None else obey_version
     if required_obey not in ("0.2.2", PACKAGES["obedience-corp/obey"]):
         raise ValueError("unsupported existing Obey fixture version")
@@ -119,7 +127,20 @@ def checked_status(document, home, *, obey_version=None, external_suite=None):
         matches = [tool for tool in tools if tool.get("tool") == name]
         if len(matches) != 1 or not matches[0].get("present") or matches[0].get("version") != version:
             raise ValueError("selected native version is missing or unexpected")
-        if external_suite is not None and name in suite_versions:
+        if standalone_companion and name == 'camp-app':
+            row = matches[0]
+            if (row.get('path') != str(Path.home()/'.local/bin/camp-app') or
+                    row.get('origin') != 'leftover' or row.get('receipt_version') or
+                    row.get('package') != 'obedience-corp/camp-app' or row.get('error')):
+                raise ValueError('standalone companion is not the exact compatible unowned PATH copy')
+        elif standalone_companion:
+            row = matches[0]
+            package = 'obedience-corp/festival' if name in suite_versions else 'obedience-corp/obey'
+            receipt_version = '0.3.24' if name in suite_versions else required_obey
+            if (row.get('path') != str(home/'bin'/name) or row.get('origin') != 'managed' or
+                    row.get('package') != package or row.get('receipt_version') != receipt_version or row.get('error')):
+                raise ValueError('standalone profile changed another current managed tool')
+        elif external_suite is not None and name in suite_versions:
             row = matches[0]
             expected_path = Path('/usr/bin') / name
             if (Path(row['path']) != expected_path or row.get('origin') != 'package' or
@@ -142,6 +163,9 @@ def checked_status(document, home, *, obey_version=None, external_suite=None):
     siblings = [tool for tool in tools if tool.get("tool") == "ob"]
     if len(siblings) != 1 or not siblings[0].get("present") or siblings[0].get("receipt_version") != required_obey:
         raise ValueError("sibling CLI is not in the selected Obey package")
+    if standalone_companion and (siblings[0].get('path') != str(home/'bin/ob') or siblings[0].get('origin') != 'managed' or
+            siblings[0].get('package') != 'obedience-corp/obey' or siblings[0].get('error')):
+        raise ValueError('standalone profile sibling CLI is not the receipt-owned managed copy')
 
 
 def require_clean_host(target):

@@ -443,7 +443,7 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
             existing_user != 'none' or login_shell_proof or missing_git_manual or
             login_shell_kind != 'default' or guest_context is not None):
         raise ValueError('partial install Retry requires unseeded public Linux Deb mode')
-    if existing_user not in ("none", "older-idle", "older-active", "service-recovery", "current", "missing-companion", "corrupt-integrations", "foreign-companion", "corrupt-receipts", "external-suite-old", "external-suite-minimum", "external-suite-current", "external-suite-mixed-fest") or existing_user != "none" and not fresh_setup:
+    if existing_user not in ("none", "older-idle", "older-active", "service-recovery", "standalone-companion", "current", "missing-companion", "corrupt-integrations", "foreign-companion", "corrupt-receipts", "external-suite-old", "external-suite-minimum", "external-suite-current", "external-suite-mixed-fest") or existing_user != "none" and not fresh_setup:
         raise ValueError("existing-user scenario requires public default-home proof")
     if existing_user in ("corrupt-integrations", "foreign-companion") and target != "x86_64-pc-windows-msvc":
         raise ValueError("manual existing-user diagnostic/recovery currently requires native Windows")
@@ -452,8 +452,8 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
         raise ValueError('receipt recovery requires native Windows or Linux Deb')
     if existing_user.startswith('external-suite-') and (target != 'x86_64-unknown-linux-gnu' or linux_package != 'both' or login_shell_proof or missing_git_manual or login_shell_kind != 'default' or guest_context is not None):
         raise ValueError('external suite proof requires isolated Linux Deb first-launch mode')
-    if existing_user in ('older-active', 'service-recovery') and (target != 'x86_64-unknown-linux-gnu' or linux_package != 'both' or login_shell_proof or missing_git_manual or login_shell_kind != 'default' or guest_context is not None):
-        raise ValueError('real active-session proof requires isolated Linux Deb mode')
+    if existing_user in ('older-active', 'service-recovery', 'standalone-companion') and (target != 'x86_64-unknown-linux-gnu' or linux_package != 'both' or login_shell_proof or missing_git_manual or login_shell_kind != 'default' or guest_context is not None):
+        raise ValueError('selected existing-user proof requires isolated Linux Deb mode')
     if login_shell_proof and (not fresh_setup or existing_user != "none"):
         raise ValueError("new login shell proof requires unseeded public fresh setup")
     if missing_git_manual and (not fresh_setup or existing_user != 'none' or login_shell_proof or target != 'x86_64-unknown-linux-gnu' or linux_package != 'both'):
@@ -494,6 +494,7 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
     receipt_fixture = None
     receipt_accessibility = None
     external_fixture = None
+    standalone_fixture = None
     active_fixture = None
     service_fixture = None
     partial_fixture = None
@@ -511,6 +512,8 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
     report["existing_user_reconciliation_verified"] = False
     report["external_suite_compatibility_verified"] = False
     report['external_suite_preexisted_app_install'] = False
+    report['standalone_companion_reuse_verified'] = False
+    report['standalone_preexisted_app_install'] = False
     report["missing_companion_repair_verified"] = False
     if fresh_setup:
         # Runtime import reuses the existing default-home/normal-quit contracts;
@@ -592,6 +595,11 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
                 state = subprocess.run(["dpkg-query", "-W", "-f=${db:Status-Status}", package], capture_output=True, text=True, env=environment)
                 if state.returncode == 0 and state.stdout.strip() != "not-installed":
                     raise RuntimeError("refusing preexisting App package state")
+                if existing_user == 'standalone-companion':
+                    import standalone_companion
+                    standalone_fixture = standalone_companion.Fixture(temporary, default_managed, environment,
+                        output, report.setdefault('standalone_companion_fixture', {}))
+                    standalone_fixture.install_before_app()
                 if existing_user.startswith('external-suite-'):
                     import external_suite
                     external_fixture = external_suite.Fixture(temporary, Path('/usr/bin') / installer_name,
@@ -649,7 +657,7 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
         report["installer_version"] = command([installer, "version"], environment).strip()
         report["activity_help"] = command([activity, "--help"], environment).strip()
         report["runtime_config"] = str(runtime[0])
-        if existing_user not in ("none", "older-active", "service-recovery") and not existing_user.startswith("external-suite-"):
+        if existing_user not in ("none", "older-active", "service-recovery", "standalone-companion") and not existing_user.startswith("external-suite-"):
             import existing_obey
             existing_fixture = existing_obey.seed(temporary, installer, default_managed, target, environment, output, report, "current" if existing_user in ("corrupt-integrations", "foreign-companion", "corrupt-receipts") else existing_user)
             if existing_user == "corrupt-integrations":
@@ -662,6 +670,11 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
                 foreign_fixture = foreign_companion.Fixture(default_managed, installer, temporary / "companion-rollback", report.setdefault("foreign_companion_fixture", {}))
                 foreign_fixture.substitute()
                 report["foreign_companion_probe"] = foreign_companion.probe(installer, foreign_fixture, environment, output)
+        if standalone_fixture is not None:
+            standalone_fixture.after_package_install(installer)
+            report['standalone_preexisted_app_install'] = True
+            report['selected_packages_preseeded'] = True
+            report['existing_seed_method'] = 'authentic current managed Suite/Obey plus real published standalone companion before App package; no App settings'
         if existing_user == 'service-recovery':
             import service_recovery
             service_fixture = service_recovery.Fixture(temporary, installer, default_managed, target, environment,
@@ -778,7 +791,7 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
                     report['git_retry_action'] = missing_git.interact(process, binary, environment, 'retry')
                 if guest_context is not None:
                     guest_context.install_git(process, binary, installer, environment, output, report)
-                report["default_after_setup"] = wait_fresh_setup(process, installer, default_managed, target, output, environment, report, "fresh", external_suite=external_fixture, active_session=active_fixture, service_recovery=service_fixture, **mac_options)
+                report["default_after_setup"] = wait_fresh_setup(process, installer, default_managed, target, output, environment, report, "fresh", external_suite=external_fixture or standalone_fixture, active_session=active_fixture, service_recovery=service_fixture, **mac_options)
                 if partial_fixture is not None:
                     partial_fixture.preserved(report['default_after_setup'])
                 if active_fixture is not None:
@@ -806,7 +819,7 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
                     active_fixture.stop_for_idle()
                 process = subprocess.Popen([str(binary)], env=environment, stdout=log, stderr=subprocess.STDOUT, start_new_session=os.name != "nt")
                 report["reopened_pid"] = process.pid
-                report["default_after_reopen"] = wait_fresh_setup(process, installer, default_managed, target, output, environment, report, "reopened", external_suite=external_fixture, active_session=active_fixture, service_recovery=service_fixture, **mac_options)
+                report["default_after_reopen"] = wait_fresh_setup(process, installer, default_managed, target, output, environment, report, "reopened", external_suite=external_fixture or standalone_fixture, active_session=active_fixture, service_recovery=service_fixture, **mac_options)
                 if partial_fixture is not None:
                     partial_fixture.preserved(report['default_after_reopen'])
                     if report['default_after_setup'] != report['default_after_reopen']:
@@ -845,6 +858,11 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
                 elif active_fixture is not None:
                     active_fixture.finish()
                     report['active_session_update_verified'] = True
+                elif standalone_fixture is not None:
+                    if not report['standalone_preexisted_app_install']:
+                        raise ValueError('standalone companion must preexist App package installation')
+                    standalone_fixture.finish(report['default_after_setup'], report['default_after_reopen'])
+                    report['standalone_companion_reuse_verified'] = True
                 elif external_fixture is not None:
                     if not report['external_suite_preexisted_app_install']:
                         raise ValueError('external suite must preexist the App package installation')
@@ -938,6 +956,8 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
             actions.append(uninstall_windows)
         if owned_deb and guest_context is None:
             actions.append(uninstall_deb)
+        if standalone_fixture is not None:
+            actions.append(standalone_fixture.cleanup)
         if external_fixture is not None:
             actions.append(external_fixture.cleanup)
         if service_fixture is not None:
@@ -971,6 +991,7 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
         report['partial_selected_install_retry_verified'] = report['partial_selected_install_retry_verified'] and report['native_packaging_launch_verified']
         report["fresh_default_setup_verified"] = report["fresh_default_setup_verified"] and report["native_packaging_launch_verified"]
         report["external_suite_compatibility_verified"] = report["external_suite_compatibility_verified"] and report["native_packaging_launch_verified"]
+        report['standalone_companion_reuse_verified'] = report['standalone_companion_reuse_verified'] and report['native_packaging_launch_verified']
         report['service_crash_recovery_verified'] = report['service_crash_recovery_verified'] and report['native_packaging_launch_verified']
         report['active_session_update_verified'] = report['active_session_update_verified'] and report['native_packaging_launch_verified']
         report["new_login_shell_verified"] = report["new_login_shell_verified"] and report["native_packaging_launch_verified"]
@@ -1007,7 +1028,7 @@ def main():
     parser.add_argument('--login-shell', choices=('default', 'windows-powershell', 'zsh'), default='default')
     parser.add_argument('--verify-missing-git-manual', action='store_true')
     parser.add_argument('--verify-partial-install-retry', action='store_true')
-    parser.add_argument("--existing-user", choices=("none", "older-idle", "older-active", "service-recovery", "current", "missing-companion", "corrupt-integrations", "foreign-companion", "corrupt-receipts", "external-suite-old", "external-suite-minimum", "external-suite-current", "external-suite-mixed-fest"), default="none")
+    parser.add_argument("--existing-user", choices=("none", "older-idle", "older-active", "service-recovery", "standalone-companion", "current", "missing-companion", "corrupt-integrations", "foreign-companion", "corrupt-receipts", "external-suite-old", "external-suite-minimum", "external-suite-current", "external-suite-mixed-fest"), default="none")
     for name in ("version", "source"):
         parser.add_argument("--" + name, required=True)
     parser.add_argument("--target")
