@@ -43,7 +43,7 @@ def checked_bootstrap(data, checksums, name):
     return digest
 
 
-def checked_receipts(home, *, obey_version=None, immutable=False):
+def checked_receipts(home, *, obey_version=None, immutable=False, external_suite=None):
     # Only an independently quiescent fixture may assert immutable storage.
     # This does not discover or lock out writers. Normal live readback stays ro.
     def no_sidecars():
@@ -51,7 +51,11 @@ def checked_receipts(home, *, obey_version=None, immutable=False):
             raise ValueError('immutable receipt read refuses SQLite sidecars')
     if immutable:
         no_sidecars()
+    if external_suite not in (None, '0.3.9', '0.3.10', '0.3.24'):
+        raise ValueError('unsupported external suite fixture')
     expected = dict(PACKAGES)
+    if external_suite is not None:
+        expected.pop('obedience-corp/festival')
     if obey_version is not None:
         if obey_version not in ("0.2.2", PACKAGES["obedience-corp/obey"]):
             raise ValueError("unsupported existing Obey fixture version")
@@ -68,13 +72,13 @@ def checked_receipts(home, *, obey_version=None, immutable=False):
         raise ValueError("selected package did not use the official stable source")
     for row in files:
         path = Path(row["path"])
-        if row["receipt_pkg_id"] not in PACKAGES or not path.resolve().is_relative_to((home / "bin").resolve()) or path.is_symlink():
+        if row["receipt_pkg_id"] not in expected or not path.resolve().is_relative_to((home / "bin").resolve()) or path.is_symlink():
             raise ValueError("receipt file is outside the owned managed bin")
         if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != row["hash"]:
             raise ValueError("installed file differs from its verified receipt")
     names = {Path(row["path"]).stem if os.name == "nt" else Path(row["path"]).name for row in files}
-    required = {"camp", "fest", "camp-app", "obey", "ob"}
-    if not required <= names or names - required - {"festival"} or len(files) != len(names):
+    required = {"camp-app", "obey", "ob"} if external_suite is not None else {"camp", "fest", "camp-app", "obey", "ob"}
+    if not required <= names or names - required - (set() if external_suite is not None else {"festival"}) or len(files) != len(names):
         raise ValueError("selected executable inventory is incomplete")
     return {"receipts": receipts, "files": files}
 
@@ -101,18 +105,36 @@ def record_windows_discovery_snapshot(source, output, report):
     evidence['verified'] = True
 
 
-def checked_status(document, home, *, obey_version=None):
+def checked_status(document, home, *, obey_version=None, external_suite=None):
+    if external_suite not in (None, '0.3.10', '0.3.24'):
+        raise ValueError('unsupported compatible external suite fixture')
     required_obey = PACKAGES["obedience-corp/obey"] if obey_version is None else obey_version
     if required_obey not in ("0.2.2", PACKAGES["obedience-corp/obey"]):
         raise ValueError("unsupported existing Obey fixture version")
     if not document.get("ok"):
         raise ValueError("status failed")
     tools = document["data"]["tools"]
-    for name, version in {"camp": "0.16.2", "fest": "0.9.8", "obey": required_obey, "camp-app": "0.1.0"}.items():
+    suite_versions = {'camp': '0.10.1', 'fest': '0.8.0'} if external_suite == '0.3.10' else {'camp': '0.16.2', 'fest': '0.9.8'}
+    for name, version in dict(suite_versions, obey=required_obey, **{'camp-app': '0.1.0'}).items():
         matches = [tool for tool in tools if tool.get("tool") == name]
         if len(matches) != 1 or not matches[0].get("present") or matches[0].get("version") != version:
             raise ValueError("selected native version is missing or unexpected")
-        if not Path(matches[0]["path"]).resolve().is_relative_to((home / "bin").resolve()):
+        if external_suite is not None and name in suite_versions:
+            row = matches[0]
+            expected_path = Path('/usr/bin') / name
+            if (Path(row['path']) != expected_path or row.get('origin') != 'package' or
+                    row.get('bundle') not in (external_suite, 'v' + external_suite) or
+                    row.get('receipt_version') or row.get('error') or
+                    row.get('package') != 'obedience-corp/festival'):
+                raise ValueError('external suite status differs from the exact package fixture')
+        elif external_suite is not None:
+            row = matches[0]
+            package = 'obedience-corp/camp-app' if name == 'camp-app' else 'obedience-corp/obey'
+            receipt_version = '0.1.0' if name == 'camp-app' else required_obey
+            if (Path(row['path']) != home / 'bin' / name or row.get('origin') != 'managed' or
+                    row.get('package') != package or row.get('receipt_version') != receipt_version or row.get('error')):
+                raise ValueError('selected non-suite command is not the exact receipt-owned managed fixture')
+        elif not Path(matches[0]["path"]).resolve().is_relative_to((home / "bin").resolve()):
             raise ValueError("selected status resolved an external executable")
     companion = next(tool for tool in tools if tool.get("tool") == "camp-app")
     if companion.get("protocol_major") != 1 or not {"status", "open"} <= set(companion.get("capabilities", [])):

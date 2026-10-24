@@ -850,3 +850,35 @@ unknown births, live-survivor refusal and unrelated process survival. Original
 40082723078 remains a failed cleanup-readback run; this repair does not waive it.
 Microsoft documents the [ParentProcessId reuse/CreationDate contract](https://learn.microsoft.com/en-us/windows/win32/cimwin32prov/win32-process)
 and [held process handle lifetime](https://learn.microsoft.com/en-us/windows/win32/procthread/process-handles-and-identifiers).
+
+### Existing external Festival suite compatibility
+
+The fresh setup workflow has three explicit Debian-only `existing_user` cases:
+`external-suite-old`, `external-suite-minimum`, and `external-suite-current`.
+They require `platform_scope=deb`, default shell, no login-shell proof and no Git
+recovery mode. Defaults and the ordinary full matrix are unchanged.
+
+The fixture verifies pinned public Suite0.3.9/0.3.10/0.3.24 Debian bytes against
+release checksums, installs the genuine package, provisions only the other two
+selected CLI packages, and establishes normal service/terminal readiness. It
+refuses any prior App settings and never seeds a background-check timestamp. The
+actual first App launch therefore exercises the ready-existing-user background
+path rather than suppressing it through a throttle fixture. Persisted readback requires
+an actual completed release-check timestamp inside the observed launch window.
+Minimum/current cases must still have no setup-completion timestamp, proving the
+App did not mask the background path through successful foreground setup. The old
+case instead requires matching foreground setup/check timestamps.
+
+Old0.3.9 must receive a compatible managed suite while the three original package
+executables remain exact. Minimum/current copies must stay resolved from
+`/usr/bin`, with no managed suite receipt or shadow executables. An explicit
+external readback validates the two remaining managed receipts; default validators
+still require the normal three managed packages. Both launches must retain exact
+receipts, files, external package identity, foreign data and responsive service.
+The fixture removes only its authenticated, still-matching external package after
+owned App/service teardown. Changed or replaced package state fails cleanup.
+
+`external_suite_compatibility_verified` is separate from fresh-machine, useful
+work, licensing, reboot and consumer trust. Source/tests and fixture setup do not
+establish packaged acceptance: retain original App screens, public candidate
+hashes/signatures, both real readbacks and cleanup before accepting a run.
