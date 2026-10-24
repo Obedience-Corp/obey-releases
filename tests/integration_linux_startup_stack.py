@@ -26,6 +26,7 @@ with tempfile.TemporaryDirectory() as temporary:
         birth = stack.identity(process.pid)['start_ticks']
         result = stack.capture(process, birth, root/'normal.log', os.environ, elevated=False)
         assert result.get('exit') == 0, (result, (root/'normal.log').read_text())
+        assert result['debugger_identity_verified'], result
         assert result['after_identity_verified'] and result['after_tracer_pid'] == 0, result
         assert result['after_state'] not in ('T', 't'), result
         assert 'Thread 1' in (root/'normal.log').read_text()
@@ -42,6 +43,7 @@ with tempfile.TemporaryDirectory() as temporary:
         with patch.object(stack.subprocess, 'run', side_effect=force_timeout):
             result = stack.capture(process, birth, root/'timeout.log', os.environ, elevated=False)
         assert result.get('exit') in (124, 137), result
+        assert result['debugger_identity_verified'], result
         assert 'Thread 1' in (root/'timeout.log').read_text(), 'debugger did not attach before timeout'
         assert result['after_identity_verified'] and result['after_tracer_pid'] == 0, result
         assert result['after_state'] not in ('T', 't'), result

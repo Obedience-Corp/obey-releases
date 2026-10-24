@@ -87,3 +87,10 @@ jobs:
             -e CANDIDATE_TEST_CONTAINER=1 -e PYTHONDONTWRITEBYTECODE=1 \
             -v "$PWD:/src:ro" -w /src obey-release-debugger:local \
             python -W error::ResourceWarning tests/integration_linux_startup_stack.py
+          # This disposable container alone needs mount permissions to reproduce
+          # AppImage's user-owned FUSE boundary; no host policy is changed.
+          docker run --rm --network none --cap-add SYS_PTRACE --cap-add SYS_ADMIN \
+            --device /dev/fuse --security-opt apparmor=unconfined \
+            -e CANDIDATE_TEST_CONTAINER=1 -e PYTHONDONTWRITEBYTECODE=1 \
+            -v "$PWD:/src:ro" -w /src obey-release-debugger:local \
+            python -W error::ResourceWarning tests/integration_linux_fuse_stack.py
