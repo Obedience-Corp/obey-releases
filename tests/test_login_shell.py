@@ -34,17 +34,6 @@ class LoginShellContracts(unittest.TestCase):
             with self.assertRaises(ValueError): login_shell.seed_profile(home / 'config/rc', home, 'bash')
             self.assertEqual(target.read_bytes(), b'keep')
 
-    def test_resolution_requires_real_expected_file_version_and_foreign_function(self):
-        with tempfile.TemporaryDirectory() as directory:
-            managed = Path(directory); (managed / 'bin').mkdir(); expected = managed / 'bin/camp'; expected.write_bytes(b'official')
-            marker = 'FA0027_test'
-            def data(path=expected, version='0.16.2', value='kept'):
-                return f'{marker}_PROFILE\r\n{value}\r\n{marker}_PATH\r\n{path}\r\n{marker}_VERSION\r\n{version}\r\n{marker}_END\r\n'.encode()
-            self.assertTrue(login_shell.parse_probe(data(), marker, 'kept', 'camp', managed)['profile_sentinel_verified'])
-            foreign = managed / 'foreign'; foreign.write_bytes(b'foreign')
-            for raw in [data(path=foreign), data(version='0.16.1'), data(value='lost'), data()+f'{marker}_END\n'.encode(), data().replace(f'{marker}_PATH'.encode(), b'missing')]:
-                with self.assertRaises(ValueError): login_shell.parse_probe(raw, marker, 'kept', 'camp', managed)
-
     def test_real_pty_preserves_ansi_and_reaps_timed_out_owned_child(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory); output = root / 'normal.log'

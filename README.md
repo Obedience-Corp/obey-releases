@@ -156,13 +156,15 @@ default and never supplies a release trust root or publication authority.
 
 ## Automation checks
 
-Filesystem mutation tests run only in Docker:
+Filesystem mutation tests run only in Docker. The test image includes Zsh so
+its real-shell contracts execute rather than skip:
 
 ```sh
+docker build -t obey-release-shell-contracts:local - < tests/Dockerfile.shells
 docker run --rm --user 10001:10001 \
   --tmpfs /tmp:rw,exec,size=128m,mode=1777 \
   -e CANDIDATE_TEST_CONTAINER=1 -e PYTHONDONTWRITEBYTECODE=1 \
-  -v "$PWD:/src:ro" -w /src python:3.13-slim \
+  -v "$PWD:/src:ro" -w /src obey-release-shell-contracts:local \
   python -m unittest discover -s tests -v
 ```
 
@@ -496,3 +498,23 @@ a standalone managed festival hub. Stock Windows PowerShell5.1, cmd, provider-wr
 licensed work, login/reboot service recovery and customer security prompts remain unproven. The
 explicit new_login_shell_verified flag stays false on any failure or cleanup
 error. Existing seeded-user modes refuse this option.
+
+Ordinary shell verification authenticates Camp/Fest's intended navigation
+functions against the same installed binaries' generated shell-init definitions,
+while separately checking the effective external executable and still executing
+the ordinary wrapped command. Unknown same-version functions, aliases, cached
+foreign commands and wrong external file identities fail. POSIX reference shells
+have an isolated HOME/startup context; the actual login environment is unchanged.
+Real Bash and Zsh tests run in the contracts Docker image.
+
+The installed PowerShell7 proof uses Git for Windows' installed winpty console
+backend with only `pwsh -NoLogo` startup. It does not use a noninteractive/encoded
+startup or the Installer readiness override. A native identity handshake proves
+ConsoleHost, unredirected input, ordinary startup flags and an owned process tree
+before any command readback. Raw terminal bytes remain unmodified; structured
+readback is separate. Owned PID/birth snapshots are retained before and during
+execution, and cleanup verifies tracked descendants even after an adapter exits.
+Disposable Windows CI must prove positive ordinary startup, timeout cleanup and
+premature-adapter cleanup before this transport can qualify an App journey.
+Stock Windows PowerShell5.1, cmd, Windows Terminal UI and consumer policy remain
+outside this installed-PowerShell7 case.
