@@ -574,3 +574,29 @@ this trace's scope. Observer errors, bounded truncation, and forced cleanup rema
 diagnostic evidence and cannot turn an App failure into success. An isolated real
 X11 fixture checks ordered lifecycle events, simultaneous manager subscription,
 unavailable-display refusal, and cleanup of an unresponsive observer.
+
+### Missing Git: manual restoration and real App Retry
+
+The fresh workflow supports `platform_scope=deb` with
+`verify_missing_git_manual=true` (unseeded, login proof disabled). It downloads
+the exact installed APT Git package and any required git-lfs removal companion
+before changing package state, refuses unrelated removals, and verifies the
+bundled Installer reports Git absent. The original App must expose its enabled
+**Install Git and continue** button in the owned accessibility application.
+After exact manual package/hash restoration, the verifier invokes that real
+AT-SPI action once, then requires normal App-driven setup, service readback,
+quit/reopen and owned cleanup. Original package plans, cached payload hashes,
+prerequisite statuses and GitMissing screenshots remain in the proof.
+
+This mode starts an owned session bus and enables the account's normal desktop
+accessibility setting, restoring its previous value during cleanup. It does not
+inject JavaScript or App commands, alter renderer security, replace Git on PATH,
+or provide authorization credentials. `missing_git_manual_recovery_verified`
+requires successful final cleanup. `automatic_git_authorization_verified` stays
+false: a real desktop polkit authentication-agent/administrator prompt remains a
+separate required journey; manual restoration cannot qualify that path.
+
+Automation runs a real GTK button callback with foreign/stale/duplicate control
+refusal and actual Git removal/restoration in disposable Docker. The package
+fixture uses authenticated build-time cached archives with no runtime network;
+it does not claim the production download or native App journey has run.

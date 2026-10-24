@@ -5,7 +5,11 @@ on:
       platform_scope:
         type: choice
         default: all
-        options: [all, linux, intel, appimage]
+        options: [all, linux, intel, appimage, deb]
+      verify_missing_git_manual:
+        description: Prove actual missing Git detection, exact manual restoration and App Retry (not automatic authorization)
+        type: boolean
+        default: false
       verify_login_shell:
         description: Prove required commands and foreign profile preservation in ordinary fresh login shells
         type: boolean
@@ -24,7 +28,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: fresh-default-setup-${{ inputs.source_revision }}-${{ inputs.existing_user }}-login-${{ inputs.verify_login_shell || false }}
+  group: fresh-default-setup-${{ inputs.source_revision }}-${{ inputs.existing_user }}-login-${{ inputs.verify_login_shell || false }}-git-${{ inputs.verify_missing_git_manual || false }}
   cancel-in-progress: false
 jobs:
   anonymous-inputs:
@@ -38,7 +42,10 @@ jobs:
         env:
           LOGIN: ${{ inputs.verify_login_shell || false }}
           EXISTING: ${{ inputs.existing_user || 'none' }}
+          GIT_RECOVERY: ${{ inputs.verify_missing_git_manual || false }}
+          SCOPE: ${{ inputs.platform_scope || 'all' }}
         run: |
+          if [[ "$GIT_RECOVERY" == true && "$LOGIN:$EXISTING:$SCOPE" != false:none:deb ]]; then echo "Git recovery requires unseeded Deb-only mode" >&2; exit 64; fi
           case "$LOGIN:$EXISTING" in false:none|false:older-idle|false:current|false:missing-companion|true:none) ;;
             *) echo 'Login proof requires unseeded fresh setup; invalid mode' >&2; exit 64 ;; esac
       - uses: actions/setup-python@v6
@@ -62,9 +69,9 @@ jobs:
       fail-fast: false
       matrix:
         include: >-
-          ${{ fromJSON(inputs.platform_scope == 'appimage' && '[{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu","package":"appimage","format":"appimage"}]' || inputs.platform_scope == 'intel' && '[{"runner":"macos-15-intel","target":"x86_64-apple-darwin","package":"both","format":"dmg"}]' || inputs.platform_scope == 'linux' && '[{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu","package":"both","format":"deb"},{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu","package":"appimage","format":"appimage"}]' || '[{"runner":"macos-15","target":"aarch64-apple-darwin","package":"both","format":"dmg"},{"runner":"macos-15-intel","target":"x86_64-apple-darwin","package":"both","format":"dmg"},{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu","package":"both","format":"deb"},{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu","package":"appimage","format":"appimage"},{"runner":"windows-2025","target":"x86_64-pc-windows-msvc","package":"both","format":"nsis"}]') }}
+          ${{ fromJSON(inputs.platform_scope == 'deb' && '[{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu","package":"both","format":"deb"}]' || inputs.platform_scope == 'appimage' && '[{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu","package":"appimage","format":"appimage"}]' || inputs.platform_scope == 'intel' && '[{"runner":"macos-15-intel","target":"x86_64-apple-darwin","package":"both","format":"dmg"}]' || inputs.platform_scope == 'linux' && '[{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu","package":"both","format":"deb"},{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu","package":"appimage","format":"appimage"}]' || '[{"runner":"macos-15","target":"aarch64-apple-darwin","package":"both","format":"dmg"},{"runner":"macos-15-intel","target":"x86_64-apple-darwin","package":"both","format":"dmg"},{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu","package":"both","format":"deb"},{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu","package":"appimage","format":"appimage"},{"runner":"windows-2025","target":"x86_64-pc-windows-msvc","package":"both","format":"nsis"}]') }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: ${{ matrix.runner == 'ubuntu-24.04' && 60 || 45 }}
+    timeout-minutes: ${{ inputs.verify_missing_git_manual && 90 || matrix.runner == 'ubuntu-24.04' && 60 || 45 }}
     defaults:
       run:
         shell: bash
@@ -75,7 +82,7 @@ jobs:
           SCOPE: ${{ inputs.platform_scope || 'all' }}
         run: |
           test "$KIND" = github-hosted
-          case "$SCOPE" in all|linux|intel|appimage) ;; *) echo 'Unsupported platform scope' >&2; exit 1 ;; esac
+          case "$SCOPE" in all|linux|intel|appimage|deb) ;; *) echo 'Unsupported platform scope' >&2; exit 1 ;; esac
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
@@ -92,6 +99,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y minisign xvfb x11-utils xdotool imagemagick openbox wmctrl libegl1 libegl-mesa0 libgles2 libgl1 libgl1-mesa-dri
           sudo apt-get install -y --no-install-recommends gdb
+          if [[ '${{ inputs.verify_missing_git_manual || false }}' == true ]]; then
+            sudo apt-get install -y python3-gi gir1.2-atspi-2.0 at-spi2-core dbus-x11 gsettings-desktop-schemas
+          fi
           dpkg-query -W libegl1 libegl-mesa0 libgles2 libgl1 libgl1-mesa-dri gdb libc6
       - name: Install macOS signature verifier
         if: runner.os == 'macOS'
@@ -118,10 +128,14 @@ jobs:
           PACKAGE: ${{ matrix.package }}
           EXISTING_USER: ${{ inputs.existing_user || 'none' }}
           VERIFY_LOGIN_SHELL: ${{ inputs.verify_login_shell || false }}
+          VERIFY_MISSING_GIT_MANUAL: ${{ inputs.verify_missing_git_manual || false }}
         run: |
           flags=()
           if [[ "$VERIFY_LOGIN_SHELL" == true ]]; then flags+=(--verify-login-shell); fi
-          python scripts/verify_app_candidate.py --mode verify-fresh --source "$SOURCE" --version "$VERSION" --target "$TARGET" --linux-package "$PACKAGE" --existing-user "$EXISTING_USER" "${flags[@]}"
+          if [[ "$VERIFY_MISSING_GIT_MANUAL" == true ]]; then flags+=(--verify-missing-git-manual); fi
+          prefix=()
+          if [[ "$VERIFY_MISSING_GIT_MANUAL" == true ]]; then prefix=(dbus-run-session --); fi
+          "${prefix[@]}" python scripts/verify_app_candidate.py --mode verify-fresh --source "$SOURCE" --version "$VERSION" --target "$TARGET" --linux-package "$PACKAGE" --existing-user "$EXISTING_USER" "${flags[@]}"
       - uses: actions/upload-artifact@v4
         if: always()
         with:

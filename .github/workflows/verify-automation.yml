@@ -102,3 +102,15 @@ jobs:
             -e CANDIDATE_TEST_CONTAINER=1 -e PYTHONDONTWRITEBYTECODE=1 \
             -v "$PWD:/src:ro" -w /src obey-release-x11:local \
             python -W error::ResourceWarning tests/integration_linux_window_events.py
+      - name: Test actual Git cache restoration and owned GTK Retry action
+        run: |
+          docker build -t obey-release-git-ui:local - < tests/Dockerfile.git-ui
+          docker run --rm --network none --read-only --tmpfs /tmp:rw,exec --tmpfs /run \
+            -e CANDIDATE_TEST_CONTAINER=1 -e PYTHONDONTWRITEBYTECODE=1 \
+            -e HOME=/tmp -e GTK_MODULES=atk-bridge \
+            -v "$PWD:/src:ro" -w /src obey-release-git-ui:local \
+            dbus-run-session -- xvfb-run -a /usr/bin/python3 -W error::ResourceWarning tests/integration_linux_git_retry.py
+          docker run --rm --network none --tmpfs /tmp:rw,exec \
+            -e CANDIDATE_TEST_CONTAINER=1 -e PYTHONDONTWRITEBYTECODE=1 \
+            -v "$PWD:/src:ro" -w /src obey-release-git-ui:local \
+            /usr/bin/python3 -W error::ResourceWarning tests/integration_missing_git.py

@@ -388,12 +388,14 @@ def wait_fresh_setup(process, installer, managed, target, output, environment, r
     return result
 
 
-def native(directory, document, target, output, linux_package="both", fresh_setup=False, public_root=None, existing_user="none", login_shell_proof=False):
+def native(directory, document, target, output, linux_package="both", fresh_setup=False, public_root=None, existing_user="none", login_shell_proof=False, missing_git_manual=False):
     require_clean_host({"aarch64-apple-darwin": "macOS-arm64", "x86_64-apple-darwin": "macOS-x86_64", "x86_64-unknown-linux-gnu": "linux-x86_64", "x86_64-pc-windows-msvc": "windows-x86_64"}.get(target))
     if existing_user not in ("none", "older-idle", "current", "missing-companion") or existing_user != "none" and not fresh_setup:
         raise ValueError("existing-user scenario requires public default-home proof")
     if login_shell_proof and (not fresh_setup or existing_user != "none"):
         raise ValueError("new login shell proof requires unseeded public fresh setup")
+    if missing_git_manual and (not fresh_setup or existing_user != 'none' or login_shell_proof or target != 'x86_64-unknown-linux-gnu' or linux_package != 'both'):
+        raise ValueError('missing Git recovery requires unseeded Linux Deb fresh setup only')
     if target not in TARGETS or native_platform() != TARGETS[target][0]:
         raise ValueError("App target does not match native machine")
     if linux_package not in ("both", "appimage") or linux_package == "appimage" and not target.endswith("linux-gnu"):
@@ -416,6 +418,9 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
     packaging_root = None
     existing_fixture = None
     login_fixture = None
+    git_fixture = None
+    report['missing_git_manual_recovery_verified'] = False
+    report['automatic_git_authorization_verified'] = False
     report["new_login_shell_verified"] = False
     report["existing_user_scenario"] = existing_user
     report["existing_user_reconciliation_verified"] = False
@@ -545,6 +550,12 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
         if existing_user != "none":
             import existing_obey
             existing_fixture = existing_obey.seed(temporary, installer, default_managed, target, environment, output, report, existing_user)
+        if missing_git_manual:
+            import missing_git
+            git_fixture = missing_git.Fixture(temporary/'git-restore-cache', output, environment)
+            git_fixture.enable_accessibility()
+            git_fixture.remove()
+            report['git_missing_prerequisite'] = missing_git.git_status(installer, environment, False, output/'git-absent-status.json')
         if target.endswith('apple-darwin'):
             import mac_window_tools
             tools = mac_window_tools.prepare(temporary, output, environment)
@@ -562,6 +573,13 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
             if process.poll() is not None or not (output / "app.png").is_file() or (output / "app.png").stat().st_size == 0:
                 raise RuntimeError("App did not retain a live captured window")
             if fresh_setup:
+                if git_fixture is not None:
+                    report['git_missing_ui'] = missing_git.interact(process, binary, environment, 'inspect')
+                    missing_capture = output/'git-missing'; missing_capture.mkdir()
+                    report['git_missing_window'] = capture_startup(process, target, missing_capture, environment, report.setdefault('git_missing_captures', []))
+                    git_fixture.restore()
+                    report['git_restored_prerequisite'] = missing_git.git_status(installer, environment, True, output/'git-restored-status.json')
+                    report['git_retry_action'] = missing_git.interact(process, binary, environment, 'retry')
                 report["default_after_setup"] = wait_fresh_setup(process, installer, default_managed, target, output, environment, report, "fresh", **mac_options)
                 if login_fixture is not None:
                     report["login_after_setup"] = login_shell.verify(login_fixture, default_managed, installer, environment, output, "after-setup")
@@ -594,6 +612,7 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
                     report["missing_companion_repair_verified"] = existing_user == "missing-companion"
                 else:
                     report["fresh_default_setup_verified"] = True
+                    report['missing_git_manual_recovery_verified'] = git_fixture is not None and git_fixture.restored
             report["primary_packaged_app_launch_verified"] = True
             if linux_package == "appimage":
                 report["appimage_default_launch_verified"] = True
@@ -616,6 +635,9 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
         actions = []
         if process is not None and process.poll() is None:
             actions.append(lambda: stop_owned(process, environment))
+        if git_fixture is not None:
+            actions.append(git_fixture.restore)
+            actions.append(git_fixture.restore_accessibility)
         if packaging_root is not None:
             actions.append(lambda: packaging_service.cleanup(packaging_root, environment, report))
         if default_managed is not None:
@@ -665,6 +687,7 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
         report["new_login_shell_verified"] = report["new_login_shell_verified"] and report["native_packaging_launch_verified"]
         report["existing_user_reconciliation_verified"] = report["existing_user_reconciliation_verified"] and report["native_packaging_launch_verified"]
         report["missing_companion_repair_verified"] = report["missing_companion_repair_verified"] and report["native_packaging_launch_verified"]
+        report['missing_git_manual_recovery_verified'] = report['missing_git_manual_recovery_verified'] and report['native_packaging_launch_verified']
         (output / "proof.json").write_text(json.dumps(report, indent=2) + "\n")
         if cleanup_errors:
             raise RuntimeError("owned App cleanup failed: " + "; ".join(cleanup_errors))
@@ -675,6 +698,7 @@ def main():
     parser.add_argument("--mode", choices=("fetch", "verify", "fetch-public", "verify-fresh"), required=True)
     parser.add_argument("--tag")
     parser.add_argument("--verify-login-shell", action="store_true")
+    parser.add_argument('--verify-missing-git-manual', action='store_true')
     parser.add_argument("--existing-user", choices=("none", "older-idle", "current", "missing-companion"), default="none")
     for name in ("version", "source"):
         parser.add_argument("--" + name, required=True)
@@ -687,6 +711,8 @@ def main():
         raise ValueError("login shell proof requires unseeded verify-fresh")
     if args.existing_user != "none" and args.mode != "verify-fresh":
         raise ValueError("existing-user scenarios require verify-fresh public inputs")
+    if args.verify_missing_git_manual and (args.mode != 'verify-fresh' or args.target != 'x86_64-unknown-linux-gnu' or args.linux_package != 'both' or args.existing_user != 'none' or args.verify_login_shell):
+        raise ValueError('missing Git proof requires unseeded Linux Deb verify-fresh only')
     if args.mode in ("fetch", "verify"):
         identity(args.tag, args.version, args.source)
     if os.environ.get("CANDIDATE_RUNNER_KIND") != "github-hosted" or os.environ.get("GITHUB_REPOSITORY") != REPOSITORY:
@@ -697,7 +723,7 @@ def main():
             fetch_public(args.directory, args.source, args.version)
         else:
             document = checked_public(args.directory, args.source, args.version)
-            native((args.directory / "assets").resolve(), document, args.target, args.output.resolve(), args.linux_package, fresh_setup=True, public_root=args.directory.resolve(), existing_user=args.existing_user, login_shell_proof=args.verify_login_shell)
+            native((args.directory / "assets").resolve(), document, args.target, args.output.resolve(), args.linux_package, fresh_setup=True, public_root=args.directory.resolve(), existing_user=args.existing_user, login_shell_proof=args.verify_login_shell, missing_git_manual=args.verify_missing_git_manual)
     elif args.mode == "fetch":
         fetch(args.tag, args.version, args.source, args.directory)
     else:
