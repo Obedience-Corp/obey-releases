@@ -670,3 +670,18 @@ foreign profile preservation, unchanged state after normal reopen, real service
 readback and complete cleanup. `new_login_shell_verified` stays false until the
 whole native journey succeeds. These hosted-machine cases do not prove cmd,
 Windows Terminal UI, consumer trust prompts, reboot or licensed useful work.
+
+## Clean Linux guest infrastructure
+
+`verify-linux-clean-vm.yml` first qualifies actual hardware virtualization on a
+native disposable Ubuntu24.04 runner. It uses the existing `kvm` group only for
+an ordinary-UID child, verifies KVM API12, creates an owned VM/vCPU and confirms
+all descriptors close. It never changes device permissions, adds permanent group
+membership, starts a root VM, or substitutes CPU emulation. The original JSON
+report is retained even on failure.
+
+This is infrastructure evidence only. It does not boot a guest or establish a
+clean desktop, App installation, missing-Git recovery, licensing or reboot. Those
+require an authenticated OS image, an isolated baseline and the actual published
+App journey. Existing hosted developer images remain explicitly distinct from
+clean consumer machines.

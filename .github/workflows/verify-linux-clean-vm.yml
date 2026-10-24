@@ -1,0 +1,41 @@
+name: Qualify clean Linux VM infrastructure
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/verify-linux-clean-vm.yml'
+      - 'scripts/linux_kvm.py'
+      - 'scripts/verify_candidate.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-kvm:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Qualify actual KVM with normal UID and existing device group
+        shell: bash
+        env:
+          RUNNER_KIND: ${{ runner.environment }}
+        run: |
+          test "$RUNNER_KIND" = github-hosted
+          test "$(id -u)" != 0
+          # Limit group access to this child. No chmod, group membership change,
+          # root VM process, host shares or CPU emulation fallback.
+          # Hosted sudo permits root targets, not arbitrary run-as groups.
+          # setpriv drops root before Python starts and prohibits regaining it.
+          sudo -n /usr/bin/setpriv --reuid="$(id -u)" \
+            --regid="$(getent group kvm | cut -d: -f3)" --clear-groups --no-new-privs \
+            /usr/bin/env -i \
+            PATH=/usr/bin:/bin PYTHONDONTWRITEBYTECODE=1 \
+            CANDIDATE_NATIVE_DISPOSABLE=1 CANDIDATE_RUNNER_KIND="$RUNNER_KIND" \
+            /usr/bin/python3 scripts/linux_kvm.py | tee "$RUNNER_TEMP/linux-kvm-proof.json"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: linux-kvm-preflight
+          path: ${{ runner.temp }}/linux-kvm-proof.json
+          if-no-files-found: error
