@@ -19,19 +19,31 @@ jobs:
         if: runner.os == 'Windows'
         run: |
           python -m pip install --only-binary=:all: --require-hashes -r tests/requirements-windows-console.txt
+      - name: Prove native Python failures cannot be masked by later success
+        shell: pwsh
+        env:
+          CANDIDATE_NATIVE_DISPOSABLE: '1'
+          CANDIDATE_RUNNER_KIND: ${{ runner.environment }}
+        run: |
+          python tests/integration_windows_failure_propagation.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Verify owned window capture behind another window
         shell: pwsh
         env:
           CANDIDATE_NATIVE_DISPOSABLE: '1'
           CANDIDATE_RUNNER_KIND: ${{ runner.environment }}
         run: |
+          $ErrorActionPreference = 'Stop'
           ./scripts/windows_packaging_service.ps1 -SelfTest
+          if ($null -ne $LASTEXITCODE -and $LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./tests/integration_windows_capture.ps1
-          python tests/integration_windows_owned_processes.py
-          python tests/integration_windows_console.py
-          python tests/integration_corrupt_integrations.py
-          python tests/integration_foreign_companion.py
-          python tests/integration_corrupt_receipts.py
+          if ($null -ne $LASTEXITCODE -and $LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          . ./scripts/windows_checked_python.ps1
+          Invoke-CheckedPython tests/integration_windows_owned_processes.py
+          Invoke-CheckedPython tests/integration_windows_console.py
+          Invoke-CheckedPython tests/integration_corrupt_integrations.py
+          Invoke-CheckedPython tests/integration_foreign_companion.py
+          Invoke-CheckedPython tests/integration_corrupt_receipts.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -41,6 +53,7 @@ jobs:
             ${{ runner.temp }}/capture-fixture-*
             ${{ runner.temp }}/ordinary-console-proof/
             ${{ runner.temp }}/owned-process-proof/
+            ${{ runner.temp }}/windows-native-failure-proof/
             ${{ runner.temp }}/corrupt-integration-control/
             ${{ runner.temp }}/foreign-companion-control/
             ${{ runner.temp }}/corrupt-receipt-control/

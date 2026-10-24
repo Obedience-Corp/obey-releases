@@ -39,6 +39,53 @@ function Select-BirthValidProcessTree([object[]]$Rows, [int]$RootId) {
     return $ordered.ToArray()
 }
 
+function Get-ProcessOrObservedAbsent([int]$ProcessId) {
+    try {
+        return Get-Process -Id $ProcessId -ErrorAction Stop
+    } catch {
+        # Only the cmdlet's explicit missing-PID result proves absence.
+        # Permission/provider/query errors must never retire an identity.
+        if ($_.FullyQualifiedErrorId -notlike 'NoProcessFoundForGivenId,*') { throw }
+        return $null
+    }
+}
+
+function Confirm-ObservedAbsentSubtree([object[]]$Rows, [int]$MissingId, [int]$RootId) {
+    if ($RootId -le 0 -or $MissingId -le 0 -or $MissingId -eq $RootId -or
+        @($Rows | Where-Object { [int]$_.ProcessId -eq $MissingId }).Count -ne 1) {
+        throw 'Invalid missing owned subtree identity'
+    }
+    $subtree = @{$MissingId = $true}
+    do {
+        $added = $false
+        foreach ($item in $Rows) {
+            $processId = [int]$item.ProcessId
+            # The root's historical ParentProcessId is not an ownership edge.
+            if ($processId -eq $RootId -or $subtree.ContainsKey($processId)) { continue }
+            if ($subtree.ContainsKey([int]$item.ParentProcessId)) {
+                $subtree[$processId] = $true
+                $added = $true
+            }
+        }
+    } while ($added)
+    $absent = @()
+    foreach ($item in $Rows) {
+        $processId = [int]$item.ProcessId
+        if (-not $subtree.ContainsKey($processId)) { continue }
+        $current = Get-ProcessOrObservedAbsent $processId
+        if ($null -ne $current) {
+            try {
+                # Any current generation, including a reused PID, is refusal.
+                # No surviving branch can inherit ownership from a dead parent.
+                throw ('Owned subtree has a live or unverified descendant: ' + $processId)
+            } finally { $current.Dispose() }
+        }
+        $absent += @{pid=$processId; parent_pid=[int]$item.ParentProcessId;
+                     cim_created_ticks=(Get-CreationTicks $item).ToString(); observed_absent=$true}
+    }
+    return $absent
+}
+
 function Get-OwnedProcessSnapshot([int]$RootId, [string]$ExpectedStarted) {
     if ($RootId -le 0 -or $ExpectedStarted -notmatch '^[0-9]+$' -or [long]$ExpectedStarted -le 0) {
         throw 'Owned snapshot requires the known root PID and birth'
@@ -54,18 +101,19 @@ function Get-OwnedProcessSnapshot([int]$RootId, [string]$ExpectedStarted) {
         $selected = @(Select-BirthValidProcessTree @(Get-CimInstance Win32_Process) $RootId)
         $records = @()
         $live = @{}
+        $retired = @{}
         foreach ($item in $selected) {
             $processId = [int]$item.ProcessId
             $parentId = [int]$item.ParentProcessId
+            if ($retired.ContainsKey($processId)) { continue }
             if ($processId -eq $RootId) { $current = $root }
             else {
-                $current = Get-Process -Id $processId -ErrorAction SilentlyContinue
+                $current = Get-ProcessOrObservedAbsent $processId
                 if ($null -eq $current) {
-                    # A vanished leaf needs no cleanup; a live subtree cannot
-                    # inherit ownership from an unvalidated parent generation.
-                    if (@($selected | Where-Object { [int]$_.ParentProcessId -eq $processId }).Count -gt 0) {
-                        throw 'Owned parent exited during process snapshot'
-                    }
+                    $absent = @(Confirm-ObservedAbsentSubtree $selected $processId $RootId)
+                    foreach ($record in $absent) { $retired[[int]$record.pid] = $true }
+                    [Console]::Error.WriteLine((@{event='observed_absent_owned_subtree';
+                        root_pid=$RootId; identities=$absent} | ConvertTo-Json -Depth 5 -Compress))
                     continue
                 }
                 $handles.Add($current)

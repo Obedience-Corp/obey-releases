@@ -74,8 +74,157 @@ def wait_file(path):
         time.sleep(.1)
 
 
+def churn_controls(runtime, foreign, scenario):
+    """Replay actual prior CIM rows after normal child exits, never App state."""
+    directory = output / ('churn-' + scenario + '-' + Path(runtime).stem)
+    directory.mkdir()
+    root_stop, parent_stop, leaf_stop = [directory / name for name in ('root-stop', 'parent-stop', 'leaf-stop')]
+    churn_stops.append(root_stop)
+    ready = directory / 'children.json'
+    (directory/'leaf.ps1').write_text(
+        f"while (-not (Test-Path -LiteralPath {q(leaf_stop)}) -and -not (Test-Path -LiteralPath {q(root_stop)})) {{ Start-Sleep -Milliseconds 50 }}")
+    (directory/'parent.ps1').write_text(
+        "$ErrorActionPreference='Stop'; $self=Get-Process -Id $PID; "
+        f"$leaf=Start-Process -FilePath {q(shell)} -ArgumentList @('-NoProfile','-NonInteractive','-File','\"{directory / 'leaf.ps1'}\"') -PassThru; "
+        f"[IO.File]::WriteAllText({q(ready)},(@{{parent=@{{pid=$PID;started=$self.StartTime.ToUniversalTime().Ticks.ToString()}};leaf=@{{pid=$leaf.Id;started=$leaf.StartTime.ToUniversalTime().Ticks.ToString()}}}} | ConvertTo-Json -Depth 5 -Compress)); "
+        f"while (-not (Test-Path -LiteralPath {q(parent_stop)}) -and -not (Test-Path -LiteralPath {q(root_stop)})) {{ Start-Sleep -Milliseconds 50 }}")
+    (directory/'root.ps1').write_text(
+        "$ErrorActionPreference='Stop'; "
+        f"$child=Start-Process -FilePath {q(shell)} -ArgumentList @('-NoProfile','-NonInteractive','-File','\"{directory / 'parent.ps1'}\"') -PassThru; "
+        f"while (-not (Test-Path -LiteralPath {q(root_stop)})) {{ Start-Sleep -Milliseconds 50 }}")
+    owned = subprocess.Popen([shell, '-NoProfile', '-NonInteractive', '-File', str(directory/'root.ps1')])
+    processes.append(owned)
+    try:
+        wait_file(ready)
+        identities = json.loads(ready.read_text(encoding='utf-8-sig'))
+        identities['root'] = {'pid': owned.pid, 'started': process_birth(owned)}
+        identities['foreign'] = {'pid': foreign.pid, 'started': process_birth(foreign)}
+        capture = directory/'capture.ps1'
+        capture.write_text(r'''
+$ErrorActionPreference='Stop'
+. $env:OWNED_OBSERVER_SCRIPT
+$known=ConvertFrom-Json -InputObject $env:OWNED_FIXTURE_IDENTITIES
+$selected=@(Select-BirthValidProcessTree @(Get-CimInstance Win32_Process) ([int]$known.root.pid))
+$ids=@($selected | ForEach-Object {[int]$_.ProcessId})
+foreach($name in @('root','parent','leaf')) {if([int]$known.$name.pid -notin $ids){throw 'Actual churn tree incomplete'}}
+@{rows=@($selected | ForEach-Object {@{pid=[int]$_.ProcessId;parent_pid=[int]$_.ParentProcessId;cim_created_ticks=(Get-CreationTicks $_).ToString()}}); tracked=@(Get-OwnedProcessSnapshot ([int]$known.root.pid) $known.root.started)} | ConvertTo-Json -Depth 5 -Compress
+''')
+        env = dict(os.environ, OWNED_OBSERVER_SCRIPT=str(observer), OWNED_FIXTURE_IDENTITIES=json.dumps(identities))
+        # Every row comes from the actual live tree, before any child exit.
+        captured = command([runtime, '-NoProfile', '-NonInteractive', '-File', capture], env, json_output=True)
+        rows = captured['rows']
+        tracked = captured['tracked']
+        snapshot = directory/'prior-cim.json'
+        snapshot.write_text(json.dumps(rows))
+        parent_stop.write_text('normal exit')
+        if scenario == 'gone': leaf_stop.write_text('normal exit')
+        control = directory/'control.ps1'
+        control.write_text(r'''
+$ErrorActionPreference='Stop'
+. $env:OWNED_OBSERVER_SCRIPT
+$known=ConvertFrom-Json -InputObject $env:OWNED_FIXTURE_IDENTITIES
+$decoded=ConvertFrom-Json -InputObject ([IO.File]::ReadAllText($env:OWNED_PRIOR_CIM))
+$rows=@(foreach($row in $decoded) {
+    [pscustomobject]@{ProcessId=[int]$row.pid;ParentProcessId=[int]$row.parent_pid;
+        CreationDate=[datetime]::new([long]$row.cim_created_ticks,[DateTimeKind]::Utc)}})
+$deadline=[DateTime]::UtcNow.AddSeconds(15)
+do {
+    $parent=Get-ProcessOrObservedAbsent ([int]$known.parent.pid)
+    if($null -ne $parent){$parent.Dispose();Start-Sleep -Milliseconds 50;continue}
+    try {$gone=@(Confirm-ObservedAbsentSubtree $rows ([int]$known.parent.pid) ([int]$known.root.pid));break}
+    catch {
+        if($_.Exception.Message -notmatch '^Owned subtree has a live or unverified descendant:'){throw}
+        if($env:OWNED_CHURN_SCENARIO -eq 'orphan'){break}
+        Start-Sleep -Milliseconds 50
+    }
+} while([DateTime]::UtcNow -lt $deadline)
+if($null -ne (Get-ProcessOrObservedAbsent ([int]$known.parent.pid))){throw 'Churn parent failed to exit normally'}
+# Model enumeration timing only: prior rows are genuine captured CIM data.
+# Per-process revalidation still queries the actual current OS identities.
+function Get-CimInstance {
+    param([string]$ClassName,[string]$Filter)
+    if($ClassName -eq 'Win32_Process' -and -not $Filter){return $script:rows}
+    return CimCmdlets\Get-CimInstance -ClassName $ClassName -Filter $Filter
+}
+$result=@{scenario=$env:OWNED_CHURN_SCENARIO;known=$known;prior_rows=$rows.Count}
+if($env:OWNED_CHURN_SCENARIO -eq 'gone'){
+    $gone=@(Confirm-ObservedAbsentSubtree $rows ([int]$known.parent.pid) ([int]$known.root.pid))
+    $retired=@($gone | ForEach-Object {[int]$_.pid})
+    if([int]$known.parent.pid -notin $retired -or [int]$known.leaf.pid -notin $retired -or [int]$known.root.pid -in $retired){throw 'Wrong absent subtree'}
+    $actual=@(Get-OwnedProcessSnapshot ([int]$known.root.pid) $known.root.started)
+    if([int]$known.root.pid -notin @($actual | ForEach-Object {[int]$_.pid})){throw 'Live root omitted'}
+    if(@($actual | Where-Object {[int]$_.pid -in $retired}).Count -ne 0){throw 'Absent identity remained owned'}
+    $result.absent_subtree=$gone;$result.actual_snapshot=$actual
+    # A historical root ParentProcessId must never retire the held root.
+    $historical=@($rows | ForEach-Object {
+        if([int]$_.ProcessId -eq [int]$known.root.pid){[pscustomobject]@{ProcessId=$_.ProcessId;ParentProcessId=[int]$known.parent.pid;CreationDate=$_.CreationDate}}
+        else {$_}})
+    if(@(Confirm-ObservedAbsentSubtree $historical ([int]$known.parent.pid) ([int]$known.root.pid) | Where-Object {[int]$_.pid -eq [int]$known.root.pid}).Count -ne 0){throw 'Historical root edge admitted'}
+    $result.root_historical_edge_refused=$true
+    # Model a departed leaf's numeric PID reused by an actual unrelated live
+    # generation. Never claim an actual OS PID allocation was forced.
+    $oldLeaf=@($rows | Where-Object {[int]$_.ProcessId -eq [int]$known.leaf.pid})[0]
+    $reused=@($rows | Where-Object {[int]$_.ProcessId -in @([int]$known.root.pid,[int]$known.parent.pid)})
+    $reused += [pscustomobject]@{ProcessId=[int]$known.foreign.pid;ParentProcessId=[int]$known.parent.pid;CreationDate=$oldLeaf.CreationDate}
+    $refused=$false
+    try {[void](Confirm-ObservedAbsentSubtree $reused ([int]$known.parent.pid) ([int]$known.root.pid))}
+    catch {if($_.Exception.Message -notmatch '^Owned subtree has a live or unverified descendant:'){throw};$refused=$true}
+    if(-not $refused){throw 'Reused PID allowed branch retirement'}
+    $result.modeled_reused_pid_refused=$true
+    function Get-Process {param([int]$Id,[string]$ErrorAction);throw [UnauthorizedAccessException]::new('Injected process query denied')}
+    $denied=$false
+    try {[void](Confirm-ObservedAbsentSubtree $rows ([int]$known.parent.pid) ([int]$known.root.pid))}
+    catch {if($_.Exception.Message -notmatch 'Injected process query denied'){throw};$denied=$true}
+    finally {Remove-Item Function:Get-Process}
+    if(-not $denied){throw 'Unverified query allowed branch retirement'}
+    $result.query_failure_refused=$true
+} else {
+    $refused=$false
+    try {[void](Get-OwnedProcessSnapshot ([int]$known.root.pid) $known.root.started)}
+    catch {if($_.Exception.Message -notmatch '^Owned subtree has a live or unverified descendant:'){throw};$refused=$true}
+    if(-not $refused){throw 'Live orphan allowed branch retirement'}
+    $leaf=Get-Process -Id ([int]$known.leaf.pid) -ErrorAction Stop
+    try {if($leaf.StartTime.ToUniversalTime().Ticks.ToString() -ne $known.leaf.started){throw 'Orphan identity changed'}}finally{$leaf.Dispose()}
+    $result.actual_live_orphan_refused=$true
+}
+foreach($name in @('root','foreign')){
+    $current=Get-Process -Id ([int]$known.$name.pid) -ErrorAction Stop
+    try {if($current.StartTime.ToUniversalTime().Ticks.ToString() -ne $known.$name.started){throw 'Unrelated or root identity changed'}}finally{$current.Dispose()}
+}
+$result | ConvertTo-Json -Depth 8 -Compress
+''')
+        checked = subprocess.run([runtime, '-NoProfile', '-NonInteractive', '-File', str(control)],
+            env=dict(env, OWNED_PRIOR_CIM=str(snapshot), OWNED_CHURN_SCENARIO=scenario),
+            capture_output=True, text=True, timeout=40)
+        (directory/'stdout.log').write_text(checked.stdout)
+        (directory/'stderr.log').write_text(checked.stderr)
+        assert checked.returncode == 0, checked.stderr
+        result = json.loads(checked.stdout)
+        if scenario == 'gone':
+            diagnostics = [json.loads(line) for line in checked.stderr.splitlines() if line.strip()]
+            assert any(x.get('event') == 'observed_absent_owned_subtree' and
+                       {identities['parent']['pid'], identities['leaf']['pid']} <= {r['pid'] for r in x['identities']}
+                       for x in diagnostics), diagnostics
+        assert owned.poll() is None and process_birth(owned) == identities['root']['started']
+        assert foreign.poll() is None and process_birth(foreign) == identities['foreign']['started']
+        (directory/'proof.json').write_text(json.dumps(result, indent=2)+'\n')
+        return result
+    finally:
+        root_stop.write_text('normal fixture shutdown')
+        owned.wait(timeout=10)
+        if 'tracked' in locals():
+            exited = command([runtime, '-NoProfile', '-NonInteractive', '-File', observer],
+                dict(os.environ, APP_PROOF_PROCESS_MODE='verify', APP_PROOF_PROCESS_IDENTITIES=json.dumps(tracked)), json_output=True)
+            assert exited['owned_processes_exited'] is True
+            if 'result' in locals():
+                result['fixture_cleanup_verified'] = True
+                (directory/'proof.json').write_text(json.dumps(result, indent=2)+'\n')
+
+
 processes = []
-proof = {'modeled_parent_pid_collisions': True, 'original_natural_failure_run': '40082723078'}
+churn_stops = []
+proof = {'modeled_parent_pid_collisions': True, 'original_natural_failure_run': '40082723078',
+         'snapshot_churn_failure_run': '40097043291'}
 try:
     older = subprocess.Popen([shell, '-NoProfile', '-NonInteractive', '-Command', loop])
     processes.append(older)
@@ -111,12 +260,17 @@ try:
         assert result['owned_processes_exited'] is True
     assert older.poll() is None and between.poll() is None
     assert process_birth(older) == known['older']['started'] and process_birth(between) == known['between']['started']
+    proof['churn_controls'] = {}
+    for runtime in [shell, str(legacy)]:
+        for scenario in ['gone', 'orphan']:
+            proof['churn_controls'][Path(runtime).stem + '-' + scenario] = churn_controls(runtime, between, scenario)
     proof.update(owned_tree_exit_verified=True, unrelated_generations_survive=True)
     print('PASS: birth-valid actual tree cleanup; both historical PPID collisions, unknown birth, duplicate PID and stale root refused; unrelated processes survive')
 except BaseException as error:
     proof['failure'] = str(error)
     raise
 finally:
+    for marker in churn_stops: marker.write_text('stop')
     stop.write_text('stop')
     for proc in processes:
         try: proc.wait(timeout=8)
