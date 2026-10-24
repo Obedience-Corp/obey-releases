@@ -86,5 +86,12 @@ def capture_failure(process, output, environment, error):
         except (OSError, ValueError, IndexError, KeyError, StopIteration, RuntimeError) as failure:
             record['post_probe_identity_error'] = str(failure)
     destination = output.with_name(output.stem + '.window-diagnostics.json')
+    if record.get('post_probe_root_identity_verified'):
+        try:
+            from linux_startup_stack import capture
+            record['native_stack'] = capture(process, before['start_ticks'],
+                output.with_name(output.stem + '.native-stack.log'), environment)
+        except Exception as failure:
+            record['native_stack_error'] = str(failure)
     destination.write_text(json.dumps(record, indent=2) + '\n')
     return destination

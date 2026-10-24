@@ -55,3 +55,10 @@ jobs:
             -e CANDIDATE_TEST_CONTAINER=1 -e PYTHONDONTWRITEBYTECODE=1 \
             -v "$PWD:/src:ro" -w /src python:3.13-slim \
             python -W error::ResourceWarning tests/integration_deb_install.py
+      - name: Test failure-only debugger detach and timeout in isolated processes
+        run: |
+          docker build -t obey-release-debugger:local - < tests/Dockerfile.debugger
+          docker run --rm --network none --cap-add SYS_PTRACE \
+            -e CANDIDATE_TEST_CONTAINER=1 -e PYTHONDONTWRITEBYTECODE=1 \
+            -v "$PWD:/src:ro" -w /src obey-release-debugger:local \
+            python -W error::ResourceWarning tests/integration_linux_startup_stack.py
