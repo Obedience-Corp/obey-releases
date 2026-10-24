@@ -25,7 +25,11 @@ jobs:
           test "$(id -u)" != 0
           # Limit group access to this child. No chmod, group membership change,
           # root VM process, host shares or CPU emulation fallback.
-          sudo -n -u "$(id -un)" -g kvm /usr/bin/env -i \
+          # Hosted sudo permits root targets, not arbitrary run-as groups.
+          # setpriv drops root before Python starts and prohibits regaining it.
+          sudo -n /usr/bin/setpriv --reuid="$(id -u)" \
+            --regid="$(getent group kvm | cut -d: -f3)" --clear-groups --no-new-privs \
+            /usr/bin/env -i \
             PATH=/usr/bin:/bin PYTHONDONTWRITEBYTECODE=1 \
             CANDIDATE_NATIVE_DISPOSABLE=1 CANDIDATE_RUNNER_KIND="$RUNNER_KIND" \
             /usr/bin/python3 scripts/linux_kvm.py | tee "$RUNNER_TEMP/linux-kvm-proof.json"
