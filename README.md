@@ -882,3 +882,38 @@ owned App/service teardown. Changed or replaced package state fails cleanup.
 work, licensing, reboot and consumer trust. Source/tests and fixture setup do not
 establish packaged acceptance: retain original App screens, public candidate
 hashes/signatures, both real readbacks and cleanup before accepting a run.
+
+### Real active-session update and deferred restart
+
+The explicit Debian-only `existing_user=older-active` scenario requires default
+shell, `platform_scope=deb`, no login-shell proof and no Git-recovery mode.
+It retains the original idle migration fixture unchanged. Historical public
+Obey0.2.2 bytes and the explicit receipt preparation are recorded separately
+from the App's actual update to0.2.3.
+
+A task-owned Ollama0.40.10 CPU runtime and checksum-pinned smollm2:135m model run
+on the disposable machine's loopback interface with private provider home/model
+directories. No operator endpoint, model store or credentials are used. Ollama
+is test infrastructure, not an additional required App package. The runtime
+archive is pinned by hash and size and only its CPU libraries are extracted.
+The provider's normal shutdown is verified after owned App/service teardown.
+
+Before App launch, a real registered camp/session must complete a durable provider
+turn. After the App replaces both Obey commands, its persisted restart flag must
+remain pending while the original process birth identity and executable hash
+remain unchanged. Another turn must complete in the same running session without
+changing the first turn. Other selected receipts/files, preferences, provider
+configuration and the service definition must remain preserved. Obey's supported
+deferred install refreshes the unit file; its new mtime is recorded rather than
+mistaken for a daemon restart.
+
+The verifier quits the App normally, stops the session normally, then reopens the
+App. The App must clear the pending restart and run a different process using the
+new authenticated executable bytes. Both prior durable turns must remain intact,
+and a new session must complete a provider turn on that new daemon. Original App
+screens and sanitized state reports are retained. Generated provider text and
+the real-provider daemon log are not exported.
+
+`active_session_update_verified` is independent of licensed useful App work,
+consumer trust, reboot and other-platform acceptance. Source/unit checks or a
+provider-only container run cannot establish this native published-App result.

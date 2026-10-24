@@ -371,10 +371,12 @@ def stop_owned(process, environment):
     process.wait(timeout=20)
 
 
-def fresh_setup_readback(installer, managed, environment, external_suite=None):
+def fresh_setup_readback(installer, managed, environment, external_suite=None, active_session=None):
     import verify_app_upgrade as upgrade
     from verify_selected_components import checked_receipts
-    if external_suite is None:
+    if active_session is not None:
+        status = active_session.readback()
+    elif external_suite is None:
         status = upgrade.default_home_readback(installer, managed, environment)
         status["receipts"] = checked_receipts(managed)
     else:
@@ -387,7 +389,7 @@ def fresh_setup_readback(installer, managed, environment, external_suite=None):
     return status
 
 
-def wait_fresh_setup(process, installer, managed, target, output, environment, report, stage, mac_tools=None, external_suite=None):
+def wait_fresh_setup(process, installer, managed, target, output, environment, report, stage, mac_tools=None, external_suite=None, active_session=None):
     import verify_app_upgrade as upgrade
     if target.endswith("windows-msvc"):
         upgrade.wait_windows_setup(process, target, output, environment, report, stage)
@@ -396,7 +398,7 @@ def wait_fresh_setup(process, installer, managed, target, output, environment, r
         if process.poll() is not None:
             raise RuntimeError("App exited during fresh default-home setup")
         try:
-            return fresh_setup_readback(installer, managed, environment, external_suite)
+            return fresh_setup_readback(installer, managed, environment, external_suite, active_session)
         except (RuntimeError, ValueError, OSError, sqlite3.Error) as error:
             report[stage + "_last_provisioning_error"] = str(error)
             return None
@@ -424,7 +426,7 @@ def extract_appimage_observers(appimage, temporary, environment):
 
 def native(directory, document, target, output, linux_package="both", fresh_setup=False, public_root=None, existing_user="none", login_shell_proof=False, missing_git_manual=False, login_shell_kind='default', guest_context=None):
     require_clean_host({"aarch64-apple-darwin": "macOS-arm64", "x86_64-apple-darwin": "macOS-x86_64", "x86_64-unknown-linux-gnu": "linux-x86_64", "x86_64-pc-windows-msvc": "windows-x86_64"}.get(target))
-    if existing_user not in ("none", "older-idle", "current", "missing-companion", "corrupt-integrations", "foreign-companion", "corrupt-receipts", "external-suite-old", "external-suite-minimum", "external-suite-current") or existing_user != "none" and not fresh_setup:
+    if existing_user not in ("none", "older-idle", "older-active", "current", "missing-companion", "corrupt-integrations", "foreign-companion", "corrupt-receipts", "external-suite-old", "external-suite-minimum", "external-suite-current") or existing_user != "none" and not fresh_setup:
         raise ValueError("existing-user scenario requires public default-home proof")
     if existing_user in ("corrupt-integrations", "foreign-companion") and target != "x86_64-pc-windows-msvc":
         raise ValueError("manual existing-user diagnostic/recovery currently requires native Windows")
@@ -433,6 +435,8 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
         raise ValueError('receipt recovery requires native Windows or Linux Deb')
     if existing_user.startswith('external-suite-') and (target != 'x86_64-unknown-linux-gnu' or linux_package != 'both' or login_shell_proof or missing_git_manual or login_shell_kind != 'default' or guest_context is not None):
         raise ValueError('external suite proof requires isolated Linux Deb first-launch mode')
+    if existing_user == 'older-active' and (target != 'x86_64-unknown-linux-gnu' or linux_package != 'both' or login_shell_proof or missing_git_manual or login_shell_kind != 'default' or guest_context is not None):
+        raise ValueError('real active-session proof requires isolated Linux Deb mode')
     if login_shell_proof and (not fresh_setup or existing_user != "none"):
         raise ValueError("new login shell proof requires unseeded public fresh setup")
     if missing_git_manual and (not fresh_setup or existing_user != 'none' or login_shell_proof or target != 'x86_64-unknown-linux-gnu' or linux_package != 'both'):
@@ -471,6 +475,8 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
     receipt_fixture = None
     receipt_accessibility = None
     external_fixture = None
+    active_fixture = None
+    report['active_session_update_verified'] = False
     report["corrupt_receipt_manual_recovery_verified"] = False
     report["foreign_companion_manual_recovery_verified"] = False
     report["corrupt_integration_manual_recovery_verified"] = False
@@ -611,7 +617,7 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
         report["installer_version"] = command([installer, "version"], environment).strip()
         report["activity_help"] = command([activity, "--help"], environment).strip()
         report["runtime_config"] = str(runtime[0])
-        if existing_user != "none" and not existing_user.startswith("external-suite-"):
+        if existing_user not in ("none", "older-active") and not existing_user.startswith("external-suite-"):
             import existing_obey
             existing_fixture = existing_obey.seed(temporary, installer, default_managed, target, environment, output, report, "current" if existing_user in ("corrupt-integrations", "foreign-companion", "corrupt-receipts") else existing_user)
             if existing_user == "corrupt-integrations":
@@ -624,6 +630,13 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
                 foreign_fixture = foreign_companion.Fixture(default_managed, installer, temporary / "companion-rollback", report.setdefault("foreign_companion_fixture", {}))
                 foreign_fixture.substitute()
                 report["foreign_companion_probe"] = foreign_companion.probe(installer, foreign_fixture, environment, output)
+        if existing_user == 'older-active':
+            import active_session
+            active_fixture = active_session.Fixture(temporary, installer, default_managed, target, environment,
+                                                    output, report.setdefault('active_session_fixture', {}))
+            active_fixture.seed()
+            report['selected_packages_preseeded'] = True
+            report['existing_seed_method'] = 'authenticated historical managed Obey fixture with real provider work'
         if existing_user.startswith('external-suite-'):
             import external_suite
             external_fixture = external_suite.Fixture(temporary, installer, default_managed, environment,
@@ -719,7 +732,9 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
                     report['git_retry_action'] = missing_git.interact(process, binary, environment, 'retry')
                 if guest_context is not None:
                     guest_context.install_git(process, binary, installer, environment, output, report)
-                report["default_after_setup"] = wait_fresh_setup(process, installer, default_managed, target, output, environment, report, "fresh", external_suite=external_fixture, **mac_options)
+                report["default_after_setup"] = wait_fresh_setup(process, installer, default_managed, target, output, environment, report, "fresh", external_suite=external_fixture, active_session=active_fixture, **mac_options)
+                if active_fixture is not None:
+                    active_fixture.after_update()
                 if receipt_fixture is not None:
                     report["receipt_database_after_setup"] = receipt_fixture.healthy()
                 if foreign_fixture is not None:
@@ -734,9 +749,11 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
                         raise RuntimeError("updated existing-user service was not ready")
                     existing_obey.compare(report["existing_before"], report["existing_after_setup"], "current" if existing_user in ("corrupt-integrations", "foreign-companion", "corrupt-receipts") else existing_user)
                 upgrade.normal_quit(process, binary, binary.parent.parent.parent if target.endswith("apple-darwin") else None, target, environment, output, **mac_options)
+                if active_fixture is not None:
+                    active_fixture.stop_for_idle()
                 process = subprocess.Popen([str(binary)], env=environment, stdout=log, stderr=subprocess.STDOUT, start_new_session=os.name != "nt")
                 report["reopened_pid"] = process.pid
-                report["default_after_reopen"] = wait_fresh_setup(process, installer, default_managed, target, output, environment, report, "reopened", external_suite=external_fixture, **mac_options)
+                report["default_after_reopen"] = wait_fresh_setup(process, installer, default_managed, target, output, environment, report, "reopened", external_suite=external_fixture, active_session=active_fixture, **mac_options)
                 if receipt_fixture is not None:
                     report["receipt_database_after_reopen"] = receipt_fixture.healthy()
                     report["corrupt_receipt_manual_recovery_verified"] = True
@@ -764,6 +781,9 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
                     report["missing_companion_repair_verified"] = existing_user == "missing-companion"
                     report["corrupt_integration_manual_recovery_verified"] = integration_fixture is not None and integration_fixture.restored
                     report["foreign_companion_manual_recovery_verified"] = foreign_fixture is not None and foreign_fixture.restored
+                elif active_fixture is not None:
+                    active_fixture.finish()
+                    report['active_session_update_verified'] = True
                 elif external_fixture is not None:
                     external_fixture.finish(report['default_after_setup'], report['default_after_reopen'])
                     report['external_suite_compatibility_verified'] = True
@@ -831,7 +851,9 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
             actions.append(lambda: packaging_service.cleanup(packaging_root, environment, report))
         if default_managed is not None:
             daemon_log = Path.home() / ".local/share/obey/daemon.log"
-            if daemon_log.is_file():
+            if active_fixture is not None:
+                report['daemon_log_omitted'] = 'Real provider text is excluded from exported evidence'
+            elif daemon_log.is_file():
                 try:
                     shutil.copyfile(daemon_log, output / "default-daemon.log")
                 except OSError as error:
@@ -853,6 +875,8 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
             actions.append(uninstall_deb)
         if external_fixture is not None:
             actions.append(external_fixture.cleanup)
+        if active_fixture is not None:
+            actions.append(active_fixture.cleanup)
         if manager is not None:
             def stop_manager():
                 manager.terminate()
@@ -879,6 +903,7 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
         report["native_packaging_launch_verified"] = "failure" not in report and not cleanup_errors
         report["fresh_default_setup_verified"] = report["fresh_default_setup_verified"] and report["native_packaging_launch_verified"]
         report["external_suite_compatibility_verified"] = report["external_suite_compatibility_verified"] and report["native_packaging_launch_verified"]
+        report['active_session_update_verified'] = report['active_session_update_verified'] and report['native_packaging_launch_verified']
         report["new_login_shell_verified"] = report["new_login_shell_verified"] and report["native_packaging_launch_verified"]
         report["automatic_git_authorization_verified"] = report["automatic_git_authorization_verified"] and report["native_packaging_launch_verified"]
         report["corrupt_integration_manual_recovery_verified"] = report["corrupt_integration_manual_recovery_verified"] and report["native_packaging_launch_verified"]
@@ -912,7 +937,7 @@ def main():
     parser.add_argument("--verify-login-shell", action="store_true")
     parser.add_argument('--login-shell', choices=('default', 'windows-powershell', 'zsh'), default='default')
     parser.add_argument('--verify-missing-git-manual', action='store_true')
-    parser.add_argument("--existing-user", choices=("none", "older-idle", "current", "missing-companion", "corrupt-integrations", "foreign-companion", "corrupt-receipts", "external-suite-old", "external-suite-minimum", "external-suite-current"), default="none")
+    parser.add_argument("--existing-user", choices=("none", "older-idle", "older-active", "current", "missing-companion", "corrupt-integrations", "foreign-companion", "corrupt-receipts", "external-suite-old", "external-suite-minimum", "external-suite-current"), default="none")
     for name in ("version", "source"):
         parser.add_argument("--" + name, required=True)
     parser.add_argument("--target")
