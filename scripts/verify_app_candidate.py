@@ -387,10 +387,12 @@ def wait_fresh_setup(process, installer, managed, target, output, environment, r
     return result
 
 
-def native(directory, document, target, output, linux_package="both", fresh_setup=False, public_root=None, existing_user="none"):
+def native(directory, document, target, output, linux_package="both", fresh_setup=False, public_root=None, existing_user="none", login_shell_proof=False):
     require_clean_host({"aarch64-apple-darwin": "macOS-arm64", "x86_64-apple-darwin": "macOS-x86_64", "x86_64-unknown-linux-gnu": "linux-x86_64", "x86_64-pc-windows-msvc": "windows-x86_64"}.get(target))
     if existing_user not in ("none", "older-idle", "current", "missing-companion") or existing_user != "none" and not fresh_setup:
         raise ValueError("existing-user scenario requires public default-home proof")
+    if login_shell_proof and (not fresh_setup or existing_user != "none"):
+        raise ValueError("new login shell proof requires unseeded public fresh setup")
     if target not in TARGETS or native_platform() != TARGETS[target][0]:
         raise ValueError("App target does not match native machine")
     if linux_package not in ("both", "appimage") or linux_package == "appimage" and not target.endswith("linux-gnu"):
@@ -412,6 +414,8 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
     default_managed = None
     packaging_root = None
     existing_fixture = None
+    login_fixture = None
+    report["new_login_shell_verified"] = False
     report["existing_user_scenario"] = existing_user
     report["existing_user_reconciliation_verified"] = False
     report["missing_companion_repair_verified"] = False
@@ -439,6 +443,9 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
         if fresh_setup:
             report["default_xdg_environment"] = {name: environment[name] for name in ("XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME") if environment.get(name)}
             default_managed = upgrade.default_home_layout(Path.home(), environment)
+            if login_shell_proof:
+                import login_shell
+                login_fixture = login_shell.prepare(environment, report)
         if not fresh_setup:
             environment.update(FESTIVAL_HOME=str(temporary / "managed"), OBEY_CONFIG=str(temporary / "obey.yaml"))
             if os.name == 'nt':
@@ -547,6 +554,8 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
                 raise RuntimeError("App did not retain a live captured window")
             if fresh_setup:
                 report["default_after_setup"] = wait_fresh_setup(process, installer, default_managed, target, output, environment, report, "fresh")
+                if login_fixture is not None:
+                    report["login_after_setup"] = login_shell.verify(login_fixture, default_managed, installer, environment, output, "after-setup")
                 if existing_fixture is not None:
                     report["existing_after_setup"] = existing_obey.ready_readback(existing_fixture, installer, environment, "0.2.3")
                     if report["existing_after_setup"] is None:
@@ -556,6 +565,11 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
                 process = subprocess.Popen([str(binary)], env=environment, stdout=log, stderr=subprocess.STDOUT, start_new_session=os.name != "nt")
                 report["reopened_pid"] = process.pid
                 report["default_after_reopen"] = wait_fresh_setup(process, installer, default_managed, target, output, environment, report, "reopened")
+                if login_fixture is not None:
+                    report["login_after_reopen"] = login_shell.verify(login_fixture, default_managed, installer, environment, output, "after-reopen")
+                    if report["login_after_setup"] != report["login_after_reopen"]:
+                        raise ValueError("App reopen changed ordinary shell commands or profile state")
+                    report["new_login_shell_verified"] = True
                 for field in ("receipts", "selected_mtime_ns"):
                     if report["default_after_setup"][field] != report["default_after_reopen"][field]:
                         raise ValueError("App relaunch changed selected package receipts/files")
@@ -637,6 +651,7 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
             report["cleanup_failure"] = cleanup_errors
         report["native_packaging_launch_verified"] = "failure" not in report and not cleanup_errors
         report["fresh_default_setup_verified"] = report["fresh_default_setup_verified"] and report["native_packaging_launch_verified"]
+        report["new_login_shell_verified"] = report["new_login_shell_verified"] and report["native_packaging_launch_verified"]
         report["existing_user_reconciliation_verified"] = report["existing_user_reconciliation_verified"] and report["native_packaging_launch_verified"]
         report["missing_companion_repair_verified"] = report["missing_companion_repair_verified"] and report["native_packaging_launch_verified"]
         (output / "proof.json").write_text(json.dumps(report, indent=2) + "\n")
@@ -648,6 +663,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=("fetch", "verify", "fetch-public", "verify-fresh"), required=True)
     parser.add_argument("--tag")
+    parser.add_argument("--verify-login-shell", action="store_true")
     parser.add_argument("--existing-user", choices=("none", "older-idle", "current", "missing-companion"), default="none")
     for name in ("version", "source"):
         parser.add_argument("--" + name, required=True)
@@ -656,6 +672,8 @@ def main():
     parser.add_argument("--directory", type=Path, default=Path("app-candidate"))
     parser.add_argument("--output", type=Path, default=Path("app-proof"))
     args = parser.parse_args()
+    if args.verify_login_shell and (args.mode != "verify-fresh" or args.existing_user != "none"):
+        raise ValueError("login shell proof requires unseeded verify-fresh")
     if args.existing_user != "none" and args.mode != "verify-fresh":
         raise ValueError("existing-user scenarios require verify-fresh public inputs")
     if args.mode in ("fetch", "verify"):
@@ -668,7 +686,7 @@ def main():
             fetch_public(args.directory, args.source, args.version)
         else:
             document = checked_public(args.directory, args.source, args.version)
-            native((args.directory / "assets").resolve(), document, args.target, args.output.resolve(), args.linux_package, fresh_setup=True, public_root=args.directory.resolve(), existing_user=args.existing_user)
+            native((args.directory / "assets").resolve(), document, args.target, args.output.resolve(), args.linux_package, fresh_setup=True, public_root=args.directory.resolve(), existing_user=args.existing_user, login_shell_proof=args.verify_login_shell)
     elif args.mode == "fetch":
         fetch(args.tag, args.version, args.source, args.directory)
     else:

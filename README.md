@@ -481,3 +481,18 @@ exhausted-limit reset headers, with at most three retries and a one-hour reset
 budget. Permission failures without rate-limit evidence, artifact failures,
 invalid bytes and oversized inputs still fail immediately. Waits are logged;
 there is no token fallback.
+
+The fresh-only `verify_login_shell` option seeds a harmless foreign function in
+the actual account's Bash login profile, actual Zsh startup directory, or
+installed PowerShell7 CurrentUserAllHosts profile before App setup. It never preinstalls
+selected packages or disables integration. After setup and normal App reopen,
+ordinary interactive login Bash/Zsh shells run in an owned pty; PowerShell7 starts
+with its normal profile loading and reports its actual runtime version. Each required camp/fest/obey/ob/camp-app command
+must resolve to its actual managed executable and report the expected version,
+and the foreign function/prefix must survive. Original terminal bytes, including
+ANSI, are retained. Profile bytes/mtime and command results must remain unchanged
+on reopen. The bundled Installer is used through the App; this does not require
+a standalone managed festival hub. Stock Windows PowerShell5.1, cmd, provider-wrapper/Windows Terminal UI,
+licensed work, login/reboot service recovery and customer security prompts remain unproven. The
+explicit new_login_shell_verified flag stays false on any failure or cleanup
+error. Existing seeded-user modes refuse this option.
