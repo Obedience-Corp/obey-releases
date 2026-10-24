@@ -389,7 +389,7 @@ def wait_fresh_setup(process, installer, managed, target, output, environment, r
 
 def native(directory, document, target, output, linux_package="both", fresh_setup=False, public_root=None, existing_user="none"):
     require_clean_host({"aarch64-apple-darwin": "macOS-arm64", "x86_64-apple-darwin": "macOS-x86_64", "x86_64-unknown-linux-gnu": "linux-x86_64", "x86_64-pc-windows-msvc": "windows-x86_64"}.get(target))
-    if existing_user not in ("none", "older-idle", "current") or existing_user != "none" and not fresh_setup:
+    if existing_user not in ("none", "older-idle", "current", "missing-companion") or existing_user != "none" and not fresh_setup:
         raise ValueError("existing-user scenario requires public default-home proof")
     if target not in TARGETS or native_platform() != TARGETS[target][0]:
         raise ValueError("App target does not match native machine")
@@ -414,6 +414,7 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
     existing_fixture = None
     report["existing_user_scenario"] = existing_user
     report["existing_user_reconciliation_verified"] = False
+    report["missing_companion_repair_verified"] = False
     if fresh_setup:
         # Runtime import reuses the existing default-home/normal-quit contracts;
         # upgrade verification itself imports this packaging module.
@@ -567,6 +568,7 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
                         raise RuntimeError("reopened existing-user service was not ready")
                     existing_obey.compare(report["existing_after_setup"], report["existing_after_reopen"], "current")
                     report["existing_user_reconciliation_verified"] = True
+                    report["missing_companion_repair_verified"] = existing_user == "missing-companion"
                 else:
                     report["fresh_default_setup_verified"] = True
             report["primary_packaged_app_launch_verified"] = True
@@ -636,6 +638,7 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
         report["native_packaging_launch_verified"] = "failure" not in report and not cleanup_errors
         report["fresh_default_setup_verified"] = report["fresh_default_setup_verified"] and report["native_packaging_launch_verified"]
         report["existing_user_reconciliation_verified"] = report["existing_user_reconciliation_verified"] and report["native_packaging_launch_verified"]
+        report["missing_companion_repair_verified"] = report["missing_companion_repair_verified"] and report["native_packaging_launch_verified"]
         (output / "proof.json").write_text(json.dumps(report, indent=2) + "\n")
         if cleanup_errors:
             raise RuntimeError("owned App cleanup failed: " + "; ".join(cleanup_errors))
@@ -645,7 +648,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=("fetch", "verify", "fetch-public", "verify-fresh"), required=True)
     parser.add_argument("--tag")
-    parser.add_argument("--existing-user", choices=("none", "older-idle", "current"), default="none")
+    parser.add_argument("--existing-user", choices=("none", "older-idle", "current", "missing-companion"), default="none")
     for name in ("version", "source"):
         parser.add_argument("--" + name, required=True)
     parser.add_argument("--target")

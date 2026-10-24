@@ -462,3 +462,16 @@ receipts, executable mtimes, service PID and service unit. Raw settings observat
 are retained even when validation fails. Public App inputs are fetched anonymously
 once per workflow matrix and revalidated on each native runner before execution;
 no authenticated API fallback is introduced.
+
+The `missing-companion` existing-user scenario seeds the official current selected
+profile with a recent background-check timestamp, then removes only the single
+hash-verified receipt-owned `camp-app` command. The receipt and all other tools,
+foreign files and user settings remain. Actual Installer status must report the
+missing executable before launching the original published App. Acceptance
+requires App-driven foreground repair to restore the exact official companion
+file identity/version/capabilities, preserve every other selected package's
+receipt/hash/mtime and the running Obey service PID/unit, then normal reopen with
+an exact current no-op readback. Its explicit `missing_companion_repair_verified`
+flag stays false on any native or cleanup failure. This is a missing-owned-file
+case; it does not claim foreign-file overwrite, corrupt database recovery,
+active-session continuity or licensed useful work.

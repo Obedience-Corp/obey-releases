@@ -17,6 +17,7 @@ from verify_selected_components import PACKAGES, checked_bootstrap, checked_rece
 from app_upgrade_contract import verify_persisted
 
 OBEY = 'obedience-corp/obey'
+COMPANION = 'obedience-corp/camp-app'
 MACHINES = {'aarch64-apple-darwin': 'macOS-arm64', 'x86_64-apple-darwin': 'macOS-x86_64',
             'x86_64-unknown-linux-gnu': 'linux-x86_64', 'x86_64-pc-windows-msvc': 'windows-x86_64'}
 
@@ -57,7 +58,7 @@ def place_old_payloads(managed, payloads):
 
 def seed(root, installer, managed, target, environment, output, report, scenario):
     from verify_app_upgrade import bootstrap_fixture
-    if scenario not in ('older-idle', 'current'):
+    if scenario not in ('older-idle', 'current', 'missing-companion'):
         raise ValueError('unsupported existing-user scenario')
     fixture = bootstrap_fixture(root, environment, MACHINES[target], managed)
     report['selected_packages_preseeded'] = True
@@ -96,7 +97,29 @@ def seed(root, installer, managed, target, environment, output, report, scenario
     elapsed = utc_time(before['observed_at']) - utc_time(before['lifecycle']['lastUpdateCheckAt'])
     if not 0 <= elapsed.total_seconds() < 24 * 60 * 60:
         raise ValueError('existing fixture did not seed a recent background check')
+    if scenario == 'missing-companion':
+        report['missing_companion_fixture'] = remove_owned_companion(managed)
+        status = command([installer, '--managed', 'status', '--plugin', COMPANION, '--json'], environment, json_output=True)
+        report['partial_status_before_launch'] = status
+        companions = [row for row in status.get('data', {}).get('tools', []) if row.get('tool') == 'camp-app']
+        if not status.get('ok') or len(companions) != 1 or companions[0].get('present') is not False:
+            raise ValueError('missing companion fixture is not observable through actual Installer status')
     return fixture
+
+
+def remove_owned_companion(managed):
+    selected = checked_receipts(managed)
+    rows = [row for row in selected['files'] if row['receipt_pkg_id'] == COMPANION]
+    expected = managed / 'bin' / ('camp-app.exe' if os.name == 'nt' else 'camp-app')
+    if len(rows) != 1 or Path(rows[0]['path']) != expected:
+        raise ValueError('partial fixture requires exactly one receipt-owned companion command')
+    # checked_receipts verifies regular-file ownership and the current hash;
+    # never remove a foreign replacement, symlink or a directory.
+    expected.unlink()
+    if expected.exists() or expected.is_symlink():
+        raise ValueError('owned companion was not absent before App launch')
+    return {'path': str(expected), 'original_sha256': rows[0]['hash'],
+            'receipt': rows[0], 'absent_before_launch': True}
 
 
 def utc_now():
@@ -162,12 +185,13 @@ def ready_readback(fixture, installer, environment, version):
 def compare(before, after, scenario):
     if before['preserved'] != after['preserved']:
         raise ValueError('existing-user settings or foreign files changed')
+    changed = COMPANION if scenario == 'missing-companion' else OBEY
     def stable_rows(state, key):
-        return [row for row in state['receipts'][key] if row.get('package_id', row.get('receipt_pkg_id')) != OBEY]
+        return [row for row in state['receipts'][key] if row.get('package_id', row.get('receipt_pkg_id')) != changed]
     if any(stable_rows(before, key) != stable_rows(after, key) for key in ('receipts', 'files')):
-        raise ValueError('Obey migration changed another selected package')
+        raise ValueError('selected repair/migration changed another package')
     for row in before['receipts']['files']:
-        if row['receipt_pkg_id'] != OBEY or scenario == 'current':
+        if row['receipt_pkg_id'] != changed or scenario == 'current':
             if before['mtimes'][row['path']] != after['mtimes'][row['path']]:
                 raise ValueError('current selected executable was needlessly rewritten')
     if scenario == 'current':
@@ -180,11 +204,17 @@ def compare(before, after, scenario):
         checked = utc_time(after['lifecycle']['lastUpdateCheckAt'])
         if not (utc_time(before['observed_at']) <= completed == checked <= utc_time(after['observed_at'])):
             raise ValueError('migration completion timestamps do not match the observed setup window')
-        if before['service']['daemon_pid'] == after['service']['daemon_pid']:
-            raise ValueError('idle migration left the old daemon running')
-        old = {row['path']: row['hash'] for row in before['receipts']['files'] if row['receipt_pkg_id'] == OBEY}
-        new = {row['path']: row['hash'] for row in after['receipts']['files'] if row['receipt_pkg_id'] == OBEY}
-        if old.keys() != new.keys() or any(old[path] == new[path] for path in old):
-            raise ValueError('old Obey command bytes were not both replaced')
+        if scenario == 'missing-companion':
+            if before['receipts']['files'] != after['receipts']['files']:
+                raise ValueError('companion repair did not restore the exact original file identities')
+            if before['service']['daemon_pid'] != after['service']['daemon_pid'] or before['unit'] != after['unit']:
+                raise ValueError('companion repair needlessly restarted or rewrote the Obey service')
+        else:
+            if before['service']['daemon_pid'] == after['service']['daemon_pid']:
+                raise ValueError('idle migration left the old daemon running')
+            old = {row['path']: row['hash'] for row in before['receipts']['files'] if row['receipt_pkg_id'] == OBEY}
+            new = {row['path']: row['hash'] for row in after['receipts']['files'] if row['receipt_pkg_id'] == OBEY}
+            if old.keys() != new.keys() or any(old[path] == new[path] for path in old):
+                raise ValueError('old Obey command bytes were not both replaced')
     if after['pending_obey_restart']:
         raise ValueError('idle existing-user setup retained a pending restart')

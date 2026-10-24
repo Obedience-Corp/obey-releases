@@ -10,7 +10,7 @@ on:
         description: Fresh install or explicitly seeded old/current managed-user proof
         type: choice
         default: none
-        options: [none, older-idle, current]
+        options: [none, older-idle, current, missing-companion]
       source_revision:
         type: string
         required: true
@@ -25,7 +25,7 @@ concurrency:
 jobs:
   anonymous-inputs:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
         with:
