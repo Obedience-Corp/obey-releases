@@ -23,7 +23,30 @@ concurrency:
   group: fresh-default-setup-${{ inputs.source_revision }}-${{ inputs.existing_user }}
   cancel-in-progress: false
 jobs:
+  anonymous-inputs:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Fetch and validate anonymous public App bytes once for the native matrix
+        env:
+          CANDIDATE_RUNNER_KIND: ${{ runner.environment }}
+          SOURCE: ${{ inputs.source_revision }}
+          VERSION: ${{ inputs.version }}
+        run: python scripts/verify_app_candidate.py --mode fetch-public --source "$SOURCE" --version "$VERSION"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: anonymous-setup-inputs
+          path: app-candidate/
+          if-no-files-found: error
+          retention-days: 7
   native:
+    needs: anonymous-inputs
     strategy:
       fail-fast: false
       matrix:
@@ -65,12 +88,10 @@ jobs:
           echo "37b600344e20c19314b2e82813db2bfdcc408b77b876f7727889dbd46d539479  $archive" | sha256sum -c -
           unzip -q "$archive" -d "$RUNNER_TEMP/app-minisign"
           cygpath -w "$RUNNER_TEMP/app-minisign/minisign-win64/x86_64" >> "$GITHUB_PATH"
-      - name: Validate anonymous original public App bytes
-        env:
-          CANDIDATE_RUNNER_KIND: ${{ runner.environment }}
-          SOURCE: ${{ inputs.source_revision }}
-          VERSION: ${{ inputs.version }}
-        run: python scripts/verify_app_candidate.py --mode fetch-public --source "$SOURCE" --version "$VERSION"
+      - uses: actions/download-artifact@v4
+        with:
+          name: anonymous-setup-inputs
+          path: app-candidate
       - name: Let App provision selected tools and verify normal-home relaunch
         env:
           CANDIDATE_NATIVE_DISPOSABLE: '1'

@@ -61,19 +61,22 @@ class ExistingObeyContracts(unittest.TestCase):
                 with self.assertRaises(RuntimeError): existing_obey.require_stopped(invalid)
 
     def state(self):
-        return {'preserved': {'settings': {'lastUpdateCheckAt': 'recent'}, 'files': {'foreign': 'hash'}},
+        return {'preserved': {'settings': {'fontSize': 17}, 'files': {'foreign': 'hash'}},
                 'receipts': {'receipts': [{'package_id': existing_obey.OBEY, 'version': '0.2.3'}, {'package_id': 'suite', 'version': 'current'}],
                              'files': [{'receipt_pkg_id': existing_obey.OBEY, 'path': 'obey', 'hash': 'new-a'},
                                        {'receipt_pkg_id': existing_obey.OBEY, 'path': 'ob', 'hash': 'new-b'},
                                        {'receipt_pkg_id': 'suite', 'path': 'camp', 'hash': 'same'}]},
                 'mtimes': {'obey': 2, 'ob': 2, 'camp': 1}, 'service': {'daemon_pid': 20},
-                'unit': {'path': 'unit', 'sha256': 'unit-hash', 'mtime_ns': 1}, 'pending_obey_restart': False}
+                'unit': {'path': 'unit', 'sha256': 'unit-hash', 'mtime_ns': 1}, 'pending_obey_restart': False,
+                'lifecycle': {'lastUpdateCheckAt': '2026-10-24T00:00:10Z', 'setupCompletedAt': '2026-10-24T00:00:10Z'},
+                'observed_at': '2026-10-24T00:00:12Z'}
 
     def test_current_noop_rejects_rewrite_restart_receipt_or_settings_change(self):
         before = self.state()
         existing_obey.compare(before, copy.deepcopy(before), 'current')
         mutations = [lambda s: s['mtimes'].update(ob=3), lambda s: s['service'].update(daemon_pid=21),
-                     lambda s: s['unit'].update(mtime_ns=2), lambda s: s['preserved']['files'].update(foreign='changed'),
+                     lambda s: s['unit'].update(mtime_ns=2), lambda s: s['lifecycle'].update(lastUpdateCheckAt='2026-10-24T00:00:11Z'),
+                     lambda s: s['lifecycle'].update(setupCompletedAt=None), lambda s: s['preserved']['settings'].update(fontSize=18), lambda s: s['preserved']['files'].update(foreign='changed'),
                      lambda s: s['receipts']['files'][0].update(hash='changed'), lambda s: s.update(pending_obey_restart=True)]
         for mutate in mutations:
             after = copy.deepcopy(before); mutate(after)
@@ -81,6 +84,8 @@ class ExistingObeyContracts(unittest.TestCase):
 
     def test_old_migration_requires_both_replacements_and_idle_restart(self):
         after = self.state(); before = copy.deepcopy(after)
+        before['observed_at'] = '2026-10-24T00:00:02Z'
+        before['lifecycle'] = {'lastUpdateCheckAt': '2026-10-24T00:00:01Z', 'setupCompletedAt': None}
         before['service']['daemon_pid'] = 10
         before['receipts']['receipts'][0]['version'] = '0.2.2'
         for row in before['receipts']['files'][:2]: row['hash'] = 'old-' + row['path']
@@ -91,3 +96,37 @@ class ExistingObeyContracts(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'both replaced'): existing_obey.compare(before, bad, 'older-idle')
         bad = copy.deepcopy(after); bad['mtimes']['camp'] = 2
         with self.assertRaisesRegex(ValueError, 'rewritten'): existing_obey.compare(before, bad, 'older-idle')
+
+    def test_migration_rejects_missing_stale_future_or_inconsistent_bookkeeping(self):
+        after = self.state(); before = copy.deepcopy(after)
+        before['observed_at'] = '2026-10-24T00:00:02Z'
+        before['lifecycle'] = {'lastUpdateCheckAt': '2026-10-24T00:00:01Z', 'setupCompletedAt': None}
+        before['service']['daemon_pid'] = 10
+        for row in before['receipts']['files'][:2]: row['hash'] = 'old-' + row['path']
+        for completed, checked in [(None, None), ('bad', 'bad'),
+            ('2026-10-24T00:00:01Z', '2026-10-24T00:00:01Z'),
+            ('2026-10-24T00:00:13Z', '2026-10-24T00:00:13Z'),
+            ('2026-10-24T00:00:10Z', '2026-10-24T00:00:11Z')]:
+            bad = copy.deepcopy(after)
+            bad['lifecycle'] = {'lastUpdateCheckAt': checked, 'setupCompletedAt': completed}
+            with self.assertRaises(ValueError): existing_obey.compare(before, bad, 'older-idle')
+
+    def test_settings_evidence_preserves_raw_failed_readback_and_user_preferences(self):
+        import json
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fixture = {'settings_path': root / 'settings.json', 'settings_evidence': root / 'observations.jsonl',
+                       'settings': {'fontSize': 17}, 'snapshot': {}}
+            actual = {'fontSize': 17, 'lastUpdateCheckAt': '2026-10-24T00:00:01Z'}
+            fixture['settings_path'].write_text(json.dumps(actual))
+            settings, preserved, lifecycle, _ = existing_obey.settings_readback(fixture)
+            self.assertEqual(settings, actual)
+            self.assertEqual(preserved['settings'], {'fontSize': 17})
+            self.assertEqual(lifecycle['lastUpdateCheckAt'], actual['lastUpdateCheckAt'])
+            actual.update(fontSize=18, lastUpdateCheckAt='2026-10-24T00:00:10Z')
+            fixture['settings_path'].write_text(json.dumps(actual))
+            with self.assertRaisesRegex(ValueError, 'lost persisted'):
+                existing_obey.settings_readback(fixture)
+            evidence = [json.loads(line) for line in fixture['settings_evidence'].read_text().splitlines()]
+            self.assertEqual(len(evidence), 2)
+            self.assertEqual(evidence[-1]['settings'], actual)
