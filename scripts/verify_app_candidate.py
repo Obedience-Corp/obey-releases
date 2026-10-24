@@ -596,7 +596,7 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
                             raise RuntimeError("App exited instead of presenting the corrupt-integration diagnostic")
                         frame = window_capture(process, target, output / "corrupt-integration.png", environment)
                         report["corrupt_integration_window"] = frame
-                        return frame if corrupt_integrations.error_window(frame) else None
+                        return frame if corrupt_integrations.error_window(frame, report["corrupt_integration_installer_error"]) else None
                     wait_until("actual App displays the injected integration preferences error", diagnosed, seconds=180)
                     report["corrupt_integration_unchanged_preferences"] = integration_fixture.unchanged_corruption()
                     report["corrupt_integration_preserved_user"] = corrupt_integrations.unchanged_user(

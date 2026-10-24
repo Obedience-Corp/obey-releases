@@ -170,10 +170,15 @@ def installer_error(installer, environment, output):
     return checked_error(json.loads(result.stdout), result.returncode)
 
 
-def error_window(window):
+def error_window(window, diagnostic):
+    # Actual UIA exposes this StepRow as one aggregate name, not a standalone
+    # configure label. Match the entire failed row plus the real Installer
+    # diagnostic/code, never an unrelated failed step or a generic error banner.
+    expected = ('Configure terminal commands and agent connectionsFailed' +
+                diagnostic['message'] + diagnostic['code'] + 'Retry')
     names = window.get('visible_names', [])
-    return ('Getting this machine ready' in names and 'Configure terminal commands and agent connections' in names and
-            any('read integration preferences' in name.lower() for name in names))
+    return (window.get('uia_verified') is True and 'Getting this machine ready' in names and
+            'A step did not finish. Its detail is below.' in names and expected in names)
 
 
 def unchanged_user(fixture, before, installer, environment):
