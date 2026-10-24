@@ -42,15 +42,29 @@ def checked_unit(text, unit):
 
 def owned_regular(path):
     path = Path(path)
-    for parent in [path, *path.parents]:
-        if parent.is_symlink():
+    def no_links():
+        if any(parent.is_symlink() for parent in [path, *path.parents]):
             raise ValueError('owned service path contains a symbolic link')
-    value = path.stat()
-    if not stat.S_ISREG(value.st_mode) or value.st_uid != os.getuid() or value.st_nlink != 1:
-        raise ValueError('service file is not exclusively owned by the disposable user')
-    return {'path': str(path), 'sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
-            'mtime_ns': value.st_mtime_ns, 'mode': value.st_mode, 'uid': value.st_uid,
-            'gid': value.st_gid, 'device': value.st_dev, 'inode': value.st_ino}
+    no_links()
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        value = os.fstat(descriptor)
+        if (not stat.S_ISREG(value.st_mode) or value.st_uid != os.getuid() or
+                value.st_nlink != 1 or value.st_size > 128 * 1024 * 1024):
+            raise ValueError('service file is not a bounded exclusively owned regular file')
+        with os.fdopen(os.dup(descriptor), 'rb') as stream:
+            digest = hashlib.file_digest(stream, 'sha256').hexdigest()
+        def identity(info):
+            return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns,
+                    info.st_mode, info.st_uid, info.st_gid, info.st_nlink)
+        no_links()
+        if identity(os.fstat(descriptor)) != identity(value) or identity(path.stat()) != identity(value):
+            raise ValueError('owned service file changed during observation')
+        return {'path': str(path), 'sha256': digest, 'mtime_ns': value.st_mtime_ns,
+                'mode': value.st_mode, 'uid': value.st_uid, 'gid': value.st_gid,
+                'device': value.st_dev, 'inode': value.st_ino}
+    finally:
+        os.close(descriptor)
 
 
 def bound_process(pid, executable, expected_hash):
@@ -138,6 +152,8 @@ class Fixture(active.SessionClient):
         self.baseline = self.report['existing_before']
         self.baseline['preserved'] = existing_obey.settings_readback(self.fixture)[1]
         self.expected_hash = next(row['hash'] for row in self.baseline['receipts']['files'] if row['path'] == str(self.obey))
+        self.files_before = {row['path']: owned_regular(row['path']) for row in self.baseline['receipts']['files']}
+        owned_regular(self.managed/'state.db')
         self.unit = Path.home()/'.config/systemd/user/obey.service'
         self.unit_before = owned_regular(self.unit)
         if f'ExecStart="{self.obey}" serve --daemon-mode\n' not in self.unit.read_text():
@@ -155,6 +171,10 @@ class Fixture(active.SessionClient):
 
     def preserved(self):
         selected = checked_receipts(self.managed)
+        owned_regular(self.managed/'state.db')
+        physical = {row['path']: owned_regular(row['path']) for row in selected['files']}
+        if physical != self.files_before:
+            raise ValueError('service recovery changed selected executable physical identities')
         if selected != self.baseline['receipts']:
             raise ValueError('service recovery changed selected receipts or file bytes')
         mtimes = {row['path']: Path(row['path']).stat().st_mtime_ns for row in selected['files']}
@@ -164,7 +184,7 @@ class Fixture(active.SessionClient):
         if (preserved != self.baseline['preserved'] or lifecycle != self.baseline['lifecycle'] or
                 settings.get('pendingObeyRestart', False)):
             raise ValueError('service recovery changed unrelated settings/camp state')
-        return {'receipts': selected, 'selected_mtime_ns': mtimes, 'preserved': preserved, 'lifecycle': lifecycle,
+        return {'receipts': selected, 'selected_mtime_ns': mtimes, 'physical_files': physical, 'preserved': preserved, 'lifecycle': lifecycle,
                 'unit': self.unit_before, 'provider_config': self.config_before}
 
     def readback(self):

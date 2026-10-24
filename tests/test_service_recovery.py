@@ -111,3 +111,29 @@ class ServiceRecoveryContracts(unittest.TestCase):
                 recovery.checked_restart_event({'events': [dict(row, **{key: value})]}, 'old', 'camp')
         for events in [[], [row, row]]:
             with self.assertRaises(ValueError): recovery.checked_restart_event({'events': events}, 'old', 'camp')
+
+    def test_selected_file_metadata_and_replacement_preservation_are_enforced(self):
+        fixture = recovery.Fixture.__new__(recovery.Fixture)
+        fixture.managed = self.root
+        binary = self.root/'obey'; binary.write_bytes(b'authenticated selected payload')
+        (self.root/'state.db').write_bytes(b'receipt fixture')
+        fixture.unit = self.root/'unit'; fixture.unit.write_text('unit')
+        fixture.config = self.root/'config'; fixture.config.write_text('config')
+        fixture.unit_before = recovery.owned_regular(fixture.unit)
+        fixture.config_before = recovery.owned_regular(fixture.config)
+        selected = {'receipts': [], 'files': [{'path': str(binary), 'hash': hashlib.sha256(binary.read_bytes()).hexdigest()}]}
+        fixture.files_before = {str(binary): recovery.owned_regular(binary)}
+        fixture.baseline = {'receipts': selected, 'mtimes': {str(binary): binary.stat().st_mtime_ns},
+                            'preserved': {'known': True}, 'lifecycle': {'known': True}}
+        fixture.fixture = {}
+        with patch.object(recovery, 'checked_receipts', return_value=selected), patch.object(recovery.existing_obey, 'settings_readback',
+                return_value=({}, {'known': True}, {'known': True}, 'observed')):
+            fixture.preserved()
+            mode = binary.stat().st_mode
+            binary.chmod(mode ^ 0o100)
+            with self.assertRaisesRegex(ValueError, 'physical identities'): fixture.preserved()
+            binary.chmod(mode)
+            replacement = self.root/'replacement'; replacement.write_bytes(binary.read_bytes())
+            os.utime(replacement, ns=(binary.stat().st_atime_ns, fixture.baseline['mtimes'][str(binary)]))
+            os.replace(replacement, binary)
+            with self.assertRaisesRegex(ValueError, 'physical identities'): fixture.preserved()
