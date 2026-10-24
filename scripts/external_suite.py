@@ -1,11 +1,13 @@
 """Explicit public Debian suite fixtures for original App compatibility journeys."""
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
 import stat
 import subprocess
 import sys
+import tarfile
 
 from verify_candidate import command, wait_until
 from verify_selected_components import checked_bootstrap, checked_status, checked_receipts, fetch
@@ -14,7 +16,12 @@ SPECS = {
     'external-suite-old': ('0.3.10', 31611390, 'd676fa77ae20773771e2475c08ff5222fbfbafb1177e984bf052cd9aa8cd463f', '0.10.1', '0.8.0'),
     'external-suite-minimum': ('0.3.24', 32913268, 'a5299b615bec4aa331b4ae1af123a31e6d4fc14606f8b8b4191c7cf9ba2cab2c', '0.16.2', '0.9.8'),
     'external-suite-current': ('0.3.24', 32913268, 'a5299b615bec4aa331b4ae1af123a31e6d4fc14606f8b8b4191c7cf9ba2cab2c', '0.16.2', '0.9.8'),
+    'external-suite-mixed-fest': ('0.3.24', 32913268, 'a5299b615bec4aa331b4ae1af123a31e6d4fc14606f8b8b4191c7cf9ba2cab2c', '0.16.2', '0.9.8'),
 }
+MIXED_FEST_VERSION = '0.9.1'
+MIXED_FEST_BUNDLE = '0.3.17'
+MIXED_FEST_ARCHIVE_SIZE = 31927458
+MIXED_FEST_ARCHIVE_SHA256 = '9f876f2d09703cb5fbeaaa7b839c2265b6c7430e336ea619dc2a137527356e9e'
 PACKAGE = 'obedience-festival'
 SUITE = 'obedience-corp/festival'
 TOOLS = ('camp', 'fest', 'festival')
@@ -44,11 +51,15 @@ def package_info(environment):
 
 
 class Fixture:
+    mixed_fest = False
+    shadow_original = None
+
     def __init__(self, root, installer, managed, environment, output, report, scenario):
         if (sys.platform != 'linux' or os.environ.get('CANDIDATE_NATIVE_DISPOSABLE') != '1' or
                 os.environ.get('CANDIDATE_RUNNER_KIND') != 'github-hosted' or scenario not in SPECS):
             raise RuntimeError('external suite installation requires an owned disposable Linux runner')
         self.version, self.size, self.digest, self.camp, self.fest = SPECS[scenario]
+        self.mixed_fest = scenario == 'external-suite-mixed-fest'
         self.root, self.installer, self.managed = Path(root), Path(installer), Path(managed)
         self.environment, self.output, self.report = environment, Path(output), report
         self.settings = Path.home() / '.obey/festival-app/settings.json'
@@ -70,7 +81,7 @@ class Fixture:
 
     @property
     def external_mode(self):
-        return None if self.version == SPECS['external-suite-old'][0] else self.version
+        return None if self.mixed_fest or self.version == SPECS['external-suite-old'][0] else self.version
 
     def install_package(self):
         """Install the existing user's Suite before the App package exists."""
@@ -94,7 +105,42 @@ class Fixture:
         self.original = [physical('/usr/bin/' + name) for name in TOOLS]
         self.note.write_text('FA0027: unrelated existing CLI user data must survive.\n')
         self.note_record = physical(self.note)
+        if self.mixed_fest:
+            self.install_fest_shadow()
         self.report['before_app_package_install'] = self.unchanged()
+
+    def install_fest_shadow(self):
+        """Add one real old Fest on PATH; leave the current Debian package intact."""
+        name = f'festival-{MIXED_FEST_BUNDLE}-linux-x86_64.tar.gz'
+        base = f'https://github.com/Obedience-Corp/festival/releases/download/v{MIXED_FEST_BUNDLE}/'
+        payload, checksums = fetch(base + name), fetch(base + 'checksums.txt')
+        if (len(payload) != MIXED_FEST_ARCHIVE_SIZE or
+                checked_bootstrap(payload, checksums, name) != MIXED_FEST_ARCHIVE_SHA256):
+            raise ValueError('mixed Fest differs from pinned public archive')
+        with tarfile.open(fileobj=io.BytesIO(payload), mode='r:gz') as archive:
+            members = [member for member in archive.getmembers() if member.name == 'fest']
+            if len(members) != 1 or not members[0].isfile() or not 0 < members[0].size <= 128 * 1024 * 1024:
+                raise ValueError('mixed Fest archive requires one bounded regular executable')
+            with archive.extractfile(members[0]) as source:
+                executable = source.read(members[0].size + 1)
+            if len(executable) != members[0].size or executable[:6] != b'\x7fELF\x02\x01' or executable[18:20] != b'\x3e\x00':
+                raise ValueError('mixed Fest is not the expected Linux x86_64 executable')
+        self.shadow_directory = self.root / 'mixed-fest-bin'
+        self.shadow_directory.mkdir()
+        shadow = self.shadow_directory / 'fest'
+        with shadow.open('xb') as stream:
+            stream.write(executable)
+        shadow.chmod(0o755)
+        self.shadow_original = physical(shadow)
+        self.original_path = self.environment['PATH']
+        self.environment['PATH'] = str(self.shadow_directory) + os.pathsep + self.original_path
+        live = command([shadow, 'version', '--json'], self.environment, json_output=True)
+        if live.get('version') != 'v' + MIXED_FEST_VERSION or live.get('bundle') != 'v' + MIXED_FEST_BUNDLE:
+            raise ValueError('mixed Fest live version differs from pinned public release')
+        (self.output / 'mixed-fest-checksums.txt').write_bytes(checksums)
+        self.report['mixed_fest'] = {'url': base + name, 'bytes': len(payload),
+                                    'sha256': MIXED_FEST_ARCHIVE_SHA256, 'live': live,
+                                    'original': self.shadow_original}
 
     def prepare_existing_cli(self):
         """Seed CLI/service state only after the App's private Installer exists."""
@@ -136,7 +182,13 @@ class Fixture:
         files = [physical('/usr/bin/' + name) for name in TOOLS]
         if files != self.original or physical(self.note) != self.note_record:
             raise ValueError('App changed external suite files or unrelated existing data')
-        return {'package': self.require_package(), 'files': files, 'foreign_note': self.note_record}
+        result = {'package': self.require_package(), 'files': files, 'foreign_note': self.note_record}
+        if self.shadow_original is not None:
+            shadow = physical(self.shadow_original['path'])
+            if shadow != self.shadow_original:
+                raise ValueError('App changed the independently installed PATH Fest')
+            result['path_fest'] = shadow
+        return result
 
     def before_launch(self):
         if os.path.lexists(self.settings):
@@ -149,7 +201,10 @@ class Fixture:
             raise ValueError('external suite fixture status is unreadable')
         for name, version in [('camp', self.camp), ('fest', self.fest)]:
             rows = [row for row in status['data']['tools'] if row.get('tool') == name]
-            if len(rows) != 1 or rows[0].get('path') != '/usr/bin/' + name or rows[0].get('version') != version or rows[0].get('bundle') not in (self.version, 'v' + self.version) or rows[0].get('origin') != 'package' or rows[0].get('present') is not True or rows[0].get('error') or rows[0].get('receipt_version'):
+            path, bundle, origin = '/usr/bin/' + name, self.version, 'package'
+            if self.mixed_fest and name == 'fest':
+                path, version, bundle, origin = self.shadow_original['path'], MIXED_FEST_VERSION, MIXED_FEST_BUNDLE, 'leftover'
+            if len(rows) != 1 or rows[0].get('path') != path or rows[0].get('version') != version or rows[0].get('bundle') not in (bundle, 'v' + bundle) or rows[0].get('origin') != origin or rows[0].get('present') is not True or rows[0].get('error') or rows[0].get('receipt_version'):
                 raise ValueError('pre-App status did not resolve the exact receiptless external suite')
         self.report['managed_receipts_before_app'] = checked_receipts(self.managed, external_suite=self.version)
         self.report['managed_physical_before_app'] = [physical(row['path']) for row in self.report['managed_receipts_before_app']['files']]
@@ -281,4 +336,12 @@ class Fixture:
             if physical(self.note) != self.note_record:
                 raise RuntimeError('refusing to remove a changed foreign-note fixture')
             self.note.unlink()
+        if self.shadow_original is not None:
+            shadow = Path(self.shadow_original['path'])
+            if physical(shadow) != self.shadow_original:
+                raise RuntimeError('refusing to remove a changed PATH Fest fixture')
+            shadow.unlink()
+            self.shadow_directory.rmdir()
+            self.environment['PATH'] = self.original_path
+            self.report['mixed_fest_cleanup_verified'] = True
         self.report['package_cleanup_verified'] = True

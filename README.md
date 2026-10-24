@@ -862,8 +862,9 @@ and [held process handle lifetime](https://learn.microsoft.com/en-us/windows/win
 
 ### Existing external Festival suite compatibility
 
-The fresh setup workflow has three explicit Debian-only `existing_user` cases:
-`external-suite-old`, `external-suite-minimum`, and `external-suite-current`.
+The fresh setup workflow has four explicit Debian-only `existing_user` cases:
+`external-suite-old`, `external-suite-minimum`, `external-suite-current`, and
+`external-suite-mixed-fest`.
 They require `platform_scope=deb`, default shell, no login-shell proof and no Git
 recovery mode. Defaults and the ordinary full matrix are unchanged.
 
@@ -879,6 +880,18 @@ an actual completed release-check timestamp inside the observed launch window.
 Minimum/current cases must still have no setup-completion timestamp, proving the
 App did not mask the background path through successful foreground setup. The old
 case instead requires matching foreground setup/check timestamps.
+
+The mixed-Fest case installs the current Suite0.3.24 Debian package, then places
+the exact public Fest0.9.1 executable from Suite0.3.17 earlier on PATH in a separate
+fixture-owned directory. Before the App launches, the Installer must report Camp0.16.2
+from `/usr/bin` and Fest0.9.1 from that directory with its own live bundle and
+ownership. The App must recognize that the independently resolved Fest lacks its
+required chain JSON API and install the compatible managed suite. It must preserve
+all Debian package files, the separate PATH executable, unrelated data and the
+already-ready Obey service through setup and reopen. This case requires foreground
+setup/check timestamps; it cannot pass merely because the package-manager copy
+of Fest is current. Cleanup verifies and removes only the unchanged fixture-owned
+PATH executable and restores the original process PATH.
 
 Old0.3.10 must receive a compatible managed suite while the three original package
 executables remain exact. Minimum/current copies must stay resolved from

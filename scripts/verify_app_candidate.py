@@ -436,7 +436,7 @@ def extract_appimage_observers(appimage, temporary, environment, installer_name=
 
 def native(directory, document, target, output, linux_package="both", fresh_setup=False, public_root=None, existing_user="none", login_shell_proof=False, missing_git_manual=False, login_shell_kind='default', guest_context=None):
     require_clean_host({"aarch64-apple-darwin": "macOS-arm64", "x86_64-apple-darwin": "macOS-x86_64", "x86_64-unknown-linux-gnu": "linux-x86_64", "x86_64-pc-windows-msvc": "windows-x86_64"}.get(target))
-    if existing_user not in ("none", "older-idle", "older-active", "current", "missing-companion", "corrupt-integrations", "foreign-companion", "corrupt-receipts", "external-suite-old", "external-suite-minimum", "external-suite-current") or existing_user != "none" and not fresh_setup:
+    if existing_user not in ("none", "older-idle", "older-active", "current", "missing-companion", "corrupt-integrations", "foreign-companion", "corrupt-receipts", "external-suite-old", "external-suite-minimum", "external-suite-current", "external-suite-mixed-fest") or existing_user != "none" and not fresh_setup:
         raise ValueError("existing-user scenario requires public default-home proof")
     if existing_user in ("corrupt-integrations", "foreign-companion") and target != "x86_64-pc-windows-msvc":
         raise ValueError("manual existing-user diagnostic/recovery currently requires native Windows")
@@ -957,7 +957,7 @@ def main():
     parser.add_argument("--verify-login-shell", action="store_true")
     parser.add_argument('--login-shell', choices=('default', 'windows-powershell', 'zsh'), default='default')
     parser.add_argument('--verify-missing-git-manual', action='store_true')
-    parser.add_argument("--existing-user", choices=("none", "older-idle", "older-active", "current", "missing-companion", "corrupt-integrations", "foreign-companion", "corrupt-receipts", "external-suite-old", "external-suite-minimum", "external-suite-current"), default="none")
+    parser.add_argument("--existing-user", choices=("none", "older-idle", "older-active", "current", "missing-companion", "corrupt-integrations", "foreign-companion", "corrupt-receipts", "external-suite-old", "external-suite-minimum", "external-suite-current", "external-suite-mixed-fest"), default="none")
     for name in ("version", "source"):
         parser.add_argument("--" + name, required=True)
     parser.add_argument("--target")
