@@ -1,5 +1,7 @@
 """Account mutation contracts; native macOS controls separately exercise dscl."""
 from pathlib import Path
+from types import SimpleNamespace
+import pwd
 import sys
 import unittest
 from unittest.mock import patch
@@ -21,7 +23,7 @@ class MacLoginAccountTests(unittest.TestCase):
                 def change(before, after):
                     self.assertEqual(state['shell'], before)
                     state['shell'] = after
-                with patch.object(account, 'read_account', side_effect=lambda *_: dict(state)), patch.object(fixture, 'change', side_effect=change):
+                with patch.object(account, 'read_account', side_effect=lambda *_: dict(state)), patch.object(fixture, 'change', side_effect=change), patch.object(account, 'wait_passwd', return_value={}):
                     fixture.activate()
                     self.assertEqual(state['shell'], '/bin/zsh')
                     self.assertEqual(fixture.environment['SHELL'], '/bin/zsh')
@@ -37,7 +39,7 @@ class MacLoginAccountTests(unittest.TestCase):
             state['shell'] = after
             if after == '/bin/zsh':
                 raise RuntimeError('failed after actual mutation')
-        with patch.object(account, 'read_account', side_effect=lambda *_: dict(state)), patch.object(fixture, 'change', side_effect=change):
+        with patch.object(account, 'read_account', side_effect=lambda *_: dict(state)), patch.object(fixture, 'change', side_effect=change), patch.object(account, 'wait_passwd', return_value={}):
             with self.assertRaisesRegex(RuntimeError, 'failed after actual mutation'):
                 fixture.activate()
         self.assertEqual(state, fixture.original)
@@ -61,6 +63,44 @@ class MacLoginAccountTests(unittest.TestCase):
             with self.subTest(text=text), patch.object(account, 'command', return_value=text):
                 with self.assertRaises(ValueError):
                     account.read_account('fixture', {})
+
+
+    def test_passwd_timeout_after_real_change_restores_before_propagation(self):
+        fixture, state = self.fixture()
+        def change(before, after):
+            self.assertEqual(state['shell'], before)
+            state['shell'] = after
+        with patch.object(account, 'read_account', side_effect=lambda *_: dict(state)), patch.object(fixture, 'change', side_effect=change), \
+                patch.object(account, 'wait_passwd', side_effect=[RuntimeError('convergence timeout'), {}]):
+            with self.assertRaisesRegex(RuntimeError, 'convergence timeout'):
+                fixture.activate()
+        self.assertEqual(state, fixture.original)
+        self.assertEqual(fixture.environment['SHELL'], '/bin/bash')
+        self.assertTrue(fixture.record['restored'])
+
+    def owner(self, shell='/bin/zsh', **changes):
+        return SimpleNamespace(**dict({'pw_name': 'fixture', 'pw_uid': 501,
+                                      'pw_dir': '/Users/fixture', 'pw_shell': shell}, **changes))
+
+    def test_passwd_delayed_convergence_preserves_actual_observations_and_identity(self):
+        expected = {'uid': 501, 'home': '/Users/fixture', 'shell': '/bin/zsh'}
+        observations = []
+        with patch.object(pwd, 'getpwuid', side_effect=[self.owner('/bin/bash'), self.owner()]), patch.object(account.time, 'sleep'):
+            result = account.wait_passwd('fixture', expected, '/bin/bash', observations)
+        self.assertEqual([row['shell'] for row in observations], ['/bin/bash', '/bin/zsh'])
+        self.assertEqual(result['shell'], '/bin/zsh')
+
+    def test_passwd_timeout_foreign_identity_shell_and_query_errors_still_fail(self):
+        expected = {'uid': 501, 'home': '/Users/fixture', 'shell': '/bin/zsh'}
+        with patch.object(pwd, 'getpwuid', return_value=self.owner('/bin/bash')), patch.object(account.time, 'monotonic', side_effect=[0, 16]):
+            with self.assertRaisesRegex(RuntimeError, 'timeout'):
+                account.wait_passwd('fixture', expected, '/bin/bash', [])
+        for change in [{'pw_name': 'foreign'}, {'pw_uid': 999}, {'pw_dir': '/Users/foreign'}, {'pw_shell': '/bin/fish'}]:
+            with self.subTest(change=change), patch.object(pwd, 'getpwuid', return_value=self.owner(**change)), patch.object(account.time, 'sleep') as sleep:
+                with self.assertRaises(RuntimeError): account.wait_passwd('fixture', expected, '/bin/bash', [])
+                sleep.assert_not_called()
+        with patch.object(pwd, 'getpwuid', side_effect=KeyError('query failed')):
+            with self.assertRaises(KeyError): account.wait_passwd('fixture', expected, '/bin/bash', [])
 
 
 if __name__ == '__main__':

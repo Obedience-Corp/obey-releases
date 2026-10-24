@@ -104,7 +104,8 @@ def crashed_session(document, session, camp):
     if row.get('error_message') != 'daemon restarted':
         raise ValueError('crashed session lacks the published restart diagnostic')
     clean = dict(row); clean.pop('error_message', None)
-    return active.checked_session({'session': clean}, session, camp, 'SESSION_STATUS_FAILED')
+    return dict(active.checked_session({'session': clean}, session, camp, 'SESSION_STATUS_FAILED'),
+                error_message=row['error_message'])
 
 
 def checked_restart_event(document, session, camp):
@@ -136,6 +137,7 @@ class Fixture(active.SessionClient):
         self.recovered = None
 
     def seed(self):
+        self.report['stage'] = 'qualify_owned_provider'
         self.provider.start()
         self.config = Path.home()/'.obey/daemon.yaml'
         self.config.parent.mkdir(parents=True, exist_ok=True)
@@ -145,6 +147,7 @@ class Fixture(active.SessionClient):
             json.dump({'network': {'enabled': False}, 'providers': {'ollama': {'type': 'ollama', 'enabled': True,
                 'base_url': self.provider.endpoint, 'options': {'num_ctx': 4096, 'num_predict': 64,
                 'temperature': 0, 'keep_alive': '1m'}}}}, stream)
+        self.report['stage'] = 'seed_current_packages'
         self.fixture = existing_obey.seed(self.root, self.installer, self.managed,
             'x86_64-unknown-linux-gnu', self.environment, self.output, self.report, 'current')
         from app_upgrade_contract import persisted_snapshot
@@ -159,11 +162,13 @@ class Fixture(active.SessionClient):
         if f'ExecStart="{self.obey}" serve --daemon-mode\n' not in self.unit.read_text():
             raise ValueError('service unit does not launch the exact owned daemon')
         self.config_before = owned_regular(self.config)
+        self.report['stage'] = 'complete_initial_provider_work'
         self.session = self.create_session()
         self.turns = self.send(self.session, 1)
         self.original = self.supervisor()
         self.original_process = bound_process(self.original['MainPID'], self.obey, self.expected_hash)
         self.report['before_app'] = self.readback()
+        self.report['stage'] = 'await_initial_app'
 
     def supervisor(self):
         return checked_unit(command(['systemctl', '--user', 'show', 'obey.service', '--no-pager',
@@ -214,12 +219,14 @@ class Fixture(active.SessionClient):
     def crash(self):
         # Caller has completed normal App quit. All checks before signaling are
         # read-only and the held pidfd prevents a replacement PID being targeted.
+        self.report['stage'] = 'validate_owned_crash_target'
         self.report['before_crash'] = self.readback()
         def revalidate():
             self.preserved()
             if self.supervisor() != self.original:
                 raise ValueError('supervisor identity changed before crash injection')
         kill_bound(self.original_process, self.obey, self.expected_hash, revalidate)
+        self.report['stage'] = 'observe_autonomous_supervisor_recovery'
         deadline = time.monotonic() + 90
         observations = self.report['supervisor_observations_before_session_cli'] = []
         while time.monotonic() < deadline:
@@ -238,11 +245,13 @@ class Fixture(active.SessionClient):
         self.report['supervisor_observations_before_session_cli'] = observations
         if self.recovered is None:
             raise RuntimeError('supervisor failed to recover without a client start/restart')
+        self.report['stage'] = 'read_crashed_session_and_preserved_turn'
         self.report['after_autonomous_recovery'] = self.readback()
-        events = self.call('session', 'events', self.session, '--campaign', self.fixture['camp_id'],
-                           '--kinds', 'session_status_changed', '--limit', '100', json_output=True)
+        self.report['stage'] = 'read_durable_restart_event'
+        events = self.lifecycle_events(self.session)
         self.restart_event = checked_restart_event(events, self.session, self.fixture['camp_id'])
         self.report['durable_restart_event'] = self.restart_event
+        self.report['stage'] = 'complete_new_provider_work'
         self.new_session = self.create_session()
         new_turns = self.send(self.new_session, 1)
         self.call('session', 'stop', self.new_session, '--campaign', self.fixture['camp_id'])
@@ -253,6 +262,7 @@ class Fixture(active.SessionClient):
                                        'turns_sha256': active.digest_rows(new_turns)}
         self.new_turns = new_turns
         self.report['before_app_reopen'] = self.readback()
+        self.report['stage'] = 'await_app_reopen'
 
     def finish(self):
         if not self.recovered or self.readback() != self.report['before_app_reopen']:
@@ -260,10 +270,10 @@ class Fixture(active.SessionClient):
         self.session_info(self.new_session, 'SESSION_STATUS_STOPPED')
         if self.turn_readback(self.new_session, 1) != self.new_turns:
             raise ValueError('App reopen changed new durable work')
-        events = self.call('session', 'events', self.session, '--campaign', self.fixture['camp_id'],
-                           '--kinds', 'session_status_changed', '--limit', '100', json_output=True)
+        events = self.lifecycle_events(self.session)
         if checked_restart_event(events, self.session, self.fixture['camp_id']) != self.restart_event:
             raise ValueError('App reopen changed durable crash lifecycle history')
+        self.report['stage'] = 'verified'
         self.report['verified'] = True
 
     def cleanup(self):
