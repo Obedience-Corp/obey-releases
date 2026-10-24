@@ -706,3 +706,18 @@ clean desktop, App installation, missing-Git recovery, licensing or reboot. Thos
 require an authenticated OS image, an isolated baseline and the actual published
 App journey. Existing hosted developer images remain explicitly distinct from
 clean consumer machines.
+
+The clean-guest job extends that check with a pinned Canonical Ubuntu24.04 image
+and cloud signing key. It verifies the detached checksum signature and exact
+image digest before QEMU boots. A private seed provisions Xfce/LightDM and a
+normal user whose sudo requires a random fixture password. Git and ecosystem
+commands/state must be absent. All host control is localhost-only, SSH pins the
+fixture's guest host key, and no host directories are shared.
+
+After normal shutdown it cold-boots a separate disk/firmware clone, reboots that
+clone and checks changed boot IDs, unchanged packages and an untouched baseline.
+Original desktop screenshots and readbacks are retained; keys, passwords, seed,
+disks and provisioning logs are never uploaded. This is a documented cloud-image
+plus desktop fixture, not an unmodified retail OS installation. Graphical user
+login, public App installation/use, authorization dialogs and service recovery
+after App installation still require their separate journeys.
