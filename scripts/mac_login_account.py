@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import re
 import sys
+import time
 
 from verify_candidate import command, require_disposable
 
@@ -23,6 +24,27 @@ def read_account(username, environment):
     if not all(Path(values[key]).is_absolute() for key in ('NFSHomeDirectory', 'UserShell')):
         raise ValueError('disposable account path is not absolute')
     return {'uid': int(values['UniqueID']), 'home': values['NFSHomeDirectory'], 'shell': values['UserShell']}
+
+
+def wait_passwd(username, expected, stale_shell, observations):
+    """Wait for read-only libc account convergence, retaining identity/refusals."""
+    import pwd
+    deadline = time.monotonic() + 15
+    while True:
+        owner = pwd.getpwuid(expected['uid'])
+        actual = {'username': owner.pw_name, 'uid': owner.pw_uid,
+                  'home': owner.pw_dir, 'shell': owner.pw_shell}
+        observations.append(actual)
+        if (actual['username'] != username or actual['uid'] != expected['uid'] or not Path(actual['home']).is_absolute() or
+                Path(actual['home']).resolve() != Path(expected['home']).resolve()):
+            raise RuntimeError('passwd account identity changed during login-shell convergence')
+        if actual['shell'] == expected['shell']:
+            return actual
+        if actual['shell'] != stale_shell:
+            raise RuntimeError('passwd returned an unexpected shell during convergence')
+        if time.monotonic() >= deadline:
+            raise RuntimeError('actual passwd login shell did not converge before timeout')
+        time.sleep(.2)
 
 
 class Account:
@@ -57,6 +79,10 @@ class Account:
             after = self.current()
             if after['shell'] != ZSH:
                 raise RuntimeError('macOS account did not retain selected Zsh shell')
+            self.record['passwd_after_selection'] = wait_passwd(self.username, after, self.original['shell'],
+                self.record.setdefault('passwd_selection_observations', []))
+            if self.current() != after:
+                raise RuntimeError('directory-service account changed during passwd convergence')
             self.environment['SHELL'] = ZSH
             self.record['after_selection'] = after
         except BaseException:
@@ -76,6 +102,10 @@ class Account:
         restored = self.current()
         if restored != self.original:
             raise RuntimeError('original macOS login account was not restored')
+        self.record['passwd_after_restore'] = wait_passwd(self.username, self.original, ZSH,
+            self.record.setdefault('passwd_restore_observations', []))
+        if self.current() != self.original:
+            raise RuntimeError('directory-service restoration changed during passwd convergence')
         if self.original_environment_shell is None:
             self.environment.pop('SHELL', None)
         else:

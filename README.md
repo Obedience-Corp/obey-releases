@@ -1052,3 +1052,10 @@ is accepted and the rejected `--kinds` predecessor is reproduced. It appends
 actual native recovery journey. The Linux contracts CI retains its original
 control log separately. Fixed recovery stage labels identify failure boundaries
 without exporting provider output or session arguments.
+
+Actual selected macOS login-shell setup/restoration also waits at most 15 seconds
+for the libc passwd view to agree with the already verified Directory Services
+record, retaining both selection and restoration observations. Only the known
+original/selected shell may be transiently stale; a changed UID/name/home, foreign
+shell, query error or timeout still fails. No cache flush or environment-only
+substitution establishes this readiness.
