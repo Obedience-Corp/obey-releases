@@ -588,9 +588,10 @@ App screenshot path. This establishes the harness precondition, not App readines
 ### Missing Git: manual restoration and real App Retry
 
 The fresh workflow supports `platform_scope=deb` with
-`verify_missing_git_manual=true` (unseeded, login proof disabled). It downloads
-the exact installed APT Git package and any required git-lfs removal companion
-before changing package state, refuses unrelated removals, and verifies the
+`verify_missing_git_manual=true` (unseeded, login proof disabled). Before changing
+package state it creates local rollback packages for the observed Git dependency
+closure (Git, git-lfs, git-ftp, gh and ubuntu-server only), refuses unrelated
+removals, and verifies the
 bundled Installer reports Git absent. The original App must expose its enabled
 **Install Git and continue** button in the owned accessibility application.
 After exact manual package/hash restoration, the verifier invokes that real
@@ -608,10 +609,16 @@ separate required journey; manual restoration cannot qualify that path.
 
 Automation runs a real GTK button callback with foreign/stale/duplicate control
 refusal and actual Git removal/restoration in disposable Docker. The package
-fixture uses authenticated build-time cached archives with no runtime network;
-it does not claim the production download or native App journey has run.
+fixture uses `fakeroot -u dpkg-repack --tag=none` with no runtime network: hosted
+images remove the vendor repositories and archive caches for their preinstalled
+versions. These are reconstructed local baseline backups, not original vendor
+release archives. Every archive member is checked against installed bytes,
+mode, UID/GID and symlink target before removal; missing or unsupported members
+fail closed. Exact package file state, all installed package versions, and Git
+system/user configuration hashes (including absence) must match after restore.
+Hardlink inode numbers and timestamps are not acceptance claims.
 Both fixtures run as a normal account. Only real package mutations use sudo;
-`apt-get download` obtains exact restore archives without privilege, keeping all
-cache files owned by the verifier and proving final temporary-directory cleanup.
+rollback archives remain owned by the verifier and final temporary cleanup is
+verified. This does not prove the native App recovery or automatic Git download.
 The isolated test image's fixture-only sudo configuration simulates the hosted
 account; no host sudo or authentication policy is changed.

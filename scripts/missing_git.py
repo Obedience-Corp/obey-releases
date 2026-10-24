@@ -8,8 +8,11 @@ import shutil
 import time
 
 from verify_candidate import command
+import git_rollback
 
-ALLOWED = {'git', 'git-lfs'}
+# Exact reverse-dependency closure observed on the disposable hosted image.
+# No autoremove or arbitrary additional package removal is permitted.
+ALLOWED = {'git', 'git-lfs', 'git-ftp', 'gh', 'ubuntu-server'}
 
 
 def git_status(installer, environment, present, output):
@@ -95,36 +98,39 @@ class Fixture:
         plan = self.apt(['--simulate', '--no-auto-remove', 'remove', 'git'], 60)
         self.removed = removal_plan(plan, self.before)
         (output/'missing-git-removal-plan.log').write_text(plan)
-        # Only the exact installed versions in authenticated APT indices are
-        # eligible. A missing historical package fails before any removal.
+        self.files_before = {name: git_rollback.package_files(name, self.environment) for name in self.removed}
+        self.config_before = git_rollback.config_files(self.environment)
+        (output/'missing-git-baseline-files.json').write_text(json.dumps(
+            {'packages': self.files_before, 'git_config': self.config_before}, indent=2)+'\n')
+        # Hosted images delete vendor sources/archive caches after provisioning.
+        # Reconstruct explicit local rollback packages, verifying every member
+        # against the installed baseline before any package is removed.
         for name, version in sorted(self.removed.items()):
-            self.download(name, version)
+            self.cache_package(name)
         for path in sorted(self.cache.glob('*.deb')):
             fields = command(['dpkg-deb', '-f', path, 'Package', 'Version'], self.environment).splitlines()
             values = dict(row.split(': ', 1) for row in fields)
             if values.get('Package') not in self.removed or values.get('Version') != self.removed[values['Package']]:
                 raise ValueError('unexpected Git restoration archive')
+            git_rollback.check_archive(path, self.files_before[values['Package']], self.environment)
             self.archives.append({'path': path, 'package': values['Package'], 'version': values['Version'],
                                   'sha256': hashlib.sha256(path.read_bytes()).hexdigest()})
         if {entry['package'] for entry in self.archives} != set(self.removed) or len(self.archives) != len(self.removed):
             raise ValueError('exact Git restoration archives are incomplete')
         if installed(self.environment) != self.before:
-            raise RuntimeError('download-only Git preparation changed installed packages')
+            raise RuntimeError('Git rollback preparation changed installed packages')
         self.record('prepared')
 
     def apt(self, args, seconds):
         return command(['sudo', 'timeout', '--signal=TERM', '--kill-after=15s', f'{seconds}s',
                         'apt-get', *args], self.environment, timeout=seconds+45)
 
-    def download(self, name, version):
-        # `apt-get download` reads authenticated APT metadata but needs no root
-        # or dpkg lock. Keep archives and any transfer state owned by the normal
-        # verifier UID; privileged cache/partial directories cannot be cleaned
-        # by that account. Package/version are positional args, never shell text.
-        return command(['timeout', '--signal=TERM', '--kill-after=15s', '1800s',
-                        'bash', '-euc', 'cd -- "$1"; exec apt-get download "$2"',
-                        'fa0027-git-cache', self.cache, f'{name}={version}'],
-                       self.environment, timeout=1845)
+    def cache_package(self, name):
+        # fakeroot -u preserves existing ownership in archive metadata without
+        # creating root-owned files in this normal user's private cache.
+        return command(['timeout', '--signal=TERM', '--kill-after=15s', '120s',
+                        'bash', '-euc', 'cd -- "$1"; exec fakeroot -u dpkg-repack --tag=none "$2"',
+                        'fa0027-git-rollback', self.cache, name], self.environment, timeout=165)
 
     def enable_accessibility(self):
         value = command(['gsettings', 'get', 'org.gnome.desktop.interface', 'toolkit-accessibility'], self.environment).strip()
@@ -143,6 +149,7 @@ class Fixture:
 
     def record(self, stage):
         record = {'stage': stage, 'removed_packages': self.removed, 'original_git_sha256': self.git_sha,
+                  'archive_provenance': 'locally-reconstructed-installed-baseline; not original vendor archives',
                   'restore_archives': [{key: str(value) for key, value in entry.items()} for entry in self.archives],
                   'attempted_removal': self.attempted_removal, 'restored': self.restored,
                   'original_toolkit_accessibility': self.accessibility_original}
@@ -151,6 +158,9 @@ class Fixture:
     def remove(self):
         if installed(self.environment) != self.before:
             raise RuntimeError('package state changed before controlled Git removal')
+        if ({name: git_rollback.package_files(name, self.environment) for name in self.removed} != self.files_before
+                or git_rollback.config_files(self.environment) != self.config_before):
+            raise RuntimeError('package files or Git configuration changed before controlled removal')
         plan = self.apt(['--simulate', '--no-auto-remove', 'remove', 'git'], 60)
         if removal_plan(plan, self.before) != self.removed:
             raise RuntimeError('Git removal plan changed after archive preparation')
@@ -173,5 +183,11 @@ class Fixture:
         if installed(self.environment) != self.before or hashlib.sha256(self.git.read_bytes()).hexdigest() != self.git_sha:
             raise RuntimeError('Git restoration did not preserve exact package and executable identities')
         command([self.git, '--version'], self.environment)
+        files = {name: git_rollback.package_files(name, self.environment) for name in self.removed}
+        configs = git_rollback.config_files(self.environment)
+        (self.output/'missing-git-restored-files.json').write_text(json.dumps(
+            {'packages': files, 'git_config': configs}, indent=2)+'\n')
+        if files != self.files_before or configs != self.config_before:
+            raise RuntimeError('restoration changed package bytes/ownership/modes or Git configuration')
         self.restored = True
         self.record('restored')
