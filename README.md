@@ -616,6 +616,12 @@ release archives. Every archive member is checked against installed bytes,
 mode, UID/GID and symlink target before removal; missing or unsupported members
 fail closed. Exact package file state, all installed package versions, and Git
 system/user configuration hashes (including absence) must match after restore.
+Git LFS maintainer scripts can recreate the four default filter entries in a
+different order. A private original system-config backup restores exact bytes
+or original absence only when that known block is the sole change. The fixed-path
+root helper checks the backup, current file digest and identity, permissions and
+ownership; symlinks, hardlinks, custom LFS content and unrelated configuration
+changes are refused. Original config contents are never included in artifacts.
 Hardlink inode numbers and timestamps are not acceptance claims.
 Both fixtures run as a normal account. Only real package mutations use sudo;
 rollback archives remain owned by the verifier and final temporary cleanup is

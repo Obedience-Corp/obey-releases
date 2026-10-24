@@ -11,6 +11,7 @@ if os.environ.get('CANDIDATE_TEST_CONTAINER') != '1' or not Path('/.dockerenv').
     raise RuntimeError('package mutation fixture requires isolated Docker')
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 import missing_git
+from integration_git_config import verify_config_rollback
 
 real_apt = missing_git.Fixture.apt
 
@@ -21,6 +22,7 @@ with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, {
     home = root/'home'; home.mkdir()
     os.environ['HOME'] = str(home)
     (home/'.gitconfig').write_text('[fixture]\n\tpreserve = foreign-config-sentinel\n')
+    verify_config_rollback(root)
     before = missing_git.installed(os.environ)
     fixture = missing_git.Fixture(root/'cache', root, os.environ)
     try:

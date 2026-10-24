@@ -100,6 +100,7 @@ class Fixture:
         (output/'missing-git-removal-plan.log').write_text(plan)
         self.files_before = {name: git_rollback.package_files(name, self.environment) for name in self.removed}
         self.config_before = git_rollback.config_files(self.environment)
+        self.config_backup = git_rollback.backup_system_config(self.cache, self.config_before['/etc/gitconfig'])
         (output/'missing-git-baseline-files.json').write_text(json.dumps(
             {'packages': self.files_before, 'git_config': self.config_before}, indent=2)+'\n')
         # Hosted images delete vendor sources/archive caches after provisioning.
@@ -185,6 +186,20 @@ class Fixture:
         command([self.git, '--version'], self.environment)
         files = {name: git_rollback.package_files(name, self.environment) for name in self.removed}
         configs = git_rollback.config_files(self.environment)
+        (self.output/'missing-git-postinstall-files.json').write_text(json.dumps(
+            {'packages': files, 'git_config': configs}, indent=2)+'\n')
+        system = '/etc/gitconfig'
+        if configs[system] != self.config_before[system]:
+            # Git LFS maintainer scripts recreate the same four default keys in
+            # nondeterministic order. Restore original bytes only after the
+            # fixed-path helper excludes every unrelated config change.
+            if any(configs[path] != self.config_before[path] for path in configs if path != system):
+                raise RuntimeError('user Git configuration changed during package restoration')
+            command(['sudo', '--preserve-env=CANDIDATE_NATIVE_DISPOSABLE,CANDIDATE_RUNNER_KIND',
+                     '/usr/bin/python3', '-I', Path(git_rollback.__file__).resolve(),
+                     '--restore-system-config', self.config_backup, json.dumps(self.config_before[system]),
+                     json.dumps(configs[system]), str(os.getuid())], self.environment, timeout=15)
+            configs = git_rollback.config_files(self.environment)
         (self.output/'missing-git-restored-files.json').write_text(json.dumps(
             {'packages': files, 'git_config': configs}, indent=2)+'\n')
         if files != self.files_before or configs != self.config_before:
