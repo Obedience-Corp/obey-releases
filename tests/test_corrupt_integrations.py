@@ -81,11 +81,24 @@ class CorruptIntegrationContracts(unittest.TestCase):
                                ({'ok': False, 'error': {'message': 'read integration preferences'}}, 1),
                                ({'ok': False, 'error': {'code': 'E_OTHER', 'message': 'permission denied'}}, 1)):
             with self.assertRaises(ValueError): integrations.checked_error(bad, exit_code)
-        window = {'visible_names': ['Getting this machine ready', 'Configure terminal commands and agent connections', 'read integration preferences: invalid character']}
-        self.assertTrue(integrations.error_window(window))
-        for missing in window['visible_names']:
-            self.assertFalse(integrations.error_window({'visible_names': [x for x in window['visible_names'] if x != missing]}))
-        self.assertFalse(integrations.error_window({'visible_names': ['Licenses', 'License key']}))
+        diagnostic = {'code': 'E_UNKNOWN', 'message': "read integration preferences: invalid character 'F' looking for beginning of value", 'exit': 1}
+        row = 'Configure terminal commands and agent connectionsFailed' + diagnostic['message'] + 'E_UNKNOWNRetry'
+        # Actual Windows40066497336 names: the row is aggregate, no standalone
+        # exact configure label exists. Keep the captured diagnostic exact.
+        names = ['Getting this machine ready', 'A step did not finish. Its detail is below.',
+                 row, diagnostic['message'], 'E_UNKNOWN', 'Retry']
+        window = {'uia_verified': True, 'visible_names': names}
+        self.assertTrue(integrations.error_window(window, diagnostic))
+        for invalid in [
+                {'visible_names': names}, {'uia_verified': False, 'visible_names': names},
+                {'uia_verified': True, 'visible_names': names[1:]},
+                {'uia_verified': True, 'visible_names': [name.replace('Configure terminal commands and agent connectionsFailed', 'Read what this machine hasFailed') for name in names]},
+                {'uia_verified': True, 'visible_names': [name.replace('connectionsFailed', 'connections lookalikeFailed') for name in names]},
+                {'uia_verified': True, 'visible_names': [name.replace('E_UNKNOWNRetry', 'E_UNKNOWN_OTHERErrorRetry') for name in names]},
+                {'uia_verified': True, 'visible_names': ['Licenses', 'License key']},
+        ]:
+            self.assertFalse(integrations.error_window(invalid, diagnostic))
+        self.assertFalse(integrations.error_window(window, dict(diagnostic, message=diagnostic['message'].replace("'F'", "'X'"))))
 
     def test_windows_filetime_conversion_preserves_ticks_and_refuses_rounding(self):
         low, high = integrations.windows_filetime(0)
