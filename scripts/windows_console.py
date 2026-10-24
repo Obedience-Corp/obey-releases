@@ -239,8 +239,13 @@ $json=$record | ConvertTo-Json -Depth 16 -Compress
                  'backend_name': 'pywinpty-3.1.0-WinPTY', 'dimensions': [120, 40], 'eof_diagnostics_file': eof_diagnostics.name,
                  'ordinary_startup_verified': False, 'owned_console_exit_verified': False}
     def capture_owned():
-        rows = command(observer, dict(environment, APP_PROOF_PROCESS_MODE='snapshot',
-                       APP_PROOF_PROCESS_PID=str(process.pid)), json_output=True, timeout=10)
+        try:
+            rows = command(observer, dict(environment, APP_PROOF_PROCESS_MODE='snapshot',
+                           APP_PROOF_PROCESS_PID=str(process.pid), APP_PROOF_PROCESS_STARTED=root_identity['started']), json_output=True, timeout=10)
+        except RuntimeError:
+            if process.poll() is not None:
+                raise RuntimeError('console adapter exited before an authenticated tree snapshot')
+            raise
         if not any(row == root_identity for row in rows):
             raise RuntimeError('console adapter exited before an authenticated tree snapshot')
         known = {(row['pid'], row['started']): row for row in snapshot}

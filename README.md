@@ -820,3 +820,21 @@ extracted AppRun, a rendering override or preinstalled ecosystem tools. The same
 service-before-App, selected receipt/mtime and persisted setting checks apply
 after reboot. A successful run still requires original screen and state review;
 licensing, useful work and other-platform acceptance remain separate.
+
+
+### Birth-valid Windows process ownership
+
+Read-only process snapshots bind the root to its known creation time and check
+every parent-to-child birth edge. Windows can retain a historical parent PID
+after that PID has been reused; a process older than its apparent current parent
+is excluded, even if it is newer than the root. Selected live process handles and
+fresh CIM parent/birth tuples are revalidated before returning the original flat
+PID/birth records. Unknown or changed identities fail closed; cleanup readback
+still fails while any authenticated generation survives.
+
+Native Windows controls exercise a real three-level tree, modeled historical PID
+collisions both before the root and between root/child births, stale roots,
+unknown births, live-survivor refusal and unrelated process survival. Original
+40082723078 remains a failed cleanup-readback run; this repair does not waive it.
+Microsoft documents the [ParentProcessId reuse/CreationDate contract](https://learn.microsoft.com/en-us/windows/win32/cimwin32prov/win32-process)
+and [held process handle lifetime](https://learn.microsoft.com/en-us/windows/win32/procthread/process-handles-and-identifiers).

@@ -27,6 +27,7 @@ jobs:
         run: |
           ./scripts/windows_packaging_service.ps1 -SelfTest
           ./tests/integration_windows_capture.ps1
+          python tests/integration_windows_owned_processes.py
           python tests/integration_windows_console.py
           python tests/integration_corrupt_integrations.py
           python tests/integration_foreign_companion.py
@@ -39,6 +40,7 @@ jobs:
             ${{ runner.temp }}/owned-window-capture*
             ${{ runner.temp }}/capture-fixture-*
             ${{ runner.temp }}/ordinary-console-proof/
+            ${{ runner.temp }}/owned-process-proof/
             ${{ runner.temp }}/corrupt-integration-control/
             ${{ runner.temp }}/foreign-companion-control/
             ${{ runner.temp }}/corrupt-receipt-control/

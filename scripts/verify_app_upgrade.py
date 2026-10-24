@@ -77,9 +77,12 @@ def normal_quit(process, binary, bundle, target, environment, output, mac_tools=
             raise RuntimeError('macOS normal-quit helper must be prepared before App launch')
         mac_tools.quit(process.pid, bundle, environment)
     elif target.endswith("windows-msvc"):
+        started = app.windows_owned_birth(process)
         identities = command(["pwsh", "-NoProfile", "-File", SCRIPT / "windows_owned_processes.ps1"],
-                             dict(environment, APP_PROOF_PROCESS_MODE="snapshot", APP_PROOF_PROCESS_PID=str(process.pid)), json_output=True)
+                             dict(environment, APP_PROOF_PROCESS_MODE="snapshot", APP_PROOF_PROCESS_PID=str(process.pid), APP_PROOF_PROCESS_STARTED=started), json_output=True)
         identity = windows_query("identity", environment, APP_UPGRADE_PID=str(process.pid))
+        if identity.get("pid") != process.pid or identity.get("started") != started:
+            raise RuntimeError("Windows App identity changed before normal quit")
         windows_query("quit", environment, APP_UPGRADE_PID=str(process.pid), APP_UPGRADE_EXE=str(binary), APP_UPGRADE_STARTED=identity["started"])
         command(["pwsh", "-NoProfile", "-File", SCRIPT / "windows_owned_processes.ps1"],
                 dict(environment, APP_PROOF_PROCESS_MODE="verify", APP_PROOF_PROCESS_IDENTITIES=json.dumps(identities)), timeout=30)
