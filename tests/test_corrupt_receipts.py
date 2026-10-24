@@ -3,6 +3,8 @@ from contextlib import closing
 import hashlib
 import copy
 import os
+import shutil
+import subprocess
 from pathlib import Path
 import sqlite3
 import sys
@@ -18,6 +20,19 @@ import test_selected_components as selected
 
 
 class ReceiptCorruptionContracts(unittest.TestCase):
+    def test_live_namespaced_installer_blocks_receipt_restoration(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            binary = Path(temporary)/'festival-app-installer'
+            shutil.copyfile('/bin/sleep', binary)
+            binary.chmod(0o755)
+            process = subprocess.Popen([str(binary), '30'])
+            try:
+                with self.assertRaisesRegex(ValueError, 'running App or Installer'):
+                    receipts.quiescent(dict(os.environ))
+            finally:
+                process.terminate()
+                process.wait(timeout=5)
+
     def fixture(self, root):
         home=selected.SelectedContracts().fixture(root)
         with closing(sqlite3.connect(home/'state.db')) as db:

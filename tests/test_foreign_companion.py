@@ -42,8 +42,14 @@ class ForeignCompanionContracts(unittest.TestCase):
         return home, source
 
     def test_substitution_retains_real_receipt_and_exact_manual_original_restore(self):
+        self.check_substitution('festival')
+        self.check_substitution('festival-app-installer')
+
+    def check_substitution(self, installer_name):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory); home, source = self.prepare(root)
+            if source.name != installer_name:
+                source = source.rename(root/installer_name)
             before = checked_receipts(home)
             mtime = (home/'bin/camp-app').stat().st_mtime_ns
             report = {}; fixture = foreign.Fixture(home, source, root/'private', report)

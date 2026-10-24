@@ -30,6 +30,15 @@ def manifest():
 
 
 class AppContracts(unittest.TestCase):
+    def test_installer_layout_is_explicit_and_rejects_unknown_or_path_values(self):
+        self.assertEqual(app.installer_basename(manifest()), 'festival')
+        document = dict(manifest(), installer_basename='festival-app-installer')
+        app.checked_manifest(document, VERSION, SOURCE)
+        self.assertEqual(app.installer_basename(document), 'festival-app-installer')
+        for value in [None, '', 'festival', '../festival', '/usr/bin/festival', 'festival-app-installer.exe', []]:
+            with self.assertRaisesRegex(ValueError, 'installer basename'):
+                app.checked_manifest(dict(manifest(), installer_basename=value), VERSION, SOURCE)
+
     def test_inventory_identity_missing_architecture_and_duplicate_fail_closed(self):
         self.assertEqual(len(app.checked_manifest(manifest(), VERSION, SOURCE)), 11)
         mutations = [lambda m: m.update(source_revision="b" * 40),
@@ -126,11 +135,17 @@ class AppContracts(unittest.TestCase):
                     app.verify_optional_signature(deb, root, {})
 
     def test_fresh_appimage_never_installs_deb_or_launches_extracted_app(self):
+        self.check_appimage_layout('festival')
+        self.check_appimage_layout('festival-app-installer')
+
+    def check_appimage_layout(self, installer_name):
         with tempfile.TemporaryDirectory() as name:
             root = Path(name)
             inputs = root / "inputs"
             inputs.mkdir()
             document = manifest()
+            if installer_name != 'festival':
+                document['installer_basename'] = installer_name
             image = next(item["name"] for item in document["targets"]["x86_64-unknown-linux-gnu"] if item["name"].endswith(".AppImage"))
             (inputs / image).write_bytes(b"payload")
             (inputs / (image + ".sig")).write_text("signature")
@@ -139,13 +154,18 @@ class AppContracts(unittest.TestCase):
                     extracted = Path(options["cwd"]) / "squashfs-root"
                     commands = extracted / "usr/bin"
                     commands.mkdir(parents=True)
-                    for executable in ("festival", "festival-activity-engine"):
+                    for executable in (installer_name, "festival-activity-engine"):
                         path = commands / executable
                         path.write_bytes(b"bundled executable")
                         path.chmod(0o755)
                     runtime = extracted / "resources/festival-activity.config.yaml"
                     runtime.parent.mkdir()
                     runtime.write_text("runtime fixture")
+                    if installer_name != 'festival':
+                        # A coexisting suite command must not be selected as
+                        # the App's private installer observer.
+                        (commands / 'festival').write_bytes(b'foreign suite')
+                        (commands / 'festival').chmod(0o755)
                 else:
                     self.assertEqual(arguments[0], "xdpyinfo")
                 return Mock(returncode=0)
@@ -159,11 +179,15 @@ class AppContracts(unittest.TestCase):
                     app.native(inputs, document, "x86_64-unknown-linux-gnu", root / "report", "appimage")
             calls = [call.args[0] for call in invoked.call_args_list]
             self.assertFalse(any(arguments[0] in ("sudo", "apt-get", "dpkg-query", "dpkg-deb") for arguments in calls))
+            self.assertTrue(any(Path(arguments[0]).name == installer_name for arguments in calls))
+            if installer_name != 'festival':
+                self.assertFalse(any(Path(arguments[0]).name == 'festival' for arguments in calls))
             self.assertTrue(any(Path(call.args[0][0]).name == image for call in started.call_args_list))
             self.assertFalse(any(Path(call.args[0][0]).name == "AppRun" for call in started.call_args_list))
             fallback.assert_not_called()
             report = json.loads((root / "report/proof.json").read_text())
             self.assertTrue(report["appimage_default_launch_verified"])
+            self.assertEqual(report['installer_basename'], installer_name)
             self.assertFalse(report["deb_install_exercised"])
             self.assertFalse(report["appimage_extracted_app_executed"])
 
@@ -211,6 +235,7 @@ class AppContracts(unittest.TestCase):
                 (directory / f"candidate-{target}.json").write_text(json.dumps({"source": SOURCE, "target": target, "version": VERSION, "files": entries}))
             result = assemble(directories, root / "staged")
             self.assertEqual(result["source_revision"], SOURCE)
+            self.assertNotIn('installer_basename', result)
             for entries in result["targets"].values():
                 for item in entries:
                     self.assertNotIn(" ", item["name"])
@@ -218,6 +243,21 @@ class AppContracts(unittest.TestCase):
                     self.assertEqual((root / "staged" / item["name"]).read_bytes(), b"payload")
             with self.assertRaises(FileExistsError):
                 assemble(directories, root / "staged")
+            for directory in directories:
+                inventory = next(directory.glob('candidate-*.json'))
+                document = json.loads(inventory.read_text())
+                document['installer_basename'] = 'festival-app-installer'
+                inventory.write_text(json.dumps(document))
+            self.assertEqual(assemble(directories, root/'new-layout')['installer_basename'], 'festival-app-installer')
+            inventory = next(directories[-1].glob('candidate-*.json'))
+            document = json.loads(inventory.read_text())
+            document.pop('installer_basename')
+            inventory.write_text(json.dumps(document))
+            with self.assertRaisesRegex(ValueError, 'different installer layouts'):
+                assemble(directories, root/'mixed-layout')
+            self.assertFalse((root/'mixed-layout').exists())
+            document['installer_basename'] = 'festival-app-installer'
+            inventory.write_text(json.dumps(document))
             inventory = next(directories[-1].glob("candidate-*.json"))
             document = json.loads(inventory.read_text())
             document["source"] = "b" * 40
