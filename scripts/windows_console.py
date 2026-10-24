@@ -25,8 +25,13 @@ def find_backend(environment):
 
 def read_terminal(terminal, read_error, diagnostics=None, eof_deadline=None):
     def state():
-        return {'alive': terminal.isalive(), 'status': terminal.get_exitstatus(),
-                'iseof': terminal.iseof()}
+        alive = terminal.isalive()
+        status = terminal.get_exitstatus()
+        # The synchronous WinPTY reader may hold a blocking ReadFile on this
+        # pipe. A concurrent PeekNamedPipe/iseof can block and starve stdin.
+        # Live or unknown-status EOF is unobserved, never acceptance evidence.
+        eof = terminal.iseof() if alive is False and type(status) is int else None
+        return {'alive': alive, 'status': status, 'iseof': eof}
     def drained(value):
         return value['alive'] is False and type(value['status']) is int and value['iseof'] is True
     before = state()

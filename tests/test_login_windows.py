@@ -166,3 +166,20 @@ class WindowsLoginContracts(unittest.TestCase):
         self.assertFalse(records[0]['iseof'])
         self.assertFalse(records[-1]['iseof'])
         self.assertEqual(records[-1]['event'],'post-error-eof-readback')
+
+    def test_live_or_unknown_shell_never_queries_synchronous_pipe_eof(self):
+        class ReadFailure(Exception):pass
+        class Terminal:
+            alive=True;status=None
+            def isalive(self):return self.alive
+            def get_exitstatus(self):return self.status
+            def iseof(self):raise AssertionError('live synchronous pipe EOF must not be queried')
+            def read(self,blocking):return 'actual terminal output'
+        self.assertEqual(windows_console.read_terminal(Terminal(),ReadFailure),'actual terminal output')
+        terminal=Terminal();terminal.alive=False
+        self.assertEqual(windows_console.read_terminal(terminal,ReadFailure),'actual terminal output')
+        records=[]
+        def fail(blocking):raise ReadFailure('')
+        terminal.read=fail
+        with self.assertRaises(ReadFailure):windows_console.read_terminal(terminal,ReadFailure,records.append)
+        self.assertIsNone(records[0]['iseof'])
