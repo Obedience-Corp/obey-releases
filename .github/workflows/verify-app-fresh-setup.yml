@@ -23,7 +23,7 @@ on:
         description: Fresh install or explicitly seeded old/current managed-user proof
         type: choice
         default: none
-        options: [none, older-idle, current, missing-companion, corrupt-integrations, foreign-companion, corrupt-receipts]
+        options: [none, older-idle, current, missing-companion, corrupt-integrations, foreign-companion, corrupt-receipts, external-suite-old, external-suite-minimum, external-suite-current]
       source_revision:
         type: string
         required: true
@@ -60,7 +60,8 @@ jobs:
           esac
           if [[ ( "$EXISTING" == corrupt-integrations || "$EXISTING" == foreign-companion ) && "$LOGIN:$GIT_RECOVERY:$SCOPE:$LOGIN_SHELL" != false:false:windows:default ]]; then echo "Manual recovery requires Windows-only current-user mode" >&2; exit 64; fi
           if [[ "$EXISTING" == corrupt-receipts && ( "$LOGIN:$GIT_RECOVERY:$LOGIN_SHELL" != false:false:default || ( "$SCOPE" != windows && "$SCOPE" != deb ) ) ]]; then echo "Receipt recovery requires Windows or Debian current-user mode" >&2; exit 64; fi
-          case "$LOGIN:$EXISTING" in false:none|false:older-idle|false:current|false:missing-companion|false:corrupt-integrations|false:foreign-companion|false:corrupt-receipts|true:none) ;;
+          if [[ "$EXISTING" == external-suite-* && "$LOGIN:$GIT_RECOVERY:$SCOPE:$LOGIN_SHELL" != false:false:deb:default ]]; then echo "External suite compatibility requires Debian-only normal first launch" >&2; exit 64; fi
+          case "$LOGIN:$EXISTING" in false:external-suite-old|false:external-suite-minimum|false:external-suite-current|false:none|false:older-idle|false:current|false:missing-companion|false:corrupt-integrations|false:foreign-companion|false:corrupt-receipts|true:none) ;;
             *) echo 'Login proof requires unseeded fresh setup; invalid mode' >&2; exit 64 ;; esac
       - uses: actions/setup-python@v6
         with:
