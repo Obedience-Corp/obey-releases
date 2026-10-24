@@ -25,6 +25,10 @@ class GuestAppControls(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'actual desktop environment'):
             guest.checked_driver_session(state, dict(env, DISPLAY=':99'), '0::/user.slice/session-c2.scope\n')
         guest.checked_driver_session(state, env, '0::/user.slice/session-c2.scope\n')
+        guest.checked_driver_session(state, dict(env, DISPLAY=':0.0'), '0::/user.slice/session-c2.scope\n')
+        for value in (':0.1', ':1', ':1.0', 'localhost:0', '', None):
+            with self.subTest(display=value), self.assertRaisesRegex(RuntimeError, 'desktop environment'):
+                guest.checked_driver_session(state, dict(env, DISPLAY=value), '0::/user.slice/session-c2.scope\n')
 
     def test_credential_is_consumed_privately_and_symlink_public_file_are_refused(self):
         with tempfile.TemporaryDirectory() as directory:

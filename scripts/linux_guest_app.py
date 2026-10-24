@@ -8,6 +8,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import stat
 import subprocess
@@ -28,7 +29,22 @@ def local_context(environment):
     if state is None or not state['desktop_ready']:
         raise RuntimeError('local desktop is not ready')
     checked_driver_session(state, environment, Path('/proc/self/cgroup').read_text())
+    # Exercise the inherited routing itself; do not replace it with the parent.
+    linux_guest_session.command(['xdpyinfo'], environment)
+    actual = linux_guest_session.command(['xprop', '-root', '_NET_SUPPORTING_WM_CHECK'], environment)
+    expected = linux_guest_session.command(['xprop', '-root', '_NET_SUPPORTING_WM_CHECK'], dict(environment, **state['environment']))
+    if actual != expected:
+        raise RuntimeError('driver and local session address different X11 window managers')
+    state['driver_environment'] = {name: environment.get(name) for name in state['environment']}
+    state['driver_cgroup'] = Path('/proc/self/cgroup').read_text()
     return state
+
+
+def display_address(value):
+    # X11 omits screen zero when DISPLAY is :N; Xfce launchers may include .0.
+    # Only these two local forms are equivalent. Never select another display.
+    match = re.fullmatch(r':([0-9]+)(?:\.([0-9]+))?', value or '')
+    return (int(match[1]), int(match[2] or '0')) if match else None
 
 
 def checked_driver_session(state, environment, groups):
@@ -36,8 +52,13 @@ def checked_driver_session(state, environment, groups):
     if not any(scope in row.split(':', 2)[2].split('/') for row in groups.splitlines()):
         raise RuntimeError('App driver must be a child of the actual local login, not SSH')
     for name, value in state['environment'].items():
-        if environment.get(name) != value:
-            raise RuntimeError('driver did not inherit the actual desktop environment: ' + name)
+        observed = environment.get(name)
+        equal = observed == value
+        if name == 'DISPLAY':
+            equal = display_address(observed) is not None and display_address(observed) == display_address(value)
+        if not equal:
+            raise RuntimeError('driver did not inherit the actual desktop environment: ' + name +
+                               ' expected=' + repr(value) + ' observed=' + repr(observed))
 
 
 def private_password(path):
@@ -305,6 +326,10 @@ def main():
     output = evidence / stage
     context = None
     try:
+        names = ('DISPLAY', 'XAUTHORITY', 'DBUS_SESSION_BUS_ADDRESS', 'XDG_RUNTIME_DIR', 'XDG_SESSION_ID')
+        (evidence / (stage + '-desktop-routing.json')).write_text(json.dumps({
+            'inherited': {name: environment.get(name) for name in names},
+            'driver_cgroup': Path('/proc/self/cgroup').read_text()}, indent=2))
         local_context(environment)
         if stage == 'install':
             from app_upgrade_contract import checked_public
