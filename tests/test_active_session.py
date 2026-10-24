@@ -76,6 +76,26 @@ class ActiveSessionContracts(unittest.TestCase):
         for invalid in [0, -1, True, '1']:
             with self.assertRaises(ValueError): active.process_identity(invalid)
 
+    def test_session_and_turn_readback_request_cli_json_without_exporting_output(self):
+        fixture = active.Fixture.__new__(active.Fixture)
+        fixture.obey = self.root/'obey'
+        fixture.environment = {}
+        fixture.fixture = {'camp_id': 'camp'}
+
+        def cli(arguments, **kwargs):
+            operation = arguments[3]
+            document = self.session() if operation == 'info' else self.turns()
+            # Real CLI defaults to human-readable output; only --json returns
+            # the schema consumed by the readback validation.
+            output = json.dumps(document) if '--json' in arguments else 'Session: session\n'
+            return subprocess.CompletedProcess(arguments, 0, output, '')
+
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), patch.object(active.subprocess, 'run', side_effect=cli):
+            self.assertEqual(fixture.session_info('session', 'SESSION_STATUS_RUNNING')['id'], 'session')
+            self.assertEqual(fixture.turn_readback('session', 1)[0]['id'], 'turn')
+        self.assertEqual(output.getvalue(), '')
+
     def test_archive_digest_and_size_are_checked_before_extraction(self):
         archive = self.root / 'bad'; archive.write_bytes(b'bad')
         with patch.object(provider.subprocess, 'Popen') as launch:
