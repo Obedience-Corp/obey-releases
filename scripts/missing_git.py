@@ -97,8 +97,10 @@ class Fixture:
         self.git_sha = hashlib.sha256(self.git.read_bytes()).hexdigest()
         plan = self.apt(['--simulate', '--no-auto-remove', 'remove', 'git'], 60)
         self.removed = removal_plan(plan, self.before)
+        self.retained_packages = set(self.before).difference(self.removed)
         (output/'missing-git-removal-plan.log').write_text(plan)
-        self.files_before = {name: git_rollback.package_files(name, self.environment) for name in self.removed}
+        self.files_before = {name: git_rollback.package_files(name, self.environment, self.retained_packages)
+                             for name in self.removed}
         self.config_before = git_rollback.config_files(self.environment)
         self.config_backup = git_rollback.backup_system_config(self.cache, self.config_before['/etc/gitconfig'])
         (output/'missing-git-baseline-files.json').write_text(json.dumps(
@@ -159,7 +161,8 @@ class Fixture:
     def remove(self):
         if installed(self.environment) != self.before:
             raise RuntimeError('package state changed before controlled Git removal')
-        if ({name: git_rollback.package_files(name, self.environment) for name in self.removed} != self.files_before
+        if ({name: git_rollback.package_files(name, self.environment, self.retained_packages)
+             for name in self.removed} != self.files_before
                 or git_rollback.config_files(self.environment) != self.config_before):
             raise RuntimeError('package files or Git configuration changed before controlled removal')
         plan = self.apt(['--simulate', '--no-auto-remove', 'remove', 'git'], 60)
@@ -184,7 +187,8 @@ class Fixture:
         if installed(self.environment) != self.before or hashlib.sha256(self.git.read_bytes()).hexdigest() != self.git_sha:
             raise RuntimeError('Git restoration did not preserve exact package and executable identities')
         command([self.git, '--version'], self.environment)
-        files = {name: git_rollback.package_files(name, self.environment) for name in self.removed}
+        files = {name: git_rollback.package_files(name, self.environment, self.retained_packages)
+                 for name in self.removed}
         configs = git_rollback.config_files(self.environment)
         (self.output/'missing-git-postinstall-files.json').write_text(json.dumps(
             {'packages': files, 'git_config': configs}, indent=2)+'\n')

@@ -3,6 +3,7 @@ import hashlib
 import os
 from pathlib import Path
 import shutil
+import subprocess
 import sys
 import tempfile
 from unittest.mock import patch
@@ -23,6 +24,13 @@ with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, {
     os.environ['HOME'] = str(home)
     (home/'.gitconfig').write_text('[fixture]\n\tpreserve = foreign-config-sentinel\n')
     verify_config_rollback(root)
+    # Real shared package directory, not an invented snapshot: nonremoved
+    # packages own it and its attribute must survive actual dpkg transactions.
+    attribute = 'user.fa0027-retained-directory'
+    assert attribute not in os.listxattr('/usr/share')
+    subprocess.run(['sudo', '/usr/bin/python3', '-c',
+                    'import os; os.setxattr("/usr/share", "user.fa0027-retained-directory", b"preserve-exactly")'],
+                   check=True, capture_output=True)
     before = missing_git.installed(os.environ)
     fixture = missing_git.Fixture(root/'cache', root, os.environ)
     try:
@@ -68,6 +76,10 @@ with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, {
     finally:
         partial.restore()
     assert partial.restored and missing_git.installed(os.environ) == before
+    assert os.getxattr('/usr/share', attribute) == b'preserve-exactly'
+    assert all(value['/usr/share']['preserved_xattrs'] for value in partial.files_before.values()
+               if '/usr/share' in value)
+    print('Actual shared /usr/share extended attribute preserved through both package transactions PASS', flush=True)
     print('Actual removed Git restored after propagated partial-transaction failure PASS', flush=True)
     cache_paths = [fixture.cache, partial.cache]
     for cache in cache_paths:
