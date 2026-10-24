@@ -499,6 +499,7 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
     report["existing_user_scenario"] = existing_user
     report["existing_user_reconciliation_verified"] = False
     report["external_suite_compatibility_verified"] = False
+    report['external_suite_preexisted_app_install'] = False
     report["missing_companion_repair_verified"] = False
     if fresh_setup:
         # Runtime import reuses the existing default-home/normal-quit contracts;
@@ -580,6 +581,11 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
                 state = subprocess.run(["dpkg-query", "-W", "-f=${db:Status-Status}", package], capture_output=True, text=True, env=environment)
                 if state.returncode == 0 and state.stdout.strip() != "not-installed":
                     raise RuntimeError("refusing preexisting App package state")
+                if existing_user.startswith('external-suite-'):
+                    import external_suite
+                    external_fixture = external_suite.Fixture(temporary, Path('/usr/bin') / installer_name,
+                        default_managed, environment, output, report.setdefault('external_suite_fixture', {}), existing_user)
+                    external_fixture.install_package()
                 owned_deb = True
                 install_deb(deb, environment, authorization=guest_context)
                 installed_version = command(["dpkg-query", "-W", "-f=${Version}", package], environment).strip()
@@ -587,6 +593,9 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
                     raise ValueError("installed deb version mismatch")
                 report["deb_installed_version"] = installed_version
                 report["deb_install_with_dependency_resolution"] = True
+                if external_fixture is not None:
+                    external_fixture.report['after_app_package_install'] = external_fixture.unchanged()
+                    report['external_suite_preexisted_app_install'] = True
             # The guest retains its original public download through reboot.
             # Ordinary hosted proofs still own a temporary copy.
             appimage = directory / updater if guest_context is not None and linux_package == 'appimage' else temporary / updater
@@ -649,11 +658,8 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
             active_fixture.seed()
             report['selected_packages_preseeded'] = True
             report['existing_seed_method'] = 'authenticated historical managed Obey fixture with real provider work'
-        if existing_user.startswith('external-suite-'):
-            import external_suite
-            external_fixture = external_suite.Fixture(temporary, installer, default_managed, environment,
-                                                      output, report.setdefault('external_suite_fixture', {}), existing_user)
-            external_fixture.install()
+        if external_fixture is not None:
+            external_fixture.prepare_existing_cli()
             report['selected_packages_preseeded'] = True
             report['existing_seed_method'] = 'real external Debian suite and official managed CLI tools; no App settings'
         if existing_user == "corrupt-receipts":
@@ -797,6 +803,8 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
                     active_fixture.finish()
                     report['active_session_update_verified'] = True
                 elif external_fixture is not None:
+                    if not report['external_suite_preexisted_app_install']:
+                        raise ValueError('external suite must preexist the App package installation')
                     external_fixture.finish(report['default_after_setup'], report['default_after_reopen'])
                     report['external_suite_compatibility_verified'] = True
                 else:

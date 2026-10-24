@@ -68,7 +68,8 @@ class Fixture:
     def external_mode(self):
         return None if self.version == '0.3.9' else self.version
 
-    def install(self):
+    def install_package(self):
+        """Install the existing user's Suite before the App package exists."""
         name = f'obedience-festival_{self.version}_amd64.deb'
         base = f'https://github.com/Obedience-Corp/festival/releases/download/v{self.version}/'
         payload, checksums = fetch(base + name), fetch(base + 'checksums.txt')
@@ -89,6 +90,13 @@ class Fixture:
         self.original = [physical('/usr/bin/' + name) for name in TOOLS]
         self.note.write_text('FA0027: unrelated existing CLI user data must survive.\n')
         self.note_record = physical(self.note)
+        self.report['before_app_package_install'] = self.unchanged()
+
+    def prepare_existing_cli(self):
+        """Seed CLI/service state only after the App's private Installer exists."""
+        if not self.installed:
+            raise RuntimeError('external suite must be installed before preparing existing CLI state')
+        self.unchanged()
         # These are real existing CLI tools, not seeded App settings. A working
         # integration/service is necessary to exercise Ready -> background on
         # the first App launch rather than masking it through setup completion.
@@ -214,7 +222,7 @@ class Fixture:
             if actual['version'] != self.version:
                 raise RuntimeError('refusing to remove a replaced external fixture package')
             if self.installed:
-                self.unchanged()
+                self.report['before_package_cleanup'] = self.unchanged()
             command(['sudo', '-n', '/usr/bin/dpkg', '--purge', PACKAGE], self.environment, timeout=120)
         if package_info(self.environment) is not None or any(os.path.lexists('/usr/bin/' + name) for name in TOOLS):
             raise RuntimeError('owned external suite package cleanup is incomplete')

@@ -8,7 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from contextlib import closing
+from contextlib import closing, ExitStack
 from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
@@ -130,6 +130,75 @@ class ExternalSuite(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'replaced'):
                 fixture.cleanup()
             command.assert_not_called()
+
+    def test_native_installs_suite_before_app_and_cleans_each_attempted_package(self):
+        import verify_app_upgrade as upgrade
+        from test_app_candidate import manifest, VERSION
+        for failure in ('suite', 'app', 'after-app'):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                document = dict(manifest(), installer_basename='festival-app-installer')
+                image = next(row['name'] for row in document['targets']['x86_64-unknown-linux-gnu']
+                             if row['name'].endswith('.AppImage'))
+                (root/image).write_bytes(b'original image fixture')
+                events = []
+                fixture = Mock(report={})
+                def seed():
+                    events.append('suite-install')
+                    if failure == 'suite': raise RuntimeError('suite install failed')
+                def install(*args, **kwargs):
+                    self.assertEqual(events, ['suite-install'])
+                    events.append('app-install')
+                    if failure == 'app': raise RuntimeError('app install failed')
+                def unchanged():
+                    events.append('suite-preserved')
+                    return {'original_files': 'unchanged'}
+                def command(arguments, *args, **kwargs):
+                    return 'festival-app' if arguments[-1] == 'Package' else VERSION
+                fixture.install_package.side_effect = seed
+                fixture.unchanged.side_effect = unchanged
+                fixture.cleanup.side_effect = lambda: events.append('suite-cleanup')
+                with ExitStack() as stack:
+                    stack.enter_context(patch.object(app, 'require_clean_host'))
+                    stack.enter_context(patch.object(app, 'native_platform', return_value='linux/amd64'))
+                    stack.enter_context(patch.object(app, 'verify_signature'))
+                    stack.enter_context(patch.object(app, 'verify_optional_signature', return_value=True))
+                    stack.enter_context(patch.object(app.shutil, 'which', return_value=None))
+                    stack.enter_context(patch.object(upgrade, 'default_home_layout', return_value=root/'managed'))
+                    stack.enter_context(patch.object(app.subprocess, 'run', return_value=subprocess.CompletedProcess([], 1, '', '')))
+                    stack.enter_context(patch.object(app, 'command', side_effect=command))
+                    stack.enter_context(patch.object(external, 'Fixture', return_value=fixture))
+                    stack.enter_context(patch.object(app, 'install_deb', side_effect=install))
+                    stack.enter_context(patch.object(app, 'apt_command', side_effect=lambda *a, **k: events.append('app-purge')))
+                    stack.enter_context(patch.object(app, 'extract_appimage_observers', side_effect=RuntimeError('after-app failure')))
+                    stack.enter_context(patch.dict(os.environ, {'RUNNER_TEMP': str(root)}))
+                    with self.assertRaisesRegex(RuntimeError, failure + (' failure' if failure == 'after-app' else ' install failed')):
+                        app.native(root, document, 'x86_64-unknown-linux-gnu', root/'proof',
+                                   fresh_setup=True, existing_user='external-suite-current')
+                expected = ['suite-install']
+                if failure != 'suite': expected += ['app-install']
+                if failure == 'after-app': expected += ['suite-preserved']
+                if failure != 'suite': expected += ['app-purge']
+                self.assertEqual(events, expected + ['suite-cleanup'])
+                fixture.prepare_existing_cli.assert_not_called()
+                proof = json.loads((root/'proof/proof.json').read_text())
+                self.assertFalse(proof['external_suite_compatibility_verified'])
+                self.assertEqual(proof['external_suite_preexisted_app_install'], failure == 'after-app')
+                self.assertNotIn('cleanup_failure', proof)
+
+    def test_existing_cli_preparation_refuses_absent_or_changed_suite_before_commands(self):
+        fixture = external.Fixture.__new__(external.Fixture)
+        fixture.installed = False
+        with patch.object(external, 'command') as invoked:
+            with self.assertRaisesRegex(RuntimeError, 'must be installed'):
+                fixture.prepare_existing_cli()
+            invoked.assert_not_called()
+        fixture.installed = True
+        fixture.unchanged = Mock(side_effect=ValueError('suite changed'))
+        with patch.object(external, 'command') as invoked:
+            with self.assertRaisesRegex(ValueError, 'suite changed'):
+                fixture.prepare_existing_cli()
+            invoked.assert_not_called()
 
     def test_first_app_cannot_rewrite_other_current_package_receipts_or_executables(self):
         baseline = selected.checked_receipts(self.home, external_suite='0.3.24')

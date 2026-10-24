@@ -868,8 +868,10 @@ They require `platform_scope=deb`, default shell, no login-shell proof and no Gi
 recovery mode. Defaults and the ordinary full matrix are unchanged.
 
 The fixture verifies pinned public Suite0.3.9/0.3.10/0.3.24 Debian bytes against
-release checksums, installs the genuine package, provisions only the other two
-selected CLI packages, and establishes normal service/terminal readiness. It
+release checksums and installs the genuine package **before installing the App
+Debian package**. It compares the original Suite files immediately after the App
+package install. Once the App's bundled Installer is available, it provisions
+only the other two selected CLI packages and establishes normal service/terminal readiness. It
 refuses any prior App settings and never seeds a background-check timestamp. The
 actual first App launch therefore exercises the ready-existing-user background
 path rather than suppressing it through a throttle fixture. Persisted readback requires
@@ -886,6 +888,9 @@ still require the normal three managed packages. Both launches must retain exact
 receipts, files, external package identity, foreign data and responsive service.
 The fixture removes only its authenticated, still-matching external package after
 owned App/service teardown. Changed or replaced package state fails cleanup.
+Failed Suite or App installation still runs the owned partial-install cleanup;
+the original installation error is retained. Proof records distinguish the
+pre-App package snapshot, post-App package snapshot, and first App launch.
 
 `external_suite_compatibility_verified` is separate from fresh-machine, useful
 work, licensing, reboot and consumer trust. Source/tests and fixture setup do not
