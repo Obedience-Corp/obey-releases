@@ -494,8 +494,11 @@ must resolve to its actual managed executable and report the expected version,
 and the foreign function/prefix must survive. Original terminal bytes, including
 ANSI, are retained. Profile bytes/mtime and command results must remain unchanged
 on reopen. The bundled Installer is used through the App; this does not require
-a standalone managed festival hub. Stock Windows PowerShell5.1, cmd, provider-wrapper/Windows Terminal UI,
-licensed work, login/reboot service recovery and customer security prompts remain unproven. The
+a standalone managed festival hub. This default case does not cover stock Windows
+PowerShell5.1; use the separate [explicit ordinary account shell](#explicit-ordinary-account-shells)
+case below for that runtime. Neither shell case establishes cmd,
+provider-wrapper/Windows Terminal UI, licensed work, login/reboot service recovery
+or customer security prompts. The
 explicit new_login_shell_verified flag stays false on any failure or cleanup
 error. Existing seeded-user modes refuse this option.
 
@@ -517,8 +520,9 @@ readback is separate. Owned PID/birth snapshots are retained before and during
 execution, and cleanup verifies tracked descendants even after an adapter exits.
 Disposable Windows CI must prove positive ordinary startup, timeout cleanup and
 premature-adapter cleanup before this transport can qualify an App journey.
-Stock Windows PowerShell5.1, cmd, Windows Terminal UI and consumer policy remain
-outside this installed-PowerShell7 case.
+The separate `windows-powershell` selector exercises stock Windows PowerShell5.1
+through the same qualified transport. cmd, Windows Terminal UI and consumer policy
+remain outside these shell cases.
 
 
 Login readback compares the complete validated camp-app version envelope except
