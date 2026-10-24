@@ -2,6 +2,10 @@ name: Verify fresh public App default-home setup
 on:
   workflow_dispatch:
     inputs:
+      verify_partial_install_retry:
+        description: Actual companion transport failure, refreshed partial facts and same-process Retry (Deb only)
+        type: boolean
+        default: false
       platform_scope:
         type: choice
         default: all
@@ -33,7 +37,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: fresh-default-setup-${{ inputs.source_revision }}-${{ inputs.existing_user }}-login-${{ inputs.verify_login_shell || false }}-git-${{ inputs.verify_missing_git_manual || false }}-shell-${{ inputs.login_shell || 'default' }}
+  group: fresh-default-setup-${{ inputs.source_revision }}-${{ inputs.existing_user }}-login-${{ inputs.verify_login_shell || false }}-git-${{ inputs.verify_missing_git_manual || false }}-shell-${{ inputs.login_shell || 'default' }}-partial-${{ inputs.verify_partial_install_retry || false }}
   cancel-in-progress: false
 jobs:
   anonymous-inputs:
@@ -49,8 +53,10 @@ jobs:
           LOGIN_SHELL: ${{ inputs.login_shell || 'default' }}
           EXISTING: ${{ inputs.existing_user || 'none' }}
           GIT_RECOVERY: ${{ inputs.verify_missing_git_manual || false }}
+          PARTIAL_RETRY: ${{ inputs.verify_partial_install_retry || false }}
           SCOPE: ${{ inputs.platform_scope || 'all' }}
         run: |
+          if [[ "$PARTIAL_RETRY" == true && "$LOGIN:$EXISTING:$GIT_RECOVERY:$SCOPE:$LOGIN_SHELL" != false:none:false:deb:default ]]; then echo 'Partial Retry requires unseeded Deb-only mode' >&2; exit 64; fi
           if [[ "$GIT_RECOVERY" == true && "$LOGIN:$EXISTING:$SCOPE" != false:none:deb ]]; then echo "Git recovery requires unseeded Deb-only mode" >&2; exit 64; fi
           case "$LOGIN_SHELL" in
             default) ;;
@@ -116,7 +122,7 @@ jobs:
           sudo apt-get install -y minisign xvfb x11-utils xdotool imagemagick openbox wmctrl libegl1 libegl-mesa0 libgles2 libgl1 libgl1-mesa-dri
           sudo apt-get install -y --no-install-recommends gdb
           if [[ '${{ inputs.existing_user }}' == older-active ]]; then sudo apt-get install -y --no-install-recommends zstd; fi
-          if [[ '${{ inputs.verify_missing_git_manual || false }}' == true || '${{ inputs.existing_user }}' == corrupt-receipts ]]; then
+          if [[ '${{ inputs.verify_missing_git_manual || false }}' == true || '${{ inputs.existing_user }}' == corrupt-receipts || '${{ inputs.verify_partial_install_retry || false }}' == true ]]; then
             sudo apt-get install -y python3-gi gir1.2-atspi-2.0 at-spi2-core dbus-x11 gsettings-desktop-schemas libglib2.0-bin dconf-gsettings-backend dpkg-repack fakeroot
           fi
           dpkg-query -W libegl1 libegl-mesa0 libgles2 libgl1 libgl1-mesa-dri gdb libc6
@@ -147,17 +153,19 @@ jobs:
           VERIFY_LOGIN_SHELL: ${{ inputs.verify_login_shell || false }}
           LOGIN_SHELL: ${{ inputs.login_shell || 'default' }}
           VERIFY_MISSING_GIT_MANUAL: ${{ inputs.verify_missing_git_manual || false }}
+          VERIFY_PARTIAL_RETRY: ${{ inputs.verify_partial_install_retry || false }}
         run: |
           flags=(--login-shell "$LOGIN_SHELL")
           if [[ "$VERIFY_LOGIN_SHELL" == true ]]; then flags+=(--verify-login-shell); fi
           if [[ "$VERIFY_MISSING_GIT_MANUAL" == true ]]; then flags+=(--verify-missing-git-manual); fi
+          if [[ "$VERIFY_PARTIAL_RETRY" == true ]]; then flags+=(--verify-partial-install-retry); fi
           prefix=()
-          if [[ "$VERIFY_MISSING_GIT_MANUAL" == true || ( "$EXISTING_USER" == corrupt-receipts && "$TARGET" == x86_64-unknown-linux-gnu ) ]]; then prefix=(dbus-run-session --); fi
+          if [[ "$VERIFY_PARTIAL_RETRY" == true || "$VERIFY_MISSING_GIT_MANUAL" == true || ( "$EXISTING_USER" == corrupt-receipts && "$TARGET" == x86_64-unknown-linux-gnu ) ]]; then prefix=(dbus-run-session --); fi
           "${prefix[@]}" python scripts/verify_app_candidate.py --mode verify-fresh --source "$SOURCE" --version "$VERSION" --target "$TARGET" --linux-package "$PACKAGE" --existing-user "$EXISTING_USER" "${flags[@]}"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: ${{ inputs.existing_user != '' && inputs.existing_user != 'none' && format('existing-{0}', inputs.existing_user) || 'fresh-default-home' }}-${{ matrix.target }}-${{ matrix.format }}-proof
+          name: ${{ inputs.verify_partial_install_retry && 'partial-selected-install' || inputs.existing_user != '' && inputs.existing_user != 'none' && format('existing-{0}', inputs.existing_user) || 'fresh-default-home' }}-${{ matrix.target }}-${{ matrix.format }}-proof
           path: app-proof/
           if-no-files-found: warn
           retention-days: 14

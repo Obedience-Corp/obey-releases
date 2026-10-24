@@ -15,7 +15,12 @@ def visible_text(applications, pid, api):
     roots = [app for app in applications if app.get_process_id() == pid]
     if len(roots) != 1:
         raise RuntimeError('owned App accessibility application is absent or ambiguous')
-    queue, texts, count, total = [roots[0]], [], 0, 0
+    return subtree_text(roots[0], api)
+
+
+def subtree_text(root, api):
+    """Bounded visible text; callers authenticate the containing application first."""
+    queue, texts, count, total = [root], [], 0, 0
     while queue:
         node = queue.pop()
         count += 1
