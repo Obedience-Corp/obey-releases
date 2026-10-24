@@ -1059,3 +1059,17 @@ record, retaining both selection and restoration observations. Only the known
 original/selected shell may be transiently stale; a changed UID/name/home, foreign
 shell, query error or timeout still fails. No cache flush or environment-only
 substitution establishes this readiness.
+
+The recovery fixture waits for its actual Camp ID and canonical path to appear
+in the owned daemon's read-only `campaigns` repository before its single initial
+session creation. An empty session list for a UUID is insufficient: public Obey
+accepts that UUID without checking campaign import. This gate waits only for the
+fixture precondition; it never retries session creation or prewarms a provider.
+`tests/integration_service_campaign_ready.py` checks this against authentic public
+Obey 0.2.3 and Suite 0.3.24, then requires one successful create with no model turn.
+That control is not provider-work or App recovery acceptance.
+
+Failed real-session CLI operations retain only a fixed operation label, exit
+code, output lengths/digests and allowlisted canonical gRPC codes. Failure-only
+service, campaign and task-owned provider metadata helps diagnosis without raw
+provider output, prompts, CLI arguments or recovery retries.
