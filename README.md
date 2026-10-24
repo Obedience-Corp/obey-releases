@@ -701,7 +701,7 @@ all descriptors close. It never changes device permissions, adds permanent group
 membership, starts a root VM, or substitutes CPU emulation. The original JSON
 report is retained even on failure.
 
-This is infrastructure evidence only. It does not boot a guest or establish a
+The KVM preflight is infrastructure evidence only. It does not boot a guest or establish a
 clean desktop, App installation, missing-Git recovery, licensing or reboot. Those
 require an authenticated OS image, an isolated baseline and the actual published
 App journey. Existing hosted developer images remain explicitly distinct from
@@ -718,9 +718,12 @@ After normal shutdown it cold-boots a separate disk/firmware clone, reboots that
 clone and checks changed boot IDs, unchanged packages and an untouched baseline.
 Original desktop screenshots and readbacks are retained; keys, passwords, seed,
 disks and provisioning logs are never uploaded. This is a documented cloud-image
-plus desktop fixture, not an unmodified retail OS installation. Graphical user
-login, public App installation/use, authorization dialogs and service recovery
-after App installation still require their separate journeys.
+plus desktop fixture, not an unmodified retail OS installation. The clone logs in
+through LightDM's actual password field before and after reboot. Readback
+requires an active local logind X11 session, its real Xfce process/environment,
+Xfwm4 window manager and existing owned user bus. It does not enable autologin or
+replace the desktop with Xvfb. Public App installation/use, authorization dialogs
+and service recovery after App installation still require their separate journeys.
 
 ### Foreign companion: preserve and recover the original selected command
 

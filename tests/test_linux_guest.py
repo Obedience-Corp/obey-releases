@@ -5,6 +5,8 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 if os.environ.get('CANDIDATE_TEST_CONTAINER') != '1' or not Path('/.dockerenv').exists():
     raise RuntimeError('guest process/file controls require Docker')
@@ -13,6 +15,17 @@ import linux_guest
 
 
 class GuestCleanup(unittest.TestCase):
+    def test_password_is_not_typed_into_existing_session_or_non_greeter(self):
+        for replies, message in ((['{"session": "already active"}'], 'already logged-in'),
+                                 (['null', 'false'], 'active LightDM greeter')):
+            with self.subTest(replies=replies):
+                guest = linux_guest.Guest.__new__(linux_guest.Guest)
+                guest.ssh = Mock(side_effect=[SimpleNamespace(stdout=value) for value in replies])
+                guest.qmp_commands = Mock()
+                with self.assertRaisesRegex(RuntimeError, message):
+                    guest.login('onlyfixture123')
+                guest.qmp_commands.assert_not_called()
+
     def test_failed_journey_releases_only_its_owned_process_and_log(self):
         with tempfile.TemporaryDirectory() as temporary:
             owned = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
