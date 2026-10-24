@@ -187,3 +187,64 @@ class Fixture:
             raise ValueError('receipt database changed during recovered readback')
         self.report['recovered_readonly_sidecars'] = sidecars
         return {'sha256': sha(self.original), 'mtime_ns': self.info.st_mtime_ns, 'receipts': self.receipts}
+
+MESSAGE = ('Installer state could not be read. Setup cannot safely continue. Check permissions or restore the installer state from a known backup, then retry setup. Do not delete existing state to continue.')
+CODE = 'E_INSTALLER_STATE_UNREADABLE'
+
+
+def probe(installer, fixture, before, environment, output):
+    fixture.unchanged()
+    document = command([installer, '--managed', 'status', '--plugin', 'obedience-corp/camp-app', '--json'], environment, json_output=True)
+    (output/'corrupt-receipt-status.json').write_text(json.dumps(document, indent=2)+'\n')
+    data = document.get('data', {})
+    baseline = before['installer_status']['data']
+    if fixture.receipts != before['receipts'] or {name: row['mtime_ns'] for name, row in fixture.physical.items()} != before['mtimes']:
+        raise ValueError('receipt corruption baseline differs from verified existing-user state')
+    if document.get('ok') is not True or data.get('setup', {}).get('signals_incomplete') is not True:
+        raise ValueError('actual Installer did not report unreadable existing receipt state')
+    for key in ('home', 'bin_dir', 'marketplace_source', 'origin', 'flavor', 'prerequisites'):
+        if data.get(key) != baseline.get(key):
+            raise ValueError('corrupt receipt diagnostic changed unrelated Installer status facts')
+    def without_receipts(rows):
+        return sorted([{key: value for key, value in row.items() if key not in ('receipt_version', 'receipt_channel')} for row in rows], key=lambda row: row['tool'])
+    if without_receipts(data.get('tools', [])) != without_receipts(baseline['tools']):
+        raise ValueError('corrupt receipt diagnostic changed selected live tool facts')
+    if any(row.get('receipt_version') or row.get('receipt_channel') for row in data['tools']):
+        raise ValueError('unreadable receipt state unexpectedly reported readable receipt rows')
+    fixture.unchanged()
+    return document
+
+
+def error_window(window):
+    names = window.get('visible_names', [])
+    expected = 'Read what this machine hasFailed'+MESSAGE+CODE+'Retry'
+    return (window.get('uia_verified') is True and 'Getting this machine ready' in names and
+            'A step did not finish. Its detail is below.' in names and expected in names)
+
+
+def preserved_user(existing, before, fixture, environment):
+    import existing_obey
+    fixture.unchanged()
+    physical = []
+    for name, expected in fixture.physical.items():
+        path = Path(name)
+        if owned_executable(path).st_mtime_ns != expected['mtime_ns'] or sha(path.read_bytes()) != expected['sha256']:
+            raise ValueError('unreadable receipt failure changed selected physical files')
+        physical.append({'path': name, **expected})
+    settings, preserved, lifecycle, _ = existing_obey.settings_readback(existing)
+    if (preserved != before['preserved'] or lifecycle != before['lifecycle'] or
+            settings.get('pendingObeyRestart', False) != before['pending_obey_restart']):
+        raise ValueError('unreadable receipt failure changed user state/settings')
+    camps = command([existing['camp'], 'list', '--format', 'json'], environment, json_output=True)
+    if not any(row['id'] == existing['camp_id'] and Path(row['path']).resolve() == existing['fixture'].resolve() for row in camps):
+        raise ValueError('unreadable receipt failure lost registered camp')
+    obey = existing['managed_home']/'bin'/('obey.exe' if os.name == 'nt' else 'obey')
+    service = existing_obey.service(obey, environment)
+    unit = Path(service['unit_path'])
+    if (service != before['service'] or unit.is_symlink() or unit.is_junction() or
+            sha(unit.read_bytes()) != before['unit']['sha256'] or unit.stat().st_mtime_ns != before['unit']['mtime_ns']):
+        raise ValueError('unreadable receipt failure changed the responsive service/unit')
+    fixture.unchanged()
+    return {'physical_files': physical, 'preserved': preserved, 'lifecycle': lifecycle,
+            'service': service, 'unit': before['unit'], 'registered_camp_id': existing['camp_id'],
+            'receipt_database': fixture.unchanged(), 'receipt_rows_readable': False}

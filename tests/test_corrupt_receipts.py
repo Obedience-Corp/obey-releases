@@ -1,6 +1,7 @@
 """Real SQLite and persisted rollback filesystem cases, Docker only."""
 from contextlib import closing
 import hashlib
+import copy
 import os
 from pathlib import Path
 import sqlite3
@@ -12,6 +13,7 @@ if os.environ.get('CANDIDATE_TEST_CONTAINER')!='1' or not Path('/.dockerenv').ex
     raise RuntimeError('receipt filesystem contracts require Docker')
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 import corrupt_receipts as receipts
+import verify_app_candidate as app
 import test_selected_components as selected
 
 
@@ -105,3 +107,75 @@ class ReceiptCorruptionContracts(unittest.TestCase):
                 with self.assertRaisesRegex(OSError,'original failure'):fixture.corrupt()
             with self.assertRaisesRegex(ValueError,'incomplete'):fixture.restore()
             self.assertEqual(fixture.path.read_bytes(),b'partial mutation')
+
+    def test_actual_incomplete_status_contract_retains_healthy_live_tool_facts(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary);home=self.fixture(root)
+            fixture=receipts.Fixture(home,root/'private',{},dict(os.environ));fixture.corrupt()
+            data={'home':str(home),'bin_dir':str(home/'bin'),'marketplace_source':'official-obey','origin':'managed',
+                  'prerequisites':[{'name':'git','present':True}],
+                  'tools':[{'tool':'camp','present':True,'version':'0.16.2','path':str(home/'bin/camp'),'receipt_version':'0.3.24'}]}
+            before={'installer_status':{'ok':True,'data':data},'receipts':fixture.receipts,'mtimes':{name:row['mtime_ns'] for name,row in fixture.physical.items()}}
+            document={'ok':True,'data':copy.deepcopy(data)}
+            document['data']['setup']={'signals_incomplete':True}
+            document['data']['tools'][0].pop('receipt_version')
+            try:
+                with patch.object(receipts,'command',return_value=document):
+                    self.assertEqual(receipts.probe(root/'festival',fixture,before,{},root),document)
+                for kind in ('signal','tool','receipt','route'):
+                    bad=copy.deepcopy(document)
+                    if kind=='signal':bad['data']['setup']['signals_incomplete']=False
+                    elif kind=='tool':bad['data']['tools'][0]['version']='unrelated'
+                    elif kind=='receipt':bad['data']['tools'][0]['receipt_version']='0.3.24'
+                    else:bad['data']['home']='/another/home'
+                    with patch.object(receipts,'command',return_value=bad),self.assertRaises(ValueError):
+                        receipts.probe(root/'festival',fixture,before,{},root)
+            finally:fixture.restore()
+
+    def test_authenticated_specific_unreadable_state_row_is_required(self):
+        row='Read what this machine hasFailed'+receipts.MESSAGE+receipts.CODE+'Retry'
+        names=['Getting this machine ready','A step did not finish. Its detail is below.',row]
+        self.assertTrue(receipts.error_window({'uia_verified':True,'visible_names':names}))
+        for changed in [row.replace('Read what this machine has','Configure terminal commands and agent connections'),
+                        row.replace(receipts.CODE,'E_UNKNOWN'),row.replace(receipts.MESSAGE,'Something failed'),row+'lookalike']:
+            self.assertFalse(receipts.error_window({'uia_verified':True,'visible_names':names[:2]+[changed]}))
+        self.assertFalse(receipts.error_window({'uia_verified':False,'visible_names':names}))
+
+    def test_corrupt_receipt_mode_rejects_other_platform_before_execution(self):
+        with patch.object(app,'require_clean_host'),self.assertRaisesRegex(ValueError,'native Windows'):
+            app.native(Path('/unused'),{},'x86_64-unknown-linux-gnu',Path('/unused'),fresh_setup=True,existing_user='corrupt-receipts')
+
+    def test_unreadable_database_still_requires_other_physical_user_and_service_preservation(self):
+        import existing_obey
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary);home=self.fixture(root)
+            fixture=receipts.Fixture(home,root/'private',{},dict(os.environ));fixture.corrupt()
+            campaign=root/'camp';campaign.mkdir();unit=root/'unit';unit.write_bytes(b'owned registered unit')
+            service={'installed':True,'loaded':True,'socket_reachable':True,'daemon_pid':77,'unit_path':str(unit)}
+            preserved={'settings':{'fontSize':17},'preserved_files':{'owned-note':'known-sha'}}
+            lifecycle={'setupCompletedAt':None,'lastUpdateCheckAt':'2026-10-24T00:00:00Z'}
+            before={'preserved':preserved,'lifecycle':lifecycle,'pending_obey_restart':False,'service':service,
+                    'unit':{'path':str(unit),'sha256':hashlib.sha256(unit.read_bytes()).hexdigest(),'mtime_ns':unit.stat().st_mtime_ns}}
+            existing={'managed_home':home,'camp':home/'bin/camp','camp_id':'owned-id','fixture':campaign}
+            with patch.object(existing_obey,'settings_readback',return_value=({},preserved,lifecycle,'now')) as settings, \
+                 patch.object(existing_obey,'service',return_value=service) as observed_service, \
+                 patch.object(receipts,'command',return_value=[{'id':'owned-id','path':str(campaign)}]) as camps:
+                try:
+                    result=receipts.preserved_user(existing,before,fixture,{})
+                    self.assertFalse(result['receipt_rows_readable']);self.assertEqual(len(result['physical_files']),5)
+                    self.assertEqual(result['receipt_database']['sha256'],receipts.sha(fixture.broken))
+                    settings.return_value=({},{'settings':{'fontSize':99}},lifecycle,'now')
+                    with self.assertRaisesRegex(ValueError,'user state'):receipts.preserved_user(existing,before,fixture,{})
+                    settings.return_value=({},preserved,lifecycle,'now')
+                    observed_service.return_value=dict(service,daemon_pid=88)
+                    with self.assertRaisesRegex(ValueError,'service/unit'):receipts.preserved_user(existing,before,fixture,{})
+                    observed_service.return_value=service;camps.return_value=[]
+                    with self.assertRaisesRegex(ValueError,'registered camp'):receipts.preserved_user(existing,before,fixture,{})
+                    camps.return_value=[{'id':'owned-id','path':str(campaign)}]
+                    target=home/'bin/fest';data=target.read_bytes();info=target.stat()
+                    try:
+                        target.write_bytes(b'unknown selected replacement')
+                        with self.assertRaisesRegex(ValueError,'physical files'):receipts.preserved_user(existing,before,fixture,{})
+                    finally:
+                        target.write_bytes(data);os.utime(target,ns=(info.st_atime_ns,info.st_mtime_ns))
+                finally:fixture.restore()

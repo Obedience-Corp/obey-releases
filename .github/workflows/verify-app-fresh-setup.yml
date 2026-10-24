@@ -23,7 +23,7 @@ on:
         description: Fresh install or explicitly seeded old/current managed-user proof
         type: choice
         default: none
-        options: [none, older-idle, current, missing-companion, corrupt-integrations, foreign-companion]
+        options: [none, older-idle, current, missing-companion, corrupt-integrations, foreign-companion, corrupt-receipts]
       source_revision:
         type: string
         required: true
@@ -58,8 +58,8 @@ jobs:
             zsh) [[ "$LOGIN:$EXISTING:$GIT_RECOVERY" == true:none:false && ( "$SCOPE" == mac || "$SCOPE" == intel ) ]] || exit 64 ;;
             *) echo 'Unsupported login shell proof' >&2; exit 64 ;;
           esac
-          if [[ ( "$EXISTING" == corrupt-integrations || "$EXISTING" == foreign-companion ) && "$LOGIN:$GIT_RECOVERY:$SCOPE:$LOGIN_SHELL" != false:false:windows:default ]]; then echo "Manual recovery requires Windows-only current-user mode" >&2; exit 64; fi
-          case "$LOGIN:$EXISTING" in false:none|false:older-idle|false:current|false:missing-companion|false:corrupt-integrations|false:foreign-companion|true:none) ;;
+          if [[ ( "$EXISTING" == corrupt-integrations || "$EXISTING" == foreign-companion || "$EXISTING" == corrupt-receipts ) && "$LOGIN:$GIT_RECOVERY:$SCOPE:$LOGIN_SHELL" != false:false:windows:default ]]; then echo "Manual recovery requires Windows-only current-user mode" >&2; exit 64; fi
+          case "$LOGIN:$EXISTING" in false:none|false:older-idle|false:current|false:missing-companion|false:corrupt-integrations|false:foreign-companion|false:corrupt-receipts|true:none) ;;
             *) echo 'Login proof requires unseeded fresh setup; invalid mode' >&2; exit 64 ;; esac
       - uses: actions/setup-python@v6
         with:
