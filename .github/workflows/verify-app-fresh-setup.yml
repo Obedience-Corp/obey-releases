@@ -5,11 +5,16 @@ on:
       platform_scope:
         type: choice
         default: all
-        options: [all, linux, intel, appimage, deb]
+        options: [all, linux, intel, appimage, deb, mac, windows]
       verify_missing_git_manual:
         description: Prove actual missing Git detection, exact manual restoration and App Retry (not automatic authorization)
         type: boolean
         default: false
+      login_shell:
+        description: Actual account shell or stock WindowsPowerShell5.1 (requires matching targeted login proof)
+        type: choice
+        default: default
+        options: [default, windows-powershell, zsh]
       verify_login_shell:
         description: Prove required commands and foreign profile preservation in ordinary fresh login shells
         type: boolean
@@ -28,7 +33,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: fresh-default-setup-${{ inputs.source_revision }}-${{ inputs.existing_user }}-login-${{ inputs.verify_login_shell || false }}-git-${{ inputs.verify_missing_git_manual || false }}
+  group: fresh-default-setup-${{ inputs.source_revision }}-${{ inputs.existing_user }}-login-${{ inputs.verify_login_shell || false }}-git-${{ inputs.verify_missing_git_manual || false }}-shell-${{ inputs.login_shell || 'default' }}
   cancel-in-progress: false
 jobs:
   anonymous-inputs:
@@ -41,11 +46,18 @@ jobs:
       - name: Validate fresh-only shell proof selection
         env:
           LOGIN: ${{ inputs.verify_login_shell || false }}
+          LOGIN_SHELL: ${{ inputs.login_shell || 'default' }}
           EXISTING: ${{ inputs.existing_user || 'none' }}
           GIT_RECOVERY: ${{ inputs.verify_missing_git_manual || false }}
           SCOPE: ${{ inputs.platform_scope || 'all' }}
         run: |
           if [[ "$GIT_RECOVERY" == true && "$LOGIN:$EXISTING:$SCOPE" != false:none:deb ]]; then echo "Git recovery requires unseeded Deb-only mode" >&2; exit 64; fi
+          case "$LOGIN_SHELL" in
+            default) ;;
+            windows-powershell) [[ "$LOGIN:$EXISTING:$GIT_RECOVERY:$SCOPE" == true:none:false:windows ]] || exit 64 ;;
+            zsh) [[ "$LOGIN:$EXISTING:$GIT_RECOVERY" == true:none:false && ( "$SCOPE" == mac || "$SCOPE" == intel ) ]] || exit 64 ;;
+            *) echo 'Unsupported login shell proof' >&2; exit 64 ;;
+          esac
           case "$LOGIN:$EXISTING" in false:none|false:older-idle|false:current|false:missing-companion|true:none) ;;
             *) echo 'Login proof requires unseeded fresh setup; invalid mode' >&2; exit 64 ;; esac
       - uses: actions/setup-python@v6
@@ -69,7 +81,7 @@ jobs:
       fail-fast: false
       matrix:
         include: >-
-          ${{ fromJSON(inputs.platform_scope == 'deb' && '[{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu","package":"both","format":"deb"}]' || inputs.platform_scope == 'appimage' && '[{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu","package":"appimage","format":"appimage"}]' || inputs.platform_scope == 'intel' && '[{"runner":"macos-15-intel","target":"x86_64-apple-darwin","package":"both","format":"dmg"}]' || inputs.platform_scope == 'linux' && '[{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu","package":"both","format":"deb"},{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu","package":"appimage","format":"appimage"}]' || '[{"runner":"macos-15","target":"aarch64-apple-darwin","package":"both","format":"dmg"},{"runner":"macos-15-intel","target":"x86_64-apple-darwin","package":"both","format":"dmg"},{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu","package":"both","format":"deb"},{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu","package":"appimage","format":"appimage"},{"runner":"windows-2025","target":"x86_64-pc-windows-msvc","package":"both","format":"nsis"}]') }}
+          ${{ fromJSON(inputs.platform_scope == 'windows' && '[{"runner":"windows-2025","target":"x86_64-pc-windows-msvc","package":"both","format":"nsis"}]' || inputs.platform_scope == 'mac' && '[{"runner":"macos-15","target":"aarch64-apple-darwin","package":"both","format":"dmg"},{"runner":"macos-15-intel","target":"x86_64-apple-darwin","package":"both","format":"dmg"}]' || inputs.platform_scope == 'deb' && '[{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu","package":"both","format":"deb"}]' || inputs.platform_scope == 'appimage' && '[{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu","package":"appimage","format":"appimage"}]' || inputs.platform_scope == 'intel' && '[{"runner":"macos-15-intel","target":"x86_64-apple-darwin","package":"both","format":"dmg"}]' || inputs.platform_scope == 'linux' && '[{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu","package":"both","format":"deb"},{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu","package":"appimage","format":"appimage"}]' || '[{"runner":"macos-15","target":"aarch64-apple-darwin","package":"both","format":"dmg"},{"runner":"macos-15-intel","target":"x86_64-apple-darwin","package":"both","format":"dmg"},{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu","package":"both","format":"deb"},{"runner":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu","package":"appimage","format":"appimage"},{"runner":"windows-2025","target":"x86_64-pc-windows-msvc","package":"both","format":"nsis"}]') }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: ${{ inputs.verify_missing_git_manual && 90 || matrix.runner == 'ubuntu-24.04' && 60 || 45 }}
     defaults:
@@ -82,7 +94,7 @@ jobs:
           SCOPE: ${{ inputs.platform_scope || 'all' }}
         run: |
           test "$KIND" = github-hosted
-          case "$SCOPE" in all|linux|intel|appimage|deb) ;; *) echo 'Unsupported platform scope' >&2; exit 1 ;; esac
+          case "$SCOPE" in all|linux|intel|appimage|deb|mac|windows) ;; *) echo 'Unsupported platform scope' >&2; exit 1 ;; esac
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
@@ -128,9 +140,10 @@ jobs:
           PACKAGE: ${{ matrix.package }}
           EXISTING_USER: ${{ inputs.existing_user || 'none' }}
           VERIFY_LOGIN_SHELL: ${{ inputs.verify_login_shell || false }}
+          LOGIN_SHELL: ${{ inputs.login_shell || 'default' }}
           VERIFY_MISSING_GIT_MANUAL: ${{ inputs.verify_missing_git_manual || false }}
         run: |
-          flags=()
+          flags=(--login-shell "$LOGIN_SHELL")
           if [[ "$VERIFY_LOGIN_SHELL" == true ]]; then flags+=(--verify-login-shell); fi
           if [[ "$VERIFY_MISSING_GIT_MANUAL" == true ]]; then flags+=(--verify-missing-git-manual); fi
           prefix=()

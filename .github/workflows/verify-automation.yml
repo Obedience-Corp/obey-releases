@@ -55,12 +55,16 @@ jobs:
         env:
           CANDIDATE_NATIVE_DISPOSABLE: '1'
           CANDIDATE_RUNNER_KIND: ${{ runner.environment }}
-        run: python tests/integration_mac_window_tools.py
+        run: |
+          python tests/integration_mac_window_tools.py
+          python tests/integration_mac_login_account.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: mac-window-tools-${{ matrix.runner }}
-          path: ${{ runner.temp }}/mac-window-tools-proof/
+          path: |
+            ${{ runner.temp }}/mac-window-tools-proof/
+            ${{ runner.temp }}/mac-login-account-proof/
           if-no-files-found: warn
   contracts:
     runs-on: ubuntu-24.04

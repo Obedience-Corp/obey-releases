@@ -615,3 +615,40 @@ Both fixtures run as a normal account. Only real package mutations use sudo;
 cache files owned by the verifier and proving final temporary-directory cleanup.
 The isolated test image's fixture-only sudo configuration simulates the hosted
 account; no host sudo or authentication policy is changed.
+
+
+### Explicit ordinary account shells
+
+The fresh workflow's `login_shell` input defaults to `default`, preserving the
+existing full matrix and actual account Bash/Zsh or installed PowerShell7 path.
+Nondefault choices require `verify_login_shell=true`, no existing-user seed and
+no missing-Git mode; invalid platform/scope combinations fail before input fetch.
+
+`windows-powershell` with `platform_scope=windows` selects the stock
+`SystemRoot/System32/WindowsPowerShell/v1.0/powershell.exe`, verifies its actual
+5.1 runtime and queries its own CurrentUserAllHosts profile. The ordinary prompt
+still uses the existing native WinPTY transport and only `-NoLogo`, without
+profile suppression, noninteractive startup or execution-policy changes. The
+Windows native control runs positive argv/EOF/exit, timeout and intentional
+adapter-death controls for both installed PowerShell7 and stock5.1. Microsoft
+documents these startup options in [about PowerShell.exe](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_powershell_exe?view=powershell-5.1).
+
+`zsh` with `platform_scope=mac` (both architectures) or `intel` selects actual
+`/bin/zsh` for the disposable macOS account before the App launches. The fixture
+checks Directory Services UID/home, permitted system shell and exact original
+value; it changes only that account's UserShell and matching child environment,
+then requires the real passwd/profile/login path. Cleanup restores the original
+account and environment, refuses unexpected foreign changes, and cannot qualify
+a run if restoration fails. Both Mac CI jobs separately exercise real account
+selection, interactive login and restoration, including a failure after an
+actual Directory Services write. That mutation control requires a non-Zsh
+baseline and fails explicitly if it cannot exercise the write; the product
+already-Zsh no-op branch has separate mocked contracts. These helper controls do
+not establish App setup or required-tool availability.
+
+Selected-shell App acceptance still requires original public payload checks,
+App-driven provisioning, all five ordinary command/version/wrapper readbacks,
+foreign profile preservation, unchanged state after normal reopen, real service
+readback and complete cleanup. `new_login_shell_verified` stays false until the
+whole native journey succeeds. These hosted-machine cases do not prove cmd,
+Windows Terminal UI, consumer trust prompts, reboot or licensed useful work.

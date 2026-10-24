@@ -388,7 +388,7 @@ def wait_fresh_setup(process, installer, managed, target, output, environment, r
     return result
 
 
-def native(directory, document, target, output, linux_package="both", fresh_setup=False, public_root=None, existing_user="none", login_shell_proof=False, missing_git_manual=False):
+def native(directory, document, target, output, linux_package="both", fresh_setup=False, public_root=None, existing_user="none", login_shell_proof=False, missing_git_manual=False, login_shell_kind='default'):
     require_clean_host({"aarch64-apple-darwin": "macOS-arm64", "x86_64-apple-darwin": "macOS-x86_64", "x86_64-unknown-linux-gnu": "linux-x86_64", "x86_64-pc-windows-msvc": "windows-x86_64"}.get(target))
     if existing_user not in ("none", "older-idle", "current", "missing-companion") or existing_user != "none" and not fresh_setup:
         raise ValueError("existing-user scenario requires public default-home proof")
@@ -396,6 +396,7 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
         raise ValueError("new login shell proof requires unseeded public fresh setup")
     if missing_git_manual and (not fresh_setup or existing_user != 'none' or login_shell_proof or target != 'x86_64-unknown-linux-gnu' or linux_package != 'both'):
         raise ValueError('missing Git recovery requires unseeded Linux Deb fresh setup only')
+    checked_login_selection(login_shell_kind, login_shell_proof, fresh_setup, target, existing_user, missing_git_manual)
     if target not in TARGETS or native_platform() != TARGETS[target][0]:
         raise ValueError("App target does not match native machine")
     if linux_package not in ("both", "appimage") or linux_package == "appimage" and not target.endswith("linux-gnu"):
@@ -418,10 +419,12 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
     packaging_root = None
     existing_fixture = None
     login_fixture = None
+    account_fixture = None
     git_fixture = None
     report['missing_git_manual_recovery_verified'] = False
     report['automatic_git_authorization_verified'] = False
     report["new_login_shell_verified"] = False
+    report['requested_login_shell'] = login_shell_kind
     report["existing_user_scenario"] = existing_user
     report["existing_user_reconciliation_verified"] = False
     report["missing_companion_repair_verified"] = False
@@ -452,7 +455,10 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
             default_managed = upgrade.default_home_layout(Path.home(), environment)
             if login_shell_proof:
                 import login_shell
-                login_fixture = login_shell.prepare(environment, report)
+                if login_shell_kind == 'zsh':
+                    import mac_login_account
+                    account_fixture = mac_login_account.prepare(environment, report)
+                login_fixture = login_shell.prepare(environment, report, login_shell_kind)
         if not fresh_setup:
             environment.update(FESTIVAL_HOME=str(temporary / "managed"), OBEY_CONFIG=str(temporary / "obey.yaml"))
             if os.name == 'nt':
@@ -637,6 +643,8 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
         actions = []
         if process is not None and process.poll() is None:
             actions.append(lambda: stop_owned(process, environment))
+        if account_fixture is not None:
+            actions.append(account_fixture.restore)
         if git_fixture is not None:
             actions.append(git_fixture.restore)
             actions.append(git_fixture.restore_accessibility)
@@ -695,11 +703,25 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
             raise RuntimeError("owned App cleanup failed: " + "; ".join(cleanup_errors))
 
 
+def checked_login_selection(kind, enabled, fresh, target, existing, missing_git):
+    if kind not in ('default', 'windows-powershell', 'zsh'):
+        raise ValueError('unsupported ordinary login shell selection')
+    if kind == 'default':
+        return
+    if not enabled or not fresh or existing != 'none' or missing_git:
+        raise ValueError('selected login shell requires unseeded fresh login proof')
+    if kind == 'windows-powershell' and target != 'x86_64-pc-windows-msvc':
+        raise ValueError('Windows PowerShell selection requires native Windows')
+    if kind == 'zsh' and target not in ('aarch64-apple-darwin', 'x86_64-apple-darwin'):
+        raise ValueError('Zsh account selection requires native macOS')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=("fetch", "verify", "fetch-public", "verify-fresh"), required=True)
     parser.add_argument("--tag")
     parser.add_argument("--verify-login-shell", action="store_true")
+    parser.add_argument('--login-shell', choices=('default', 'windows-powershell', 'zsh'), default='default')
     parser.add_argument('--verify-missing-git-manual', action='store_true')
     parser.add_argument("--existing-user", choices=("none", "older-idle", "current", "missing-companion"), default="none")
     for name in ("version", "source"):
@@ -715,6 +737,7 @@ def main():
         raise ValueError("existing-user scenarios require verify-fresh public inputs")
     if args.verify_missing_git_manual and (args.mode != 'verify-fresh' or args.target != 'x86_64-unknown-linux-gnu' or args.linux_package != 'both' or args.existing_user != 'none' or args.verify_login_shell):
         raise ValueError('missing Git proof requires unseeded Linux Deb verify-fresh only')
+    checked_login_selection(args.login_shell, args.verify_login_shell, args.mode == 'verify-fresh', args.target, args.existing_user, args.verify_missing_git_manual)
     if args.mode in ("fetch", "verify"):
         identity(args.tag, args.version, args.source)
     if os.environ.get("CANDIDATE_RUNNER_KIND") != "github-hosted" or os.environ.get("GITHUB_REPOSITORY") != REPOSITORY:
@@ -725,7 +748,7 @@ def main():
             fetch_public(args.directory, args.source, args.version)
         else:
             document = checked_public(args.directory, args.source, args.version)
-            native((args.directory / "assets").resolve(), document, args.target, args.output.resolve(), args.linux_package, fresh_setup=True, public_root=args.directory.resolve(), existing_user=args.existing_user, login_shell_proof=args.verify_login_shell, missing_git_manual=args.verify_missing_git_manual)
+            native((args.directory / "assets").resolve(), document, args.target, args.output.resolve(), args.linux_package, fresh_setup=True, public_root=args.directory.resolve(), existing_user=args.existing_user, login_shell_proof=args.verify_login_shell, missing_git_manual=args.verify_missing_git_manual, login_shell_kind=args.login_shell)
     elif args.mode == "fetch":
         fetch(args.tag, args.version, args.source, args.directory)
     else:
