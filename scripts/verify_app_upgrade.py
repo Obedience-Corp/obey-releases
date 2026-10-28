@@ -465,6 +465,7 @@ def native(root, target, package_format, a_source, a_version, b_source, b_versio
             if mechanism == "manual":
                 normal_quit(process, binary, bundle, target, environment, output, **mac_options)
                 process = None
+                report["a_normal_quit_verified"] = True
                 if sha256(binary) != original_binary_hash:
                     raise ValueError("A changed before manual replacement; cannot attribute the upgrade")
                 report["manual_install"] = app_manual_update.install(package_format, binary, bundle, root / "b", b, target, work, environment)
@@ -496,7 +497,8 @@ def native(root, target, package_format, a_source, a_version, b_source, b_versio
             report["installed_payload_window"] = app.window_capture(process, target, output / "installed-before-quit.png", environment, **mac_options)
             if default_managed is not None:
                 first_b_stage = "manual_install" if mechanism == "manual" else "auto_restart"
-                wait_windows_setup(process, target, output, environment, report, first_b_stage + "_b")
+                window_stage = "manual_b" if mechanism == "manual" else "auto_restarted_b"
+                wait_windows_setup(process, target, output, environment, report, window_stage)
                 report["default_after_" + first_b_stage] = default_home_readback(binary.parent / (b_installer + suffix), managed, environment)
             report["running_version_before_quit"] = b_version if mechanism == "manual" or package_format == "nsis" else a_version
             normal_quit(process, binary, bundle, target, environment, output, **mac_options)
