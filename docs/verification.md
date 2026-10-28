@@ -12,6 +12,20 @@ readiness or authorize publication.
 | Does the original AppImage launch on a separate fresh host? | `verify-appimage-candidate.yml` | App draft tag, version, full source revision |
 | Does the actual signed App update mechanism work from A to B? | `verify-app-upgrade.yml` | Immutable A/B sources and versions, package format and mode |
 
+For an invited beta with no automatic feed, select `mechanism=manual` in the
+existing upgrade workflow. It quits the owned A normally, installs B from the
+published DMG/NSIS/Deb or replaces the AppImage, verifies B's exact authenticated
+payload, then quits and reopens B. Existing fixture settings, camp registration,
+selected component identities and foreign-file checks still apply. FA0027's
+manual beta handoff is the release requirement for this mode.
+
+Reports name the mechanism and separate `manual_update_verified` from
+`automatic_update_verified`; `two_version_update_verified` alone is insufficient
+to claim an automatic update. Manual mode rejects updater failure/retry options
+and never changes a feed, signature trust root or app endpoint. It does not prove
+production license access, browser trust, reboot or a user's complete first-use
+journey. Those remain separate acceptance work in the private integration lab.
+
 For example, after the producer has prepared the candidate draft:
 
 ```sh
