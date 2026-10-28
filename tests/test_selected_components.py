@@ -125,6 +125,30 @@ class SelectedContracts(unittest.TestCase):
             with self.assertRaises(ValueError):
                 checked_receipts(home)
 
+    def test_current_beta_profile_rejects_stale_receipts_and_runtime_versions(self):
+        from verify_selected_components import BETA_PACKAGES, BETA_SUITE_VERSIONS
+        with tempfile.TemporaryDirectory() as temporary:
+            home = self.fixture(Path(temporary))
+            with self.assertRaises(ValueError):
+                checked_receipts(home, packages=BETA_PACKAGES)
+            with closing(sqlite3.connect(home / 'state.db')) as database:
+                for package, version in BETA_PACKAGES.items():
+                    database.execute('update receipts set version=? where package_id=?', (version, package))
+                database.commit()
+            self.assertEqual(len(checked_receipts(home, packages=BETA_PACKAGES)['files']), 5)
+            versions = dict(BETA_SUITE_VERSIONS, obey='0.2.5', **{'camp-app': '0.1.0'})
+            tools = [{'tool': name, 'version': version, 'path': str(home / 'bin' / name),
+                      'present': True} for name, version in versions.items()]
+            tools[-1].update(protocol_major=1, capabilities=['status', 'open'])
+            tools.append({'tool': 'ob', 'present': True, 'receipt_version': '0.2.5'})
+            document = {'ok': True, 'data': {'tools': tools}}
+            checked_status(document, home, packages=BETA_PACKAGES, suite_versions=BETA_SUITE_VERSIONS)
+            for index, old in ((0, '0.16.2'), (1, '0.9.8'), (2, '0.2.3')):
+                stale = copy.deepcopy(document)
+                stale['data']['tools'][index]['version'] = old
+                with self.assertRaises(ValueError):
+                    checked_status(stale, home, packages=BETA_PACKAGES, suite_versions=BETA_SUITE_VERSIONS)
+
     def test_actual_windows_runtime_log_requires_observability_and_quiet_discovery(self):
         from verify_selected_components import checked_windows_discovery_log
         good = b'time=now level=INFO msg="daemon ready"\ntime=now level=WARN msg="optional provider not configured"\n'

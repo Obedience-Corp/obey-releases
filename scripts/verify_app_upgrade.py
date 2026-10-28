@@ -1,4 +1,4 @@
-"""Exercise the real App updater between anonymous immutable test releases.
+"""Exercise automatic or manual App updates between anonymous immutable releases.
 
 No private checkout, replacement trust root, endpoint override or test backdoor.
 Only fresh hosted accounts may execute; original package failures stay failures.
@@ -15,10 +15,11 @@ import tempfile
 import time
 
 import verify_app_candidate as app
+import app_manual_update
 from app_upgrade_contract import checked_upgrade_pair, checked_public, fetch_public, persisted_snapshot, sha256, verify_persisted
 from verify_candidate import command, native_platform, wait_until
 from owned_update_proxy import UpdateProxy, SignatureFallbackProxy
-from verify_selected_components import TARGETS as COMPONENT_TARGETS, checked_bootstrap, checked_receipts, checked_status, fetch, require_clean_host
+from verify_selected_components import BETA_PACKAGES, BETA_SUITE_VERSIONS, TARGETS as COMPONENT_TARGETS, checked_bootstrap, checked_receipts, checked_status, fetch, require_clean_host
 
 SCRIPT = Path(__file__).resolve().parent
 MACHINES = {"aarch64-apple-darwin": "macOS-arm64", "x86_64-apple-darwin": "macOS-x86_64",
@@ -118,9 +119,9 @@ def default_home_layout(home, environment):
 def default_home_readback(installer, managed, environment):
     """Read public sidecar resolution with the unchanged default environment."""
     status = command([installer, "--managed", "status", "--plugin", "obedience-corp/camp-app", "--json"], environment, json_output=True)
-    checked_status(status, managed)
+    checked_status(status, managed, packages=BETA_PACKAGES, suite_versions=BETA_SUITE_VERSIONS)
     return {"installer_status": status, "selected_mtime_ns": {
-        row["path"]: Path(row["path"]).stat().st_mtime_ns for row in checked_receipts(managed)["files"]}}
+        row["path"]: Path(row["path"]).stat().st_mtime_ns for row in checked_receipts(managed, packages=BETA_PACKAGES)["files"]}}
 
 
 def wait_windows_setup(process, target, output, environment, report, stage):
@@ -147,7 +148,7 @@ def bootstrap_fixture(root, environment, machine, managed=None):
         result = command([bootstrap, "--managed", "install", selected, "--no-shell-setup", "--no-restart", "--json"], environment, timeout=240, json_output=True)
         if not result.get("ok"):
             raise RuntimeError("public selected-package fixture installation failed")
-    receipts = checked_receipts(managed)
+    receipts = checked_receipts(managed, packages=BETA_PACKAGES)
     camp = managed / "bin" / ("camp" + suffix)
     help_text = command([camp, "init", "--help"], environment)
     if any(flag not in help_text for flag in ("--no-git", "--no-skills", "--name", "--description", "--mission")):
@@ -181,7 +182,7 @@ def component_identity(document):
 
 
 def retained_state(fixture, environment):
-    selected = checked_receipts(fixture["managed_home"])
+    selected = checked_receipts(fixture["managed_home"], packages=BETA_PACKAGES)
     if component_identity(selected) != component_identity(fixture["receipts"]):
         raise ValueError("upgrade changed selected package identities or file hashes")
     result = verify_persisted(fixture["snapshot"], fixture["settings_path"], fixture["settings"])
@@ -332,8 +333,10 @@ def signature_check_then_retry(process, binary, fixture, proxy, target, output, 
     report["signature_rejection_preserved_a"] = True
     report["signature_retry_request_offset"] = len(snapshot["requests"])
 
-def native(root, target, package_format, a_source, a_version, b_source, b_version, output, installation_context="redirected", failure_mode="none"):
+def native(root, target, package_format, a_source, a_version, b_source, b_version, output, installation_context="redirected", failure_mode="none", mechanism="updater"):
     require_clean_host(MACHINES.get(target))
+    if mechanism not in ("updater", "manual") or mechanism == "manual" and failure_mode != "none":
+        raise ValueError("manual replacement cannot claim updater failure/retry proof")
     if target not in MACHINES or native_platform() != app.TARGETS[target][0] or package_format not in FORMATS:
         raise ValueError("upgrade target/format does not match native machine")
     allowed = "dmg" if target.endswith("apple-darwin") else "nsis" if target.endswith("windows-msvc") else None
@@ -359,6 +362,7 @@ def native(root, target, package_format, a_source, a_version, b_source, b_versio
     report = {"a_source": a_source, "a_version": a_version, "b_source": b_source, "b_version": b_version,
               "a_installer_basename": a_installer, "b_installer_basename": b_installer,
               "target": target, "package_format": package_format, "installation_context": installation_context, "failure_mode": failure_mode,
+              "mechanism": mechanism, "automatic_update_verified": False, "manual_update_verified": False,
               "default_home_relaunch_verified": False, "two_version_update_verified": False,
               "license_access_verified": False, "useful_first_use_verified": False, "consumer_trust_verified": False, "reboot_verified": False, "native_failure_recovery_verified": False}
     environment = {key: value for key, value in os.environ.items() if not key.endswith(("_TOKEN", "_PASSWORD", "_PRIVATE_KEY"))}
@@ -435,6 +439,7 @@ def native(root, target, package_format, a_source, a_version, b_source, b_versio
                 binary = work / "Festival.App.AppImage"
                 shutil.copyfile(artifact(root / "a", a, target, ".AppImage"), binary)
                 binary.chmod(0o755)
+        original_binary_hash = sha256(binary)
         if failure_mode != "none":
             proxy_names = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy")
             if any(environment.get(name) for name in proxy_names):
@@ -457,7 +462,16 @@ def native(root, target, package_format, a_source, a_version, b_source, b_versio
             # A's real Update ready modal hides the underlying licensing screen
             # from UIA. Invoke its authenticated Restart now control below;
             # require unobscured setup completion in auto-restarted/reopened B.
-            if package_format == "nsis":
+            if mechanism == "manual":
+                normal_quit(process, binary, bundle, target, environment, output, **mac_options)
+                process = None
+                report["a_normal_quit_verified"] = True
+                if sha256(binary) != original_binary_hash:
+                    raise ValueError("A changed before manual replacement; cannot attribute the upgrade")
+                report["manual_install"] = app_manual_update.install(package_format, binary, bundle, root / "b", b, target, work, environment)
+                process = subprocess.Popen([str(binary)], env=environment, stdout=log, stderr=subprocess.STDOUT, start_new_session=os.name != "nt")
+                report["manual_b_pid"] = process.pid
+            elif package_format == "nsis":
                 initial = windows_query("identity", environment, APP_UPGRADE_PID=str(process.pid))
                 if proxy is not None:
                     (signature_check_then_retry if failure_mode == "signature-fallback" else offline_check_then_retry)(process, binary, fixture, proxy, target, output, environment, report, initial)
@@ -482,9 +496,11 @@ def native(root, target, package_format, a_source, a_version, b_source, b_versio
             report["after_install"] = retained_state(fixture, environment)
             report["installed_payload_window"] = app.window_capture(process, target, output / "installed-before-quit.png", environment, **mac_options)
             if default_managed is not None:
-                wait_windows_setup(process, target, output, environment, report, "auto_restarted_b")
-                report["default_after_auto_restart"] = default_home_readback(binary.parent / (b_installer + suffix), managed, environment)
-            report["running_version_before_quit"] = b_version if package_format == "nsis" else a_version
+                first_b_stage = "manual_install" if mechanism == "manual" else "auto_restart"
+                window_stage = "manual_b" if mechanism == "manual" else "auto_restarted_b"
+                wait_windows_setup(process, target, output, environment, report, window_stage)
+                report["default_after_" + first_b_stage] = default_home_readback(binary.parent / (b_installer + suffix), managed, environment)
+            report["running_version_before_quit"] = b_version if mechanism == "manual" or package_format == "nsis" else a_version
             normal_quit(process, binary, bundle, target, environment, output, **mac_options)
             process = None
             report["normal_quit_verified"] = True
@@ -498,7 +514,7 @@ def native(root, target, package_format, a_source, a_version, b_source, b_versio
                 wait_windows_setup(process, target, output, environment, report, "reopened_b")
                 report["default_after_reopen"] = default_home_readback(binary.parent / (b_installer + suffix), managed, environment)
                 initial_mtimes = report["default_before"]["selected_mtime_ns"]
-                if any(report[key]["selected_mtime_ns"] != initial_mtimes for key in ("default_after_auto_restart", "default_after_reopen")):
+                if any(report[key]["selected_mtime_ns"] != initial_mtimes for key in ("default_after_" + first_b_stage, "default_after_reopen")):
                     raise ValueError("current selected executables were needlessly rewritten")
                 report["default_home_relaunch_verified"] = True
             if proxy is not None:
@@ -516,10 +532,14 @@ def native(root, target, package_format, a_source, a_version, b_source, b_versio
                 report["verified_failure_cases"] = ["updater-signature-fallback" if failure_mode == "signature-fallback" else "offline-update-check"]
                 report["native_failure_recovery_verified"] = True
             report["two_version_update_verified"] = True
+            report["automatic_update_verified"] = mechanism == "updater"
+            report["manual_update_verified"] = mechanism == "manual"
         finally:
             log.close()
     except BaseException as error:
         report["two_version_update_verified"] = False
+        report["automatic_update_verified"] = False
+        report["manual_update_verified"] = False
         report["native_failure_recovery_verified"] = False
         report["failure"] = str(error)
         raise
@@ -567,6 +587,8 @@ def native(root, target, package_format, a_source, a_version, b_source, b_versio
         if errors:
             report["cleanup_failure"] = errors
             report["two_version_update_verified"] = False
+            report["automatic_update_verified"] = False
+            report["manual_update_verified"] = False
             report["default_home_relaunch_verified"] = False
             report["native_failure_recovery_verified"] = False
         (output / "proof.json").write_text(json.dumps(report, indent=2) + "\n")
@@ -581,6 +603,7 @@ if __name__ == "__main__":
         parser.add_argument("--" + label + "-source", required=True)
         parser.add_argument("--" + label + "-version", required=True)
     parser.add_argument("--failure-mode", choices=("none", "offline-check", "signature-fallback"), default="none")
+    parser.add_argument("--mechanism", choices=("updater", "manual"), default="updater")
     parser.add_argument("--target")
     parser.add_argument("--format", choices=tuple(FORMATS))
     parser.add_argument("--installation-context", choices=("redirected", "default-home"), default="redirected")
@@ -592,4 +615,4 @@ if __name__ == "__main__":
         b = fetch_public(root / "b", args.b_source, args.b_version)
         checked_upgrade_pair(a, b)
     else:
-        native(root, args.target, args.format, args.a_source, args.a_version, args.b_source, args.b_version, Path("upgrade-proof").resolve(), args.installation_context, args.failure_mode)
+        native(root, args.target, args.format, args.a_source, args.a_version, args.b_source, args.b_version, Path("upgrade-proof").resolve(), args.installation_context, args.failure_mode, args.mechanism)

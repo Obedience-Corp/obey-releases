@@ -15,7 +15,7 @@ if os.environ.get('CANDIDATE_TEST_CONTAINER') != '1' or not Path('/.dockerenv').
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'scripts'))
 from partial_install_proxy import PartialInstallProxy
 from partial_setup import partial_readback
-from verify_selected_components import checked_receipts, checked_status
+from verify_selected_components import BETA_PACKAGES, BETA_SUITE_VERSIONS, checked_receipts, checked_status
 
 EXPECTED = {'aarch64': 'c662189c37186e7051bfab84d06d8533afc254323b94a3ec91aea374b2af9e12',
             'x86_64': 'ae68d564dd6b5ed7877161598ffdb413d4a1f71e4cc6f16976b69b81bd379199'}
@@ -46,9 +46,12 @@ with tempfile.TemporaryDirectory() as temporary:
         install('festival');install('obey')
         failed=install('obedience-corp/camp-app',expected=1)
         assert failed['error']['code']=='E_ARTIFACT_DO',failed
-        before=partial_readback(binary,managed,env)
+        expected = {name: version for name, version in BETA_PACKAGES.items() if name != 'obedience-corp/camp-app'}
+        tools = {name: (version, 'obedience-corp/festival') for name, version in BETA_SUITE_VERSIONS.items()}
+        tools.update(obey=(BETA_PACKAGES['obedience-corp/obey'], 'obedience-corp/obey'), ob=('0.1.0', 'obedience-corp/obey'))
+        before=partial_readback(binary,managed,env,expected=expected,tools_expected=tools)
         proxy.recover();install('obedience-corp/camp-app')
-        after=checked_receipts(managed)
+        after=checked_receipts(managed,packages=BETA_PACKAGES)
         assert [r for r in after['receipts'] if r['package_id']!='obedience-corp/camp-app']==before['receipts']['receipts']
         assert [r for r in after['files'] if r['receipt_pkg_id']!='obedience-corp/camp-app']==before['receipts']['files']
         for row in before['physical']:
@@ -56,7 +59,7 @@ with tempfile.TemporaryDirectory() as temporary:
             assert Path(row['path']).stat().st_mtime_ns==row['mtime_ns']
         status=subprocess.run([str(binary),'status','--plugin','obedience-corp/camp-app','--json','--managed'],
                               env=env,capture_output=True,text=True,check=True,timeout=30)
-        checked_status(json.loads(status.stdout),managed)
+        checked_status(json.loads(status.stdout),managed,packages=BETA_PACKAGES,suite_versions=BETA_SUITE_VERSIONS)
         assert not proxy.evidence()['ownership_errors']
         assert not any(r['outcome']=='denied' for r in proxy.evidence()['requests'])
         print(json.dumps({'actual_released_installer':'0.3.8','before_retry':before,
