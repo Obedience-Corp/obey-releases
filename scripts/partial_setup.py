@@ -52,18 +52,20 @@ def checked_report(document, *, ready=False):
     return document
 
 
-def partial_readback(installer, managed, environment):
+def partial_readback(installer, managed, environment, *, expected=None, tools_expected=None):
+    expected = EXPECTED if expected is None else expected
+    tools_expected = TOOLS if tools_expected is None else tools_expected
     status = command([installer, '--managed', 'status', '--plugin', COMPANION, '--json'],
                      environment, json_output=True)
     if status.get('ok') is not True or status['data'].get('signals_incomplete'):
         raise ValueError('partial package status must be readable')
     tools = status['data']['tools']
-    for name, (version, package) in TOOLS.items():
+    for name, (version, package) in tools_expected.items():
         rows = [row for row in tools if row.get('tool') == name]
         if (len(rows) != 1 or rows[0].get('present') is not True or
                 rows[0].get('version') != version or rows[0].get('origin') != 'managed' or
                 rows[0].get('path') != str(managed / 'bin' / name) or
-                rows[0].get('package') != package or rows[0].get('receipt_version') != EXPECTED[package]):
+                rows[0].get('package') != package or rows[0].get('receipt_version') != expected[package]):
             raise ValueError('partial status lost the earlier real selected tools')
     companion = [row for row in tools if row.get('tool') == 'camp-app']
     if len(companion) != 1 or companion[0].get('present') is not False or os.path.lexists(managed/'bin/camp-app'):
@@ -72,15 +74,15 @@ def partial_readback(installer, managed, environment):
         db.row_factory = sqlite3.Row
         receipts = [dict(row) for row in db.execute('select * from receipts order by package_id')]
         files = [dict(row) for row in db.execute('select * from receipt_files order by path')]
-    if ({row['package_id']: row['version'] for row in receipts} != EXPECTED or
+    if ({row['package_id']: row['version'] for row in receipts} != expected or
             any(row['source'] != 'official-obey' or row['channel'] != 'stable' for row in receipts)):
         raise ValueError('partial receipts must contain exactly the two authentic placed packages')
-    if len(files) != 4 or {Path(row['path']).name for row in files} != TOOLS.keys():
+    if len(files) != 4 or {Path(row['path']).name for row in files} != tools_expected.keys():
         raise ValueError('partial receipt inventory differs from the four earlier executables')
     identities = []
     for row in files:
         path = Path(row['path'])
-        if path != managed/'bin'/path.name or row['receipt_pkg_id'] != TOOLS[path.name][1]:
+        if path != managed/'bin'/path.name or row['receipt_pkg_id'] != tools_expected[path.name][1]:
             raise ValueError('partial receipt is not bound to its actual selected path')
         value = physical(path)
         if value['sha256'] != row['hash'] or value['uid'] != os.getuid():

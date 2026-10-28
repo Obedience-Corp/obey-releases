@@ -17,6 +17,10 @@ from verify_candidate import command, native_platform, require_disposable
 
 PACKAGES = {"obedience-corp/festival": "0.3.24", "obedience-corp/obey": "0.2.3",
             "obedience-corp/camp-app": "0.1.0"}
+# Explicit current beta expectations; historical recovery fixtures retain PACKAGES.
+BETA_PACKAGES = {"obedience-corp/festival": "0.3.25", "obedience-corp/obey": "0.2.5",
+                 "obedience-corp/camp-app": "0.1.0"}
+BETA_SUITE_VERSIONS = {"camp": "0.17.2", "fest": "0.10.1"}
 TARGETS = {"macOS-arm64": ("darwin/arm64", "darwin-arm64"),
            "macOS-x86_64": ("darwin/amd64", "darwin-amd64"),
            "linux-x86_64": ("linux/amd64", "linux-amd64"),
@@ -43,7 +47,7 @@ def checked_bootstrap(data, checksums, name):
     return digest
 
 
-def checked_receipts(home, *, obey_version=None, immutable=False, external_suite=None, standalone_companion=False):
+def checked_receipts(home, *, obey_version=None, immutable=False, external_suite=None, standalone_companion=False, packages=None):
     # Only an independently quiescent fixture may assert immutable storage.
     # This does not discover or lock out writers. Normal live readback stays ro.
     def no_sidecars():
@@ -55,13 +59,14 @@ def checked_receipts(home, *, obey_version=None, immutable=False, external_suite
         raise ValueError('unsupported external suite fixture')
     if type(standalone_companion) is not bool or standalone_companion and external_suite is not None:
         raise ValueError('unsupported mixed standalone companion profile')
-    expected = dict(PACKAGES)
+    packages = PACKAGES if packages is None else packages
+    expected = dict(packages)
     if standalone_companion:
         expected.pop('obedience-corp/camp-app')
     if external_suite is not None:
         expected.pop('obedience-corp/festival')
     if obey_version is not None:
-        if obey_version not in ("0.2.2", PACKAGES["obedience-corp/obey"]):
+        if obey_version not in ("0.2.2", packages["obedience-corp/obey"]):
             raise ValueError("unsupported existing Obey fixture version")
         expected["obedience-corp/obey"] = obey_version
     with closing(sqlite3.connect((home / "state.db").as_uri() + ("?mode=ro&immutable=1" if immutable else "?mode=ro"), uri=True)) as database:
@@ -111,19 +116,20 @@ def record_windows_discovery_snapshot(source, output, report):
     evidence['verified'] = True
 
 
-def checked_status(document, home, *, obey_version=None, external_suite=None, standalone_companion=False):
+def checked_status(document, home, *, obey_version=None, external_suite=None, standalone_companion=False, packages=None, suite_versions=None):
     if external_suite not in (None, '0.3.24'):
         raise ValueError('unsupported compatible external suite fixture')
     if type(standalone_companion) is not bool or standalone_companion and external_suite is not None:
         raise ValueError('unsupported mixed standalone companion status')
-    required_obey = PACKAGES["obedience-corp/obey"] if obey_version is None else obey_version
-    if required_obey not in ("0.2.2", PACKAGES["obedience-corp/obey"]):
+    packages = PACKAGES if packages is None else packages
+    required_obey = packages["obedience-corp/obey"] if obey_version is None else obey_version
+    if required_obey not in ("0.2.2", packages["obedience-corp/obey"]):
         raise ValueError("unsupported existing Obey fixture version")
     if not document.get("ok"):
         raise ValueError("status failed")
     tools = document["data"]["tools"]
-    suite_versions = {'camp': '0.16.2', 'fest': '0.9.8'}
-    for name, version in dict(suite_versions, obey=required_obey, **{'camp-app': '0.1.0'}).items():
+    suite_versions = {'camp': '0.16.2', 'fest': '0.9.8'} if suite_versions is None else suite_versions
+    for name, version in dict(suite_versions, obey=required_obey, **{'camp-app': packages['obedience-corp/camp-app']}).items():
         matches = [tool for tool in tools if tool.get("tool") == name]
         if len(matches) != 1 or not matches[0].get("present") or matches[0].get("version") != version:
             raise ValueError("selected native version is missing or unexpected")
