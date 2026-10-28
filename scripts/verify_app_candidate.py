@@ -383,14 +383,14 @@ def stop_owned(process, environment):
 
 def fresh_setup_readback(installer, managed, environment, external_suite=None, active_session=None, service_recovery=None):
     import verify_app_upgrade as upgrade
-    from verify_selected_components import checked_receipts
+    from verify_selected_components import BETA_PACKAGES, checked_receipts
     if service_recovery is not None:
         status = service_recovery.readback()
     elif active_session is not None:
         status = active_session.readback()
     elif external_suite is None:
         status = upgrade.default_home_readback(installer, managed, environment)
-        status["receipts"] = checked_receipts(managed)
+        status["receipts"] = checked_receipts(managed, packages=BETA_PACKAGES)
     else:
         status = external_suite.readback()
     obey = managed / "bin" / ("obey.exe" if os.name == "nt" else "obey")

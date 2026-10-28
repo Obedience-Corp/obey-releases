@@ -149,6 +149,25 @@ class SelectedContracts(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     checked_status(stale, home, packages=BETA_PACKAGES, suite_versions=BETA_SUITE_VERSIONS)
 
+    def test_fresh_setup_uses_same_current_profile_for_status_and_persisted_receipts(self):
+        import verify_app_candidate as app
+        from verify_selected_components import BETA_PACKAGES
+        with tempfile.TemporaryDirectory() as temporary:
+            home = self.fixture(Path(temporary))
+            with closing(sqlite3.connect(home / 'state.db')) as database:
+                for package, version in BETA_PACKAGES.items():
+                    database.execute('update receipts set version=? where package_id=?', (version, package))
+                database.commit()
+            service = {'installed': True, 'loaded': True, 'socket_reachable': True, 'daemon_pid': 123}
+            with patch('verify_app_upgrade.default_home_readback', return_value={}), patch.object(app, 'command', return_value=service):
+                actual = app.fresh_setup_readback(home / 'bin/festival', home, {})
+                self.assertEqual({r['package_id']: r['version'] for r in actual['receipts']['receipts']}, BETA_PACKAGES)
+                with closing(sqlite3.connect(home / 'state.db')) as database:
+                    database.execute("update receipts set version='0.2.3' where package_id='obedience-corp/obey'")
+                    database.commit()
+                with self.assertRaises(ValueError):
+                    app.fresh_setup_readback(home / 'bin/festival', home, {})
+
     def test_actual_windows_runtime_log_requires_observability_and_quiet_discovery(self):
         from verify_selected_components import checked_windows_discovery_log
         good = b'time=now level=INFO msg="daemon ready"\ntime=now level=WARN msg="optional provider not configured"\n'
