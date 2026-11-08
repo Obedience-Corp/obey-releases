@@ -51,6 +51,12 @@ up to four attempts with bounded backoff. Each attempt downloads the complete
 artifact; byte limits and checksum verification remain required. Permanent HTTP
 errors, invalid TLS, oversized payloads and checksum failures are not retried.
 
+The released-Installer transport control uses the live signed catalog. It records
+successful package versions, executable versions, receipts and physical files
+before blocking the companion download, then verifies those exact earlier files
+and receipts through failure and retry. Historical beta version constants remain
+specific to their original App acceptance fixtures.
+
 ## Transitional product tests
 
 `verify-app-fresh-setup.yml` and `verify-linux-clean-vm.yml` currently run broader
