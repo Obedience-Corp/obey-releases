@@ -46,6 +46,11 @@ their three-file contract. This archive check supports the Linux terminal-input
 distribution requirement tracked by WI-1634f0; administrator authorization and
 provider input acceptance remain producer/private-lab responsibilities.
 
+Anonymous selected-component downloads retry transient gateway/transport failures
+up to four attempts with bounded backoff. Each attempt downloads the complete
+artifact; byte limits and checksum verification remain required. Permanent HTTP
+errors, invalid TLS, oversized payloads and checksum failures are not retried.
+
 ## Transitional product tests
 
 `verify-app-fresh-setup.yml` and `verify-linux-clean-vm.yml` currently run broader
