@@ -48,14 +48,25 @@ def checked_manifest(document, version, source):
     return {item["filename"]: item["sha256"] for item in artifacts}
 
 
-def checked_payloads(archive, expected_hash, windows):
+def requires_terminal_input_payload(version, target):
+    # Obey 0.6.0 is the first release with the paired Linux setup payload.
+    # Historical candidates retain their original three-file contract.
+    release = tuple(int(part) for part in version.split("-", 1)[0].split("."))
+    return target.startswith("linux-") and release >= (0, 6, 0)
+
+
+def checked_payloads(archive, expected_hash, windows, *, linux_terminal_input=False):
+    if windows and linux_terminal_input:
+        raise ValueError("Linux terminal input payload cannot be required on Windows")
     if hashlib.sha256(archive.read_bytes()).hexdigest() != expected_hash:
         raise ValueError("candidate archive checksum mismatch")
     suffix = ".exe" if windows else ""
     expected = {"obey" + suffix, "ob" + suffix, "LICENSE"}
+    if linux_terminal_input:
+        expected.update({"obey-pty-acquire", "install-terminal-input.sh"})
     with tarfile.open(archive, "r:gz") as stream:
         members = stream.getmembers()
-        if len(members) != 3 or {item.name for item in members} != expected:
+        if len(members) != len(expected) or {item.name for item in members} != expected:
             raise ValueError("unexpected, duplicate or unsafe archive paths")
         if any(not item.isfile() or item.size <= 0 or item.size > 512 * 1024 * 1024 for item in members):
             raise ValueError("archive contains a link, empty or oversized payload")
@@ -119,7 +130,8 @@ def native_proof(directory, version, source, target, expected_hash):
         raise RuntimeError("runner does not match the actual target OS/architecture")
     archive = directory / f"obey-{version}-{target}.tar.gz"
     windows = target.startswith("windows-")
-    payloads = checked_payloads(archive, expected_hash, windows)
+    payloads = checked_payloads(archive, expected_hash, windows,
+                                linux_terminal_input=requires_terminal_input_payload(version, target))
     report = {"source_revision": source, "version": version, "target": target,
               "sha256": expected_hash, "runner_platform": native_platform()}
     with tempfile.TemporaryDirectory(prefix="obey-proof-", dir=os.environ["RUNNER_TEMP"]) as temporary:
@@ -249,7 +261,8 @@ def checked_downloads(directory, version, source):
         raise ValueError("checksums do not match the complete candidate manifest")
     for target in TARGETS:
         filename = f"obey-{version}-{target}.tar.gz"
-        checked_payloads(directory / filename, hashes[filename], target.startswith("windows-"))
+        checked_payloads(directory / filename, hashes[filename], target.startswith("windows-"),
+                         linux_terminal_input=requires_terminal_input_payload(version, target))
     return hashes
 
 

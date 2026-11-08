@@ -38,6 +38,25 @@ Replace all three placeholders with matching reviewed values. Check existing
 runs before dispatching. Draft-download jobs validate data with their repository
 token; native jobs receive validated artifacts and must not receive that token.
 
+Obey 0.6.0 and later Linux candidates must include exactly `obey`, `ob`, `LICENSE`,
+`obey-pty-acquire` and `install-terminal-input.sh`. Both helper files are required
+and executable; links, duplicates, additional paths and missing payloads fail
+verification. Earlier Linux candidates and all macOS/Windows candidates retain
+their three-file contract. This archive check supports the Linux terminal-input
+distribution requirement tracked by WI-1634f0; administrator authorization and
+provider input acceptance remain producer/private-lab responsibilities.
+
+Anonymous selected-component downloads retry transient gateway/transport failures
+up to four attempts with bounded backoff. Each attempt downloads the complete
+artifact; byte limits and checksum verification remain required. Permanent HTTP
+errors, invalid TLS, oversized payloads and checksum failures are not retried.
+
+The released-Installer transport control uses the live signed catalog. It records
+successful package versions, executable versions, receipts and physical files
+before blocking the companion download, then verifies those exact earlier files
+and receipts through failure and retry. Historical beta version constants remain
+specific to their original App acceptance fixtures.
+
 ## Transitional product tests
 
 `verify-app-fresh-setup.yml` and `verify-linux-clean-vm.yml` currently run broader

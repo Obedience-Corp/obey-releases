@@ -60,14 +60,17 @@ class CandidateContracts(unittest.TestCase):
             with self.assertRaises(ValueError):
                 checked_manifest(document, VERSION, SOURCE)
 
-    def archive(self, directory, names=("obey", "ob", "LICENSE"), link=False, executable=True):
+    def archive(self, directory, names=("obey", "ob", "LICENSE"), link=False, executable=True,
+                link_name=None, nonexecutable_name=None):
         archive = directory / "candidate.tar.gz"
         with tarfile.open(archive, "w:gz") as output:
             for index, name in enumerate(names):
                 member = tarfile.TarInfo(name)
                 member.mode = 0o755 if executable else 0o644
+                if name == nonexecutable_name:
+                    member.mode = 0o644
                 data = b"candidate bytes"
-                if link and index == 0:
+                if (link and index == 0) or name == link_name:
                     member.type = tarfile.SYMTYPE
                     member.linkname = "/outside-owned-fixture"
                     output.addfile(member)
@@ -75,6 +78,68 @@ class CandidateContracts(unittest.TestCase):
                     member.size = len(data)
                     output.addfile(member, io.BytesIO(data))
         return archive, hashlib.sha256(archive.read_bytes()).hexdigest()
+
+    def test_linux_helper_pair_fails_closed(self):
+        names = ("obey", "ob", "LICENSE", "obey-pty-acquire", "install-terminal-input.sh")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive, digest = self.archive(root, names)
+            self.assertEqual(set(checked_payloads(archive, digest, False, linux_terminal_input=True)), set(names))
+            for payload in names[3:]:
+                for options in ({"names": tuple(name for name in names if name != payload)},
+                                {"names": names + (payload,)},
+                                {"names": names, "link_name": payload},
+                                {"names": names, "nonexecutable_name": payload}):
+                    with self.subTest(payload=payload, options=options):
+                        archive, digest = self.archive(root, **options)
+                        with self.assertRaises(ValueError):
+                            checked_payloads(archive, digest, False, linux_terminal_input=True)
+            for extra in ("../outside", "libexec/obey/obey-pty-acquire", "unexpected"):
+                archive, digest = self.archive(root, names + (extra,))
+                with self.subTest(extra=extra), self.assertRaises(ValueError):
+                    checked_payloads(archive, digest, False, linux_terminal_input=True)
+            archive, digest = self.archive(root, names)
+            with self.assertRaises(ValueError):
+                checked_payloads(archive, digest, True, linux_terminal_input=True)
+            with self.assertRaises(ValueError):
+                checked_payloads(archive, "0" * 64, False, linux_terminal_input=True)
+
+    def candidate_files(self, root, version, override_target=None, override_names=None):
+        artifacts = []
+        for target in TARGETS:
+            suffix = ".exe" if target.startswith("windows-") else ""
+            names = ("obey" + suffix, "ob" + suffix, "LICENSE")
+            if target.startswith("linux-") and version != "0.5.0":
+                names += ("obey-pty-acquire", "install-terminal-input.sh")
+            if target == override_target:
+                names = override_names
+            archive, digest = self.archive(root, names)
+            filename = f"obey-{version}-{target}.tar.gz"
+            archive.rename(root / filename)
+            artifacts.append({"filename": filename, "sha256": digest})
+        (root / "candidate.json").write_text(json.dumps({"schema": "obey-candidate/v1", "version": version,
+                                                        "source_revision": SOURCE, "artifacts": artifacts}))
+        (root / "checksums.txt").write_text("".join(f"{item['sha256']}  {item['filename']}\n" for item in artifacts))
+
+    def test_candidate_downloads_enforce_platform_and_release_payload_contract(self):
+        for version in ("0.5.0", "0.6.0-rc.1", "0.6.0", "0.6.1", "0.10.0"):
+            with self.subTest(version=version), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                self.candidate_files(root, version)
+                self.assertEqual(len(verify_candidate.checked_downloads(root, version, SOURCE)), 6)
+        helpers = ("obey-pty-acquire", "install-terminal-input.sh")
+        for version, target, names in (
+            ("0.6.0", "linux-arm64", ("obey", "ob", "LICENSE")),
+            ("0.6.0", "linux-x86_64", ("obey", "ob", "LICENSE")),
+            ("0.5.0", "linux-arm64", ("obey", "ob", "LICENSE") + helpers),
+            ("0.6.0", "macOS-arm64", ("obey", "ob", "LICENSE") + helpers),
+            ("0.6.0", "windows-x86_64", ("obey.exe", "ob.exe", "LICENSE") + helpers),
+        ):
+            with self.subTest(version=version, target=target), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                self.candidate_files(root, version, target, names)
+                with self.assertRaises(ValueError):
+                    verify_candidate.checked_downloads(root, version, SOURCE)
 
     def test_payload_inventory_and_digest_fail_closed(self):
         with tempfile.TemporaryDirectory() as temporary:

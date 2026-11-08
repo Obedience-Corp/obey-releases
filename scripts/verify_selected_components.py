@@ -2,6 +2,7 @@
 from contextlib import closing
 import argparse
 import hashlib
+import http.client
 import json
 import os
 from pathlib import Path
@@ -11,6 +12,8 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
+import urllib.error
 import urllib.request
 
 from verify_candidate import command, native_platform, require_disposable
@@ -29,13 +32,33 @@ TARGETS = {"macOS-arm64": ("darwin/arm64", "darwin-arm64"),
 
 def fetch(url):
     request = urllib.request.Request(url, headers={"User-Agent": "selected-component-native-proof"})
-    with urllib.request.urlopen(request, timeout=120) as response:
-        if response.status != 200:
-            raise RuntimeError("public artifact is unavailable")
-        data = response.read(128 * 1024 * 1024 + 1)
-        if len(data) > 128 * 1024 * 1024:
-            raise ValueError("oversized bootstrap artifact")
-        return data
+    attempts = 4
+    for attempt in range(attempts):
+        try:
+            with urllib.request.urlopen(request, timeout=120) as response:
+                if response.status != 200:
+                    raise RuntimeError("public artifact is unavailable")
+                data = response.read(128 * 1024 * 1024 + 1)
+                if len(data) > 128 * 1024 * 1024:
+                    raise ValueError("oversized bootstrap artifact")
+                return data
+        except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.IncompleteRead) as error:
+            if isinstance(error, urllib.error.HTTPError):
+                retryable = error.code in (408, 429, 500, 502, 503, 504)
+                reason = f"HTTP {error.code}"
+                error.close()
+            else:
+                cause = error.reason if isinstance(error, urllib.error.URLError) else error
+                retryable = isinstance(cause, (TimeoutError, ConnectionError, http.client.IncompleteRead))
+                reason = type(cause).__name__
+            if not retryable or attempt == attempts - 1:
+                raise
+            # Retry the complete anonymous GET; never reuse partial bytes or
+            # bypass the caller's checksum verification. Do not log signed URLs.
+            delay = 2 ** attempt
+            print(f"Public artifact download: {reason}; retry {attempt + 2}/{attempts} in {delay}s",
+                  file=sys.stderr, flush=True)
+            time.sleep(delay)
 
 
 def checked_bootstrap(data, checksums, name):
