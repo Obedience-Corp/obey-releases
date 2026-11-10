@@ -79,8 +79,11 @@ shell readiness only; useful work, legacy vault variants and complete preservati
 remain private-lab acceptance and cannot be inferred from these flags.
 
 The free-workspace fixture uses the released Installer 0.3.12 and records each
-successful official stable selection, its catalog commit and exact manifest/signature
-bytes, suite executable versions, and receipt file hashes before launching A.
+successful official stable selection, its catalog commit, exact signed index bytes,
+manifest/signature bytes where the entry uses a manifest, suite executable versions,
+and receipt file hashes before launching A. Git release-source entries (including
+Obey) retain their actual signed index definition; no version manifest is invented.
+Their version is bound by the successful install result and checked physical receipts.
 All later comparisons use that frozen baseline rather than querying newer expected
 versions. Historical licensed fixtures retain their original beta pins. No signing
 policy, provider requirement, updater feed or App source tag changes in this mode.

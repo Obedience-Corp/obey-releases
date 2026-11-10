@@ -154,17 +154,35 @@ def installed_catalog_evidence(managed, package, version, environment):
         raise ValueError("signed catalog evidence must not be linked")
     metadata = json.loads(index.read_bytes())
     entries = [entry for entry in metadata["packages"] if entry.get("id") == package]
-    if len(entries) != 1 or not isinstance(entries[0].get("manifest_path"), str):
-        raise ValueError("installed package has no unique catalog manifest")
-    manifest = source / entries[0]["manifest_path"]
-    if not manifest.resolve().is_relative_to(source.resolve()):
-        raise ValueError("catalog manifest escapes its official source")
-    document = json.loads(manifest.read_bytes())
-    if document.get("id") != package or not any(
-            row.get("version") == version and row.get("channel") == "stable" for row in document.get("releases", [])):
-        raise ValueError("recorded manifest does not contain the installed stable version")
+    if len(entries) != 1 or "stable" not in entries[0].get("channels", []):
+        raise ValueError("installed package has no unique stable catalog entry")
+    entry = entries[0]
+    paths = [index, Path(str(index) + ".sig")]
+    release_source = entry.get("release_source")
+    if release_source is not None:
+        # Installer resolveProductRelease/SpecFromGit prefer release_source.
+        # There is no per-version manifest in this signed-index contract. The
+        # version comes from the successful install and is checked against the
+        # physical receipt baseline after all selected packages are installed.
+        if (not isinstance(release_source, dict) or release_source.get("type") != "git"
+                or any(not isinstance(release_source.get(key), str) or not release_source[key].startswith("https://")
+                       for key in ("repo", "asset_url", "checksums_url"))):
+            raise ValueError("invalid catalog git release source")
+        kind = "release-source"
+    else:
+        if not isinstance(entry.get("manifest_path"), str) or not entry["manifest_path"]:
+            raise ValueError("installed package has no catalog manifest or release source")
+        manifest = source / entry["manifest_path"]
+        if not manifest.resolve().is_relative_to(source.resolve()):
+            raise ValueError("catalog manifest escapes its official source")
+        document = json.loads(manifest.read_bytes())
+        if document.get("id") != package or not any(
+                row.get("version") == version and row.get("channel") == "stable" for row in document.get("releases", [])):
+            raise ValueError("recorded manifest does not contain the installed stable version")
+        paths.extend((manifest, Path(str(manifest) + ".sig")))
+        kind = "manifest"
     files = {}
-    for path in (index, Path(str(index) + ".sig"), manifest, Path(str(manifest) + ".sig")):
+    for path in paths:
         if path.is_symlink() or not path.is_file():
             raise ValueError("signed catalog evidence is missing or linked")
         data = path.read_bytes()
@@ -172,7 +190,8 @@ def installed_catalog_evidence(managed, package, version, environment):
     commit = command(["git", "-C", source, "rev-parse", "HEAD"], environment).strip()
     if not re.fullmatch(r"[0-9a-f]{40}", commit):
         raise ValueError("invalid catalog source commit")
-    return {"package": package, "version": version, "commit": commit, "files": files}
+    return {"package": package, "version": version, "commit": commit, "kind": kind,
+            "version_evidence": "installer-result-and-checked-receipt", "files": files}
 
 
 def bootstrap_fixture(root, environment, machine, managed=None, *, current=False):
