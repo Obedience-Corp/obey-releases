@@ -58,6 +58,95 @@ def refresh_metadata(root, filename):
 
 
 class UpgradeContracts(unittest.TestCase):
+    def test_current_install_selection_rejects_wrong_source_channel_package_and_version(self):
+        package = "obedience-corp/festival"
+        result = {"ok": True, "data": {"package": package, "source": "official-obey", "channel": "stable", "version": "0.3.28"}}
+        self.assertEqual(upgrade.installed_selection(result, package), "0.3.28")
+        for field, value in [("source", "foreign"), ("channel", "beta"), ("package", "obedience-corp/obey"), ("version", "")]:
+            wrong = copy.deepcopy(result)
+            wrong["data"][field] = value
+            with self.assertRaises(ValueError):
+                upgrade.installed_selection(wrong, package)
+        with self.assertRaises(ValueError):
+            upgrade.installed_selection(dict(result, ok=False), package)
+
+    def test_catalog_evidence_records_exact_bytes_and_rejects_missing_signature_or_wrong_version(self):
+        with tempfile.TemporaryDirectory() as directory:
+            managed = Path(directory)
+            source = managed / "marketplaces/official-obey"
+            source.mkdir(parents=True)
+            package = "obedience-corp/festival"
+            index = source / "obey-marketplace.json"
+            manifest = source / "package.json"
+            index.write_text(json.dumps({"packages": [{"id": package, "manifest_path": "package.json"}]}))
+            manifest.write_text(json.dumps({"id": package, "releases": [{"version": "0.3.28", "channel": "stable"}]}))
+            for path in (index, manifest):
+                Path(str(path) + ".sig").write_bytes(b"fixture-signature-bytes")
+            with patch.object(upgrade, "command", return_value="a" * 40):
+                evidence = upgrade.installed_catalog_evidence(managed, package, "0.3.28", {})
+                self.assertEqual(evidence["commit"], "a" * 40)
+                self.assertEqual(evidence["files"]["package.json"]["sha256"], contract.sha256(manifest))
+                import base64
+                self.assertEqual(base64.b64decode(evidence["files"]["package.json"]["bytes_base64"]), manifest.read_bytes())
+                with self.assertRaisesRegex(ValueError, "installed stable version"):
+                    upgrade.installed_catalog_evidence(managed, package, "0.3.29", {})
+                Path(str(manifest) + ".sig").unlink()
+                with self.assertRaisesRegex(ValueError, "missing or linked"):
+                    upgrade.installed_catalog_evidence(managed, package, "0.3.28", {})
+                manifest.write_text(json.dumps({"id": package, "releases": [{"version": "0.3.28", "channel": "beta"}]}))
+                with self.assertRaisesRegex(ValueError, "installed stable version"):
+                    upgrade.installed_catalog_evidence(managed, package, "0.3.28", {})
+
+    def test_manual_candidate_keeps_original_inventory_and_rejects_wrong_inputs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            expected = public_fixture(root)
+            for name in ("release.json", "latest.json", "SHA256SUMS"):
+                (root / name).unlink()
+            tag = f"candidate-app-v{VERSION}-{SOURCE[:8]}"
+            self.assertEqual(contract.checked_manual_candidate(root, SOURCE, VERSION, tag), expected)
+            for source, version, candidate_tag in [
+                ("b" * 40, VERSION, f"candidate-app-v{VERSION}-bbbbbbbb"),
+                (SOURCE, "0.9.9", f"candidate-app-v0.9.9-{SOURCE[:8]}"),
+                (SOURCE, VERSION, "app-stable"),
+            ]:
+                with self.assertRaises(ValueError):
+                    contract.checked_manual_candidate(root, source, version, candidate_tag)
+            payload = next(path for path in (root / "assets").iterdir() if path.suffix == ".dmg")
+            payload.write_bytes(b"changed")
+            with self.assertRaisesRegex(ValueError, "bytes disagree"):
+                contract.checked_manual_candidate(root, SOURCE, VERSION, tag)
+            payload.write_bytes(b"payload")
+            payload.unlink()
+            payload.symlink_to(root / "assets" / "checksums.txt")
+            with self.assertRaises(ValueError):
+                contract.checked_manual_candidate(root, SOURCE, VERSION, tag)
+
+    def test_draft_and_free_surface_cannot_claim_automatic_update_proof(self):
+        contract.checked_upgrade_selection("updater", "none", None, "licensed")
+        contract.checked_upgrade_selection("manual", "none", "candidate-tag", "free-workspace")
+        for args in [("updater", "none", "candidate-tag", "licensed"),
+                     ("updater", "none", None, "free-workspace"),
+                     ("manual", "offline-check", None, "licensed"),
+                     ("manual", "none", None, "unknown")]:
+            with self.assertRaises(ValueError):
+                contract.checked_upgrade_selection(*args)
+
+    def test_free_setup_rejects_license_setup_and_partial_surfaces_before_workspace(self):
+        frames = [{"visible_names": names} for names in [
+            [], ["Getting this machine ready"], ["Licenses", "License key"],
+            ["Projects"], ["Projects", "Activity", "License key"], ["Projects", "Activity"],
+        ]]
+        def poll(description, predicate, seconds):
+            for _ in frames[:-1]:
+                self.assertIsNone(predicate())
+            return predicate()
+        report = {}
+        with patch.object(upgrade.app, "window_capture", side_effect=frames), patch.object(upgrade, "wait_until", side_effect=poll):
+            self.assertEqual(upgrade.wait_windows_setup(Mock(), "windows", Path("/output"), {}, report, "manual_b", "free-workspace"), frames[-1])
+        self.assertEqual(report["manual_b_setup_window"], frames[-1])
+        self.assertFalse(contract.windows_setup_ready(["Projects", "Activity"], "licensed"))
+
     def test_fresh_readback_requires_live_service_without_starting_it(self):
         import verify_app_candidate as app
         managed = Path("/home/.obey/installer")

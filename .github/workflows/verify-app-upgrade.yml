@@ -30,9 +30,18 @@ on:
         type: string
         default: '0.1.0'
       b_source:
-        description: Full reviewed source of published immutable app-test B
+        description: Full reviewed source of immutable published or qualification-draft B
         type: string
         required: true
+      b_candidate_tag:
+        description: Optional unpublished qualification draft for B (manual replacement only)
+        type: string
+        default: ''
+      b_readiness:
+        description: Expected visible B surface for Windows default-home acceptance
+        type: choice
+        options: [licensed, free-workspace]
+        default: licensed
       b_version:
         type: string
         default: '0.1.1'
@@ -42,7 +51,7 @@ concurrency:
   group: app-upgrade-${{ inputs.a_source }}-${{ inputs.b_source }}
   cancel-in-progress: false
 jobs:
-  anonymous-inputs:
+  validated-inputs:
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     steps:
@@ -75,21 +84,29 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.13'
-      - name: Fetch and check anonymous immutable releases without executing payloads
+      - name: Fetch and check original App inputs without executing payloads
         env:
           A_SOURCE: ${{ inputs.a_source }}
           A_VERSION: ${{ inputs.a_version }}
           B_SOURCE: ${{ inputs.b_source }}
           B_VERSION: ${{ inputs.b_version }}
-        run: python scripts/verify_app_upgrade.py --mode fetch --a-source "$A_SOURCE" --a-version "$A_VERSION" --b-source "$B_SOURCE" --b-version "$B_VERSION"
+          B_CANDIDATE_TAG: ${{ inputs.b_candidate_tag }}
+          B_READINESS: ${{ inputs.b_readiness || 'licensed' }}
+          MECHANISM: ${{ inputs.mechanism || 'updater' }}
+          FAILURE_MODE: ${{ inputs.failure_mode || 'none' }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          args=()
+          if [[ -n "$B_CANDIDATE_TAG" ]]; then args+=(--b-candidate-tag "$B_CANDIDATE_TAG"); fi
+          python scripts/verify_app_upgrade.py --mode fetch --a-source "$A_SOURCE" --a-version "$A_VERSION" --b-source "$B_SOURCE" --b-version "$B_VERSION" --mechanism "$MECHANISM" --failure-mode "$FAILURE_MODE" --b-readiness "$B_READINESS" "${args[@]}"
       - uses: actions/upload-artifact@v4
         with:
-          name: anonymous-upgrade-inputs
+          name: validated-upgrade-inputs
           path: upgrade-candidates/
           if-no-files-found: error
           retention-days: 7
   native:
-    needs: anonymous-inputs
+    needs: validated-inputs
     timeout-minutes: ${{ matrix.target == 'x86_64-unknown-linux-gnu' && 60 || 45 }}
     strategy:
       fail-fast: false
@@ -132,7 +149,7 @@ jobs:
           command -v 7z
       - uses: actions/download-artifact@v4
         with:
-          name: anonymous-upgrade-inputs
+          name: validated-upgrade-inputs
           path: upgrade-candidates
       - name: Exercise selected App update mechanism and persisted readback
         env:
@@ -147,7 +164,12 @@ jobs:
           INSTALLATION_CONTEXT: ${{ inputs.installation_context || 'redirected' }}
           FAILURE_MODE: ${{ inputs.failure_mode || 'none' }}
           MECHANISM: ${{ inputs.mechanism || 'updater' }}
-        run: python scripts/verify_app_upgrade.py --mode verify --a-source "$A_SOURCE" --a-version "$A_VERSION" --b-source "$B_SOURCE" --b-version "$B_VERSION" --target "$TARGET" --format "$FORMAT" --installation-context "$INSTALLATION_CONTEXT" --failure-mode "$FAILURE_MODE" --mechanism "$MECHANISM"
+          B_CANDIDATE_TAG: ${{ inputs.b_candidate_tag }}
+          B_READINESS: ${{ inputs.b_readiness || 'licensed' }}
+        run: |
+          args=()
+          if [[ -n "$B_CANDIDATE_TAG" ]]; then args+=(--b-candidate-tag "$B_CANDIDATE_TAG"); fi
+          python scripts/verify_app_upgrade.py --mode verify --a-source "$A_SOURCE" --a-version "$A_VERSION" --b-source "$B_SOURCE" --b-version "$B_VERSION" --target "$TARGET" --format "$FORMAT" --installation-context "$INSTALLATION_CONTEXT" --failure-mode "$FAILURE_MODE" --mechanism "$MECHANISM" --b-readiness "$B_READINESS" "${args[@]}"
       - uses: actions/upload-artifact@v4
         if: always()
         with:

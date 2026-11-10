@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import plistlib
+import re
 import shutil
 import subprocess
 import tempfile
@@ -16,7 +17,7 @@ import time
 
 import verify_app_candidate as app
 import app_manual_update
-from app_upgrade_contract import checked_upgrade_pair, checked_public, fetch_public, persisted_snapshot, sha256, verify_persisted
+from app_upgrade_contract import checked_upgrade_pair, checked_public, fetch_public, persisted_snapshot, sha256, verify_persisted, checked_manual_candidate, checked_upgrade_selection, windows_setup_ready
 from verify_candidate import command, native_platform, wait_until
 from owned_update_proxy import UpdateProxy, SignatureFallbackProxy
 from verify_selected_components import BETA_PACKAGES, BETA_SUITE_VERSIONS, TARGETS as COMPONENT_TARGETS, checked_bootstrap, checked_receipts, checked_status, fetch, require_clean_host
@@ -116,39 +117,99 @@ def default_home_layout(home, environment):
     return home / ".obey/installer"
 
 
-def default_home_readback(installer, managed, environment):
+def default_home_readback(installer, managed, environment, *, packages=None, suite_versions=None):
     """Read public sidecar resolution with the unchanged default environment."""
     status = command([installer, "--managed", "status", "--plugin", "obedience-corp/camp-app", "--json"], environment, json_output=True)
-    checked_status(status, managed, packages=BETA_PACKAGES, suite_versions=BETA_SUITE_VERSIONS)
+    packages = BETA_PACKAGES if packages is None else packages
+    suite_versions = BETA_SUITE_VERSIONS if suite_versions is None else suite_versions
+    checked_status(status, managed, packages=packages, suite_versions=suite_versions)
     return {"installer_status": status, "selected_mtime_ns": {
-        row["path"]: Path(row["path"]).stat().st_mtime_ns for row in checked_receipts(managed, packages=BETA_PACKAGES)["files"]}}
+        row["path"]: Path(row["path"]).stat().st_mtime_ns for row in checked_receipts(managed, packages=packages)["files"]}}
 
 
-def wait_windows_setup(process, target, output, environment, report, stage):
-    """License UI proves setup settled, not license entitlement or useful work."""
+def wait_windows_setup(process, target, output, environment, report, stage, readiness="licensed"):
+    """Observe the selected surface; this does not prove entitlement or useful work."""
     def capture():
         window = app.window_capture(process, target, output / (stage + "-setup.png"), environment)
         report[stage + "_setup_window"] = window
         names = window.get("visible_names", [])
-        return window if "Licenses" in names and "License key" in names else None
-    return wait_until("default-home setup reaches licensing after " + stage, capture, seconds=600)
+        return window if windows_setup_ready(names, readiness) else None
+    return wait_until("default-home setup reaches " + readiness + " after " + stage, capture, seconds=600)
 
 
-def bootstrap_fixture(root, environment, machine, managed=None):
+def installed_selection(result, expected_package):
+    data = result.get("data", {})
+    if (result.get("ok") is not True or data.get("package") != expected_package
+            or data.get("source") != "official-obey" or data.get("channel") != "stable"
+            or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", data.get("version", ""))):
+        raise ValueError("fixture install did not return the exact official stable selection")
+    return data["version"]
+
+
+def installed_catalog_evidence(managed, package, version, environment):
+    """Retain the exact signed bytes the unmodified released Installer just accepted."""
+    source = managed / "marketplaces" / "official-obey"
+    index = source / "obey-marketplace.json"
+    if source.is_symlink() or index.is_symlink():
+        raise ValueError("signed catalog evidence must not be linked")
+    metadata = json.loads(index.read_bytes())
+    entries = [entry for entry in metadata["packages"] if entry.get("id") == package]
+    if len(entries) != 1 or not isinstance(entries[0].get("manifest_path"), str):
+        raise ValueError("installed package has no unique catalog manifest")
+    manifest = source / entries[0]["manifest_path"]
+    if not manifest.resolve().is_relative_to(source.resolve()):
+        raise ValueError("catalog manifest escapes its official source")
+    document = json.loads(manifest.read_bytes())
+    if document.get("id") != package or not any(
+            row.get("version") == version and row.get("channel") == "stable" for row in document.get("releases", [])):
+        raise ValueError("recorded manifest does not contain the installed stable version")
+    files = {}
+    for path in (index, Path(str(index) + ".sig"), manifest, Path(str(manifest) + ".sig")):
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("signed catalog evidence is missing or linked")
+        data = path.read_bytes()
+        files[str(path.relative_to(source))] = {"sha256": sha256(path), "bytes_base64": base64.b64encode(data).decode("ascii")}
+    commit = command(["git", "-C", source, "rev-parse", "HEAD"], environment).strip()
+    if not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise ValueError("invalid catalog source commit")
+    return {"package": package, "version": version, "commit": commit, "files": files}
+
+
+def bootstrap_fixture(root, environment, machine, managed=None, *, current=False):
     managed = managed if managed is not None else root / "managed"
     suffix = ".exe" if os.name == "nt" else ""
     bootstrap = root / ("festival" + suffix)
     name = "festival-" + COMPONENT_TARGETS[machine][1]
-    base = "https://github.com/Obedience-Corp/festival-installer/releases/download/v0.3.7/"
+    bootstrap_version = "0.3.12" if current else "0.3.7"
+    base = "https://github.com/Obedience-Corp/festival-installer/releases/download/v" + bootstrap_version + "/"
     data = fetch(base + name)
     digest = checked_bootstrap(data, fetch(base + "checksums.txt"), name)
     bootstrap.write_bytes(data)
     bootstrap.chmod(0o755)
+    packages, catalog = {}, []
     for selected in ("festival", "obedience-corp/camp-app", "obey"):
         result = command([bootstrap, "--managed", "install", selected, "--no-shell-setup", "--no-restart", "--json"], environment, timeout=240, json_output=True)
         if not result.get("ok"):
             raise RuntimeError("public selected-package fixture installation failed")
-    receipts = checked_receipts(managed, packages=BETA_PACKAGES)
+        if current:
+            package = "obedience-corp/" + selected if "/" not in selected else selected
+            packages[package] = installed_selection(result, package)
+            catalog.append(installed_catalog_evidence(managed, package, packages[package], environment))
+    if not current:
+        packages = BETA_PACKAGES
+    receipts = checked_receipts(managed, packages=packages)
+    suite_versions = BETA_SUITE_VERSIONS
+    if current:
+        status = command([bootstrap, "--managed", "status", "--plugin", "obedience-corp/camp-app", "--json"], environment, json_output=True)
+        if status.get("ok") is not True or status.get("data", {}).get("signals_incomplete"):
+            raise ValueError("current fixture status is incomplete")
+        suite_versions = {}
+        for tool in ("camp", "fest"):
+            rows = [row for row in status["data"]["tools"] if row.get("tool") == tool]
+            if len(rows) != 1 or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", rows[0].get("version", "")):
+                raise ValueError("current fixture suite version missing or ambiguous")
+            suite_versions[tool] = rows[0]["version"]
+        checked_status(status, managed, packages=packages, suite_versions=suite_versions)
     camp = managed / "bin" / ("camp" + suffix)
     help_text = command([camp, "init", "--help"], environment)
     if any(flag not in help_text for flag in ("--no-git", "--no-skills", "--name", "--description", "--mission")):
@@ -170,7 +231,7 @@ def bootstrap_fixture(root, environment, machine, managed=None):
     for path in foreign:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("FA0027 foreign file: preserve exact bytes\n")
-    return {"installer_sha256": digest, "receipts": receipts, "managed_home": managed, "camp": camp, "camp_id": matches[0]["id"], "fixture": fixture,
+    return {"installer_version": bootstrap_version, "installer_sha256": digest, "packages": packages, "suite_versions": suite_versions, "catalog": catalog, "receipts": receipts, "managed_home": managed, "camp": camp, "camp_id": matches[0]["id"], "fixture": fixture,
             "settings_path": settings, "settings": seeded, "snapshot": persisted_snapshot(foreign + [fixture / ".campaign/campaign.yaml"])}
 
 
@@ -182,7 +243,7 @@ def component_identity(document):
 
 
 def retained_state(fixture, environment):
-    selected = checked_receipts(fixture["managed_home"], packages=BETA_PACKAGES)
+    selected = checked_receipts(fixture["managed_home"], packages=fixture.get("packages", BETA_PACKAGES))
     if component_identity(selected) != component_identity(fixture["receipts"]):
         raise ValueError("upgrade changed selected package identities or file hashes")
     result = verify_persisted(fixture["snapshot"], fixture["settings_path"], fixture["settings"])
@@ -333,10 +394,9 @@ def signature_check_then_retry(process, binary, fixture, proxy, target, output, 
     report["signature_rejection_preserved_a"] = True
     report["signature_retry_request_offset"] = len(snapshot["requests"])
 
-def native(root, target, package_format, a_source, a_version, b_source, b_version, output, installation_context="redirected", failure_mode="none", mechanism="updater"):
+def native(root, target, package_format, a_source, a_version, b_source, b_version, output, installation_context="redirected", failure_mode="none", mechanism="updater", b_candidate_tag=None, b_readiness="licensed"):
     require_clean_host(MACHINES.get(target))
-    if mechanism not in ("updater", "manual") or mechanism == "manual" and failure_mode != "none":
-        raise ValueError("manual replacement cannot claim updater failure/retry proof")
+    checked_upgrade_selection(mechanism, failure_mode, b_candidate_tag, b_readiness)
     if target not in MACHINES or native_platform() != app.TARGETS[target][0] or package_format not in FORMATS:
         raise ValueError("upgrade target/format does not match native machine")
     allowed = "dmg" if target.endswith("apple-darwin") else "nsis" if target.endswith("windows-msvc") else None
@@ -354,7 +414,8 @@ def native(root, target, package_format, a_source, a_version, b_source, b_versio
         raise ValueError("B must be newer than A")
     root, output = root.resolve(), output.resolve()
     a = checked_public(root / "a", a_source, a_version)
-    b = checked_public(root / "b", b_source, b_version)
+    b = (checked_manual_candidate(root / "b", b_source, b_version, b_candidate_tag)
+         if b_candidate_tag else checked_public(root / "b", b_source, b_version))
     checked_upgrade_pair(a, b)
     a_installer, b_installer = app.installer_basename(a), app.installer_basename(b)
     suffix = '.exe' if target.endswith('windows-msvc') else ''
@@ -362,7 +423,10 @@ def native(root, target, package_format, a_source, a_version, b_source, b_versio
     report = {"a_source": a_source, "a_version": a_version, "b_source": b_source, "b_version": b_version,
               "a_installer_basename": a_installer, "b_installer_basename": b_installer,
               "target": target, "package_format": package_format, "installation_context": installation_context, "failure_mode": failure_mode,
-              "mechanism": mechanism, "automatic_update_verified": False, "manual_update_verified": False,
+              "mechanism": mechanism, "b_readiness": b_readiness,
+              "b_input_kind": "qualification-draft" if b_candidate_tag else "published",
+              "b_candidate_tag": b_candidate_tag, "b_anonymous_download_verified": not bool(b_candidate_tag),
+              "automatic_update_verified": False, "manual_update_verified": False,
               "default_home_relaunch_verified": False, "two_version_update_verified": False,
               "license_access_verified": False, "useful_first_use_verified": False, "consumer_trust_verified": False, "reboot_verified": False, "native_failure_recovery_verified": False}
     environment = {key: value for key, value in os.environ.items() if not key.endswith(("_TOKEN", "_PASSWORD", "_PRIVATE_KEY"))}
@@ -388,7 +452,9 @@ def native(root, target, package_format, a_source, a_version, b_source, b_versio
         if failure_mode == "signature-fallback":
             report["signature_fixture_control"] = verify_signature_fixture(root, b, work, environment)
         report["original_a_payload_sha256"] = sha256(artifact(root / "a", a, target, FORMATS[package_format]))
-        fixture = bootstrap_fixture(work, environment, MACHINES[target], managed)
+        fixture = bootstrap_fixture(work, environment, MACHINES[target], managed, current=b_readiness == "free-workspace")
+        readback_versions = {"packages": fixture["packages"], "suite_versions": fixture["suite_versions"]}
+        report["fixture_selection"] = {key: fixture[key] for key in ("installer_version", "installer_sha256", "packages", "suite_versions", "catalog", "receipts") }
         report["before"] = retained_state(fixture, environment)
         bundle = reference = None
         if package_format == "dmg":
@@ -455,7 +521,7 @@ def native(root, target, package_format, a_source, a_version, b_source, b_versio
         log = (output / "app.log").open("w")
         try:
             if default_managed is not None:
-                report["default_before"] = default_home_readback(binary.parent / (a_installer + suffix), managed, environment)
+                report["default_before"] = default_home_readback(binary.parent / (a_installer + suffix), managed, environment, **readback_versions)
             process = subprocess.Popen([str(binary)], env=environment, stdout=log, stderr=subprocess.STDOUT, start_new_session=os.name != "nt")
             report["a_pid"] = process.pid
             report["a_window"] = app.window_capture(process, target, output / "a.png", environment, **mac_options)
@@ -463,6 +529,8 @@ def native(root, target, package_format, a_source, a_version, b_source, b_versio
             # from UIA. Invoke its authenticated Restart now control below;
             # require unobscured setup completion in auto-restarted/reopened B.
             if mechanism == "manual":
+                if default_managed is not None and b_readiness == "free-workspace":
+                    wait_windows_setup(process, target, output, environment, report, "licensed_a")
                 normal_quit(process, binary, bundle, target, environment, output, **mac_options)
                 process = None
                 report["a_normal_quit_verified"] = True
@@ -498,8 +566,8 @@ def native(root, target, package_format, a_source, a_version, b_source, b_versio
             if default_managed is not None:
                 first_b_stage = "manual_install" if mechanism == "manual" else "auto_restart"
                 window_stage = "manual_b" if mechanism == "manual" else "auto_restarted_b"
-                wait_windows_setup(process, target, output, environment, report, window_stage)
-                report["default_after_" + first_b_stage] = default_home_readback(binary.parent / (b_installer + suffix), managed, environment)
+                wait_windows_setup(process, target, output, environment, report, window_stage, b_readiness)
+                report["default_after_" + first_b_stage] = default_home_readback(binary.parent / (b_installer + suffix), managed, environment, **readback_versions)
             report["running_version_before_quit"] = b_version if mechanism == "manual" or package_format == "nsis" else a_version
             normal_quit(process, binary, bundle, target, environment, output, **mac_options)
             process = None
@@ -511,8 +579,8 @@ def native(root, target, package_format, a_source, a_version, b_source, b_versio
             report["reopened_b_payload"] = check_installed_b(package_format, binary, bundle, reference, artifact(root / "b", b, target, ".AppImage") if package_format == "appimage" else None, b_version, environment, b_installer)
             report["after_reopen"] = retained_state(fixture, environment)
             if default_managed is not None:
-                wait_windows_setup(process, target, output, environment, report, "reopened_b")
-                report["default_after_reopen"] = default_home_readback(binary.parent / (b_installer + suffix), managed, environment)
+                wait_windows_setup(process, target, output, environment, report, "reopened_b", b_readiness)
+                report["default_after_reopen"] = default_home_readback(binary.parent / (b_installer + suffix), managed, environment, **readback_versions)
                 initial_mtimes = report["default_before"]["selected_mtime_ns"]
                 if any(report[key]["selected_mtime_ns"] != initial_mtimes for key in ("default_after_" + first_b_stage, "default_after_reopen")):
                     raise ValueError("current selected executables were needlessly rewritten")
@@ -604,15 +672,23 @@ if __name__ == "__main__":
         parser.add_argument("--" + label + "-version", required=True)
     parser.add_argument("--failure-mode", choices=("none", "offline-check", "signature-fallback"), default="none")
     parser.add_argument("--mechanism", choices=("updater", "manual"), default="updater")
+    parser.add_argument("--b-candidate-tag", help="Original unpublished qualification draft; manual mode only")
+    parser.add_argument("--b-readiness", choices=("licensed", "free-workspace"), default="licensed")
     parser.add_argument("--target")
     parser.add_argument("--format", choices=tuple(FORMATS))
     parser.add_argument("--installation-context", choices=("redirected", "default-home"), default="redirected")
     args = parser.parse_args()
+    checked_upgrade_selection(args.mechanism, args.failure_mode, args.b_candidate_tag, args.b_readiness)
     root = Path("upgrade-candidates").resolve()
     if args.mode == "fetch":
         root.mkdir()
         a = fetch_public(root / "a", args.a_source, args.a_version)
-        b = fetch_public(root / "b", args.b_source, args.b_version)
+        if args.b_candidate_tag:
+            (root / "b").mkdir()
+            app.fetch(args.b_candidate_tag, args.b_version, args.b_source, root / "b" / "assets")
+            b = checked_manual_candidate(root / "b", args.b_source, args.b_version, args.b_candidate_tag)
+        else:
+            b = fetch_public(root / "b", args.b_source, args.b_version)
         checked_upgrade_pair(a, b)
     else:
-        native(root, args.target, args.format, args.a_source, args.a_version, args.b_source, args.b_version, Path("upgrade-proof").resolve(), args.installation_context, args.failure_mode, args.mechanism)
+        native(root, args.target, args.format, args.a_source, args.a_version, args.b_source, args.b_version, Path("upgrade-proof").resolve(), args.installation_context, args.failure_mode, args.mechanism, args.b_candidate_tag, args.b_readiness)

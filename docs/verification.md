@@ -57,6 +57,50 @@ before blocking the companion download, then verifies those exact earlier files
 and receipts through failure and retry. Historical beta version constants remain
 specific to their original App acceptance fixtures.
 
+## Manual replacement before B is published
+
+FA0034 requires a licensed 0.1.5 A to be replaced by the original free B before
+public delivery. The existing upgrade workflow accepts optional
+`b_candidate_tag=candidate-app-vVERSION-SOURCE8` with `mechanism=manual`.
+A remains the exact published immutable release. The input job downloads B with
+its read-only repository token using the existing qualification-draft validator.
+Native jobs receive the checked inventory/payloads without that credential,
+recheck source/version/hashes and production signatures, and exercise the same
+manual DMG/NSIS/Deb/AppImage replacement path. Draft input is refused in updater
+mode. Reports identify B as `qualification-draft` and explicitly leave
+`b_anonymous_download_verified=false`. Public discovery still requires the later
+anonymous published-byte check; no manifest or publication record is fabricated.
+
+For Windows default-home proof, `b_readiness=free-workspace` explicitly requires
+Projects and Activity after B installation and reopen, rejecting the old license
+screen. Manual A is checked for the licensed surface first. The default remains
+`licensed`, preserving historical verification. Surface visibility establishes
+shell readiness only; useful work, legacy vault variants and complete preservation
+remain private-lab acceptance and cannot be inferred from these flags.
+
+The free-workspace fixture uses the released Installer 0.3.12 and records each
+successful official stable selection, its catalog commit and exact manifest/signature
+bytes, suite executable versions, and receipt file hashes before launching A.
+All later comparisons use that frozen baseline rather than querying newer expected
+versions. Historical licensed fixtures retain their original beta pins. No signing
+policy, provider requirement, updater feed or App source tag changes in this mode.
+
+```sh
+gh workflow run verify-app-upgrade.yml --repo Obedience-Corp/obey-releases \
+  --ref REVIEWED_VERIFIER_REF \
+  -f mechanism=manual -f failure_mode=none \
+  -f a_source=FULL_PUBLISHED_A_SHA -f a_version=A_VERSION \
+  -f b_source=FULL_CANDIDATE_B_SHA -f b_version=B_VERSION \
+  -f b_candidate_tag=candidate-app-vB_VERSION-B_SOURCE8 \
+  -f b_readiness=free-workspace \
+  -f package_format=all -f installation_context=redirected
+```
+
+Check for existing runs before dispatching. For the separate Windows default-home
+surface and relaunch check, use the same reviewed inputs with `package_format=nsis`
+and `installation_context=default-home`. Retain the verifier commit and reports
+as supplemental proof; this does not modify the producer's pinned packaging verifier.
+
 ## Transitional product tests
 
 `verify-app-fresh-setup.yml` and `verify-linux-clean-vm.yml` currently run broader
