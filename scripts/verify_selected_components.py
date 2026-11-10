@@ -11,12 +11,13 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import sys
 import tempfile
 import time
 import urllib.error
 import urllib.request
 
-from verify_candidate import command, native_platform, require_disposable
+from verify_candidate import command, native_platform, require_disposable, requires_terminal_input_payload
 
 PACKAGES = {"obedience-corp/festival": "0.3.24", "obedience-corp/obey": "0.2.3",
             "obedience-corp/camp-app": "0.1.0"}
@@ -108,8 +109,27 @@ def checked_receipts(home, *, obey_version=None, immutable=False, external_suite
             raise ValueError("receipt file is outside the owned managed bin")
         if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != row["hash"]:
             raise ValueError("installed file differs from its verified receipt")
+    # The released Installer places Obey 0.6.0+ Linux helpers beside the
+    # managed executable under libexec/obey; they are owned receipt files too.
+    helper_names = {"obey-pty-acquire", "install-terminal-input.sh"}
+    linux_helpers = requires_terminal_input_payload(expected["obedience-corp/obey"], "linux-native" if sys.platform.startswith("linux") else "other")
+    helper_rows = [row for row in files if Path(row["path"]).name in helper_names]
+    if linux_helpers:
+        if {Path(row["path"]).name for row in helper_rows} != helper_names or len(helper_rows) != 2:
+            raise ValueError("Linux terminal-input receipt inventory is incomplete")
+        for row in helper_rows:
+            path = Path(row["path"])
+            if (path != home / "bin/libexec/obey" / path.name
+                    or path.resolve() != (home / "bin").resolve() / "libexec/obey" / path.name
+                    or row["receipt_pkg_id"] != "obedience-corp/obey"
+                    or row["mode"] & 0o111 != 0o111 or path.stat().st_mode & 0o111 != 0o111):
+                raise ValueError("Linux terminal-input receipt path, owner or executable mode differs")
+    elif helper_rows:
+        raise ValueError("unexpected Linux terminal-input files for this platform/version")
     names = {Path(row["path"]).stem if os.name == "nt" else Path(row["path"]).name for row in files}
     required = {"camp-app", "obey", "ob"} if external_suite is not None else {"camp", "fest", "camp-app", "obey", "ob"}
+    if linux_helpers:
+        required.update(helper_names)
     if standalone_companion:
         required.remove('camp-app')
     if not required <= names or names - required - (set() if external_suite is not None else {"festival"}) or len(files) != len(names):

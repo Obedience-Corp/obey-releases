@@ -80,6 +80,66 @@ class SelectedContracts(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "selection/version"):
                 checked_receipts(home)
 
+    def test_current_linux_helpers_require_exact_receipt_paths_owner_hash_and_mode(self):
+        package = "obedience-corp/obey"
+        current = dict(PACKAGES, **{package: "0.6.0"})
+        with tempfile.TemporaryDirectory() as temporary:
+            home = self.fixture(Path(temporary))
+            with closing(sqlite3.connect(home / "state.db")) as db:
+                db.execute("update receipts set version='0.6.0' where package_id=?", (package,))
+                db.commit()
+                with self.assertRaisesRegex(ValueError, "terminal-input receipt inventory"):
+                    checked_receipts(home, packages=current)
+                paths = [home / "bin/libexec/obey" / name for name in ("obey-pty-acquire", "install-terminal-input.sh")]
+                for path in paths:
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(path.name.encode())
+                    path.chmod(0o755)
+                    db.execute("insert into receipt_files values(?,?,?,?)", (package, str(path), hashlib.sha256(path.read_bytes()).hexdigest(), 0o755))
+                db.commit()
+                self.assertEqual(len(checked_receipts(home, packages=current)["files"]), 7)
+                helper = paths[0]
+                helper.write_bytes(b"tampered helper")
+                with self.assertRaisesRegex(ValueError, "differs from its verified receipt"):
+                    checked_receipts(home, packages=current)
+                helper.write_bytes(helper.name.encode())
+                extra = helper.parent / "unexpected-helper"
+                extra.write_bytes(b"extra")
+                db.execute("insert into receipt_files values(?,?,?,?)", (package, str(extra), hashlib.sha256(extra.read_bytes()).hexdigest(), 0o755))
+                db.commit()
+                with self.assertRaisesRegex(ValueError, "executable inventory"):
+                    checked_receipts(home, packages=current)
+                db.execute("delete from receipt_files where path=?", (str(extra),))
+                db.commit()
+                for field, value in (("receipt_pkg_id", "obedience-corp/festival"), ("mode", 0o644), ("hash", "0" * 64)):
+                    original = db.execute(f"select {field} from receipt_files where path=?", (str(helper),)).fetchone()[0]
+                    db.execute(f"update receipt_files set {field}=? where path=?", (value, str(helper)))
+                    db.commit()
+                    with self.assertRaises(ValueError, msg=field):
+                        checked_receipts(home, packages=current)
+                    db.execute(f"update receipt_files set {field}=? where path=?", (original, str(helper)))
+                    db.commit()
+                helper.chmod(0o644)
+                with self.assertRaisesRegex(ValueError, "executable mode"):
+                    checked_receipts(home, packages=current)
+                helper.chmod(0o755)
+                misplaced = home / "bin" / helper.name
+                helper.rename(misplaced)
+                db.execute("update receipt_files set path=? where path=?", (str(misplaced), str(helper)))
+                db.commit()
+                with self.assertRaisesRegex(ValueError, "receipt path"):
+                    checked_receipts(home, packages=current)
+                misplaced.rename(helper)
+                db.execute("update receipt_files set path=? where path=?", (str(helper), str(misplaced)))
+                db.execute("update receipts set version=? where package_id=?", (PACKAGES[package], package))
+                db.commit()
+                with self.assertRaisesRegex(ValueError, "unexpected Linux terminal-input"):
+                    checked_receipts(home)
+                db.execute("update receipts set version='0.6.0' where package_id=?", (package,))
+                db.commit()
+                with patch("verify_selected_components.sys.platform", "darwin"), self.assertRaisesRegex(ValueError, "unexpected Linux terminal-input"):
+                    checked_receipts(home, packages=current)
+
     def test_receipt_cannot_escape_through_parent_segments(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
