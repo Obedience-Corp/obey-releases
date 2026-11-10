@@ -75,7 +75,9 @@ with tempfile.TemporaryDirectory() as temporary:
         assert before['receipts']==initial['receipts'] and before['physical']==initial['physical']
         proxy.recover();companion=install('obedience-corp/camp-app')
         packages=dict(expected, **{'obedience-corp/camp-app':installed_version(companion,'obedience-corp/camp-app')})
-        after=checked_receipts(managed,packages=packages)
+        # This file verifies the exact checksum-pinned 0.3.8 Installer above.
+        # Its transport recovery must not claim current helper installation.
+        after=checked_receipts(managed,packages=packages,installer_version="0.3.8")
         assert [r for r in after['receipts'] if r['package_id']!='obedience-corp/camp-app']==before['receipts']['receipts']
         assert [r for r in after['files'] if r['receipt_pkg_id']!='obedience-corp/camp-app']==before['receipts']['files']
         assert [physical(row['path']) for row in before['physical']]==before['physical']

@@ -119,6 +119,8 @@ class SelectedContracts(unittest.TestCase):
                         checked_receipts(home, packages=current)
                     db.execute(f"update receipt_files set {field}=? where path=?", (original, str(helper)))
                     db.commit()
+                with self.assertRaisesRegex(ValueError, "unexpected Linux terminal-input"):
+                    checked_receipts(home, packages=current, installer_version="0.3.8")
                 helper.chmod(0o644)
                 with self.assertRaisesRegex(ValueError, "executable mode"):
                     checked_receipts(home, packages=current)
@@ -139,6 +141,23 @@ class SelectedContracts(unittest.TestCase):
                 db.commit()
                 with patch("verify_selected_components.sys.platform", "darwin"), self.assertRaisesRegex(ValueError, "unexpected Linux terminal-input"):
                     checked_receipts(home, packages=current)
+
+    def test_historical_installer_retains_binary_only_contract_for_current_obey(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = self.fixture(Path(temporary))
+            packages = dict(PACKAGES, **{"obedience-corp/obey": "0.6.0"})
+            with closing(sqlite3.connect(home / "state.db")) as db:
+                db.execute("update receipts set version='0.6.0' where package_id='obedience-corp/obey'")
+                db.commit()
+            self.assertEqual(len(checked_receipts(home, packages=packages, installer_version="0.3.8")["files"]), 5)
+            for kwargs in ({}, {"installer_version": "0.3.12"}):
+                with self.assertRaisesRegex(ValueError, "receipt inventory is incomplete"):
+                    checked_receipts(home, packages=packages, **kwargs)
+            with self.assertRaisesRegex(ValueError, "unsupported installer receipt contract"):
+                checked_receipts(home, packages=packages, installer_version="unknown")
+            (home / "bin/obey").write_bytes(b"changed")
+            with self.assertRaisesRegex(ValueError, "verified receipt"):
+                checked_receipts(home, packages=packages, installer_version="0.3.8")
 
     def test_receipt_cannot_escape_through_parent_segments(self):
         with tempfile.TemporaryDirectory() as temporary:

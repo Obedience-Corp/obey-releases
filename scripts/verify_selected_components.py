@@ -70,7 +70,9 @@ def checked_bootstrap(data, checksums, name):
     return digest
 
 
-def checked_receipts(home, *, obey_version=None, immutable=False, external_suite=None, standalone_companion=False, packages=None):
+def checked_receipts(home, *, obey_version=None, immutable=False, external_suite=None, standalone_companion=False, packages=None, installer_version="0.3.12"):
+    if installer_version not in ("0.3.8", "0.3.12"):
+        raise ValueError("unsupported installer receipt contract")
     # Only an independently quiescent fixture may assert immutable storage.
     # This does not discover or lock out writers. Normal live readback stays ro.
     def no_sidecars():
@@ -110,8 +112,10 @@ def checked_receipts(home, *, obey_version=None, immutable=False, external_suite
             raise ValueError("installed file differs from its verified receipt")
     # The released Installer places Obey 0.6.0+ Linux helpers beside the
     # managed executable under libexec/obey; they are owned receipt files too.
+    # The checksum-pinned 0.3.8 transport control predates helper installation.
+    # It must retain its exact binary-only contract, not qualify current setup.
     helper_names = {"obey-pty-acquire", "install-terminal-input.sh"}
-    linux_helpers = requires_terminal_input_payload(expected["obedience-corp/obey"], "linux-native" if sys.platform.startswith("linux") else "other")
+    linux_helpers = installer_version != "0.3.8" and requires_terminal_input_payload(expected["obedience-corp/obey"], "linux-native" if sys.platform.startswith("linux") else "other")
     helper_rows = [row for row in files if Path(row["path"]).name in helper_names]
     if linux_helpers:
         if {Path(row["path"]).name for row in helper_rows} != helper_names or len(helper_rows) != 2:
