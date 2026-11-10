@@ -289,8 +289,6 @@ class AppContracts(unittest.TestCase):
         command.assert_not_called()
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 class FreshCandidateContracts(unittest.TestCase):
     def invoke(self, directory, *extra):
@@ -378,3 +376,7 @@ class FreshCandidateContracts(unittest.TestCase):
             with patch.object(upgrade, 'wait_windows_setup') as wait, patch.object(app, 'fresh_setup_readback', return_value={}):
                 app.wait_fresh_setup(Mock(), Path('/installer'), Path('/managed'), 'x86_64-pc-windows-msvc', Path('/proof'), {}, report, 'fresh')
                 self.assertEqual(wait.call_args.kwargs['readiness'], expected)
+
+
+if __name__ == "__main__":
+    unittest.main()
