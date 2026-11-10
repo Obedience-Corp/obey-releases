@@ -289,5 +289,94 @@ class AppContracts(unittest.TestCase):
         command.assert_not_called()
 
 
+
+class FreshCandidateContracts(unittest.TestCase):
+    def invoke(self, directory, *extra):
+        arguments = ['verify_app_candidate.py', '--mode', 'verify-fresh', '--source', SOURCE,
+                     '--version', VERSION, '--target', 'x86_64-unknown-linux-gnu',
+                     '--directory', str(directory), *extra]
+        with patch.object(sys, 'argv', arguments), patch.dict(os.environ, {
+                'CANDIDATE_RUNNER_KIND': 'github-hosted', 'GITHUB_REPOSITORY': app.REPOSITORY}, clear=True):
+            app.main()
+
+    def draft(self, directory):
+        data = manifest()
+        files = app.checked_manifest(data, VERSION, SOURCE)
+        (directory/'app-candidate.json').write_text(json.dumps(data))
+        (directory/'checksums.txt').write_text(''.join(f"{v['sha256']}  {k}\n" for k,v in files.items()))
+        for name in files:
+            (directory/name).write_bytes(b'payload')
+        return data
+
+    def test_draft_reuses_native_executor_with_checked_flat_layout(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            data = self.draft(root)
+            with patch.object(app, 'native') as native, patch('app_upgrade_contract.checked_public') as public:
+                self.invoke(root, '--candidate-tag', 'candidate-app-v0.1.0-aaaaaaaa')
+                public.assert_not_called()
+                self.assertEqual(native.call_args.args[:2], (root, data))
+                self.assertEqual(native.call_args.kwargs, {'fresh_setup': True, 'candidate_tag': 'candidate-app-v0.1.0-aaaaaaaa'})
+            (root/next(iter(app.checked_manifest(data, VERSION, SOURCE)))).write_bytes(b'tampered')
+            with patch.object(app, 'native') as native, self.assertRaisesRegex(ValueError, 'bytes'):
+                self.invoke(root, '--candidate-tag', 'candidate-app-v0.1.0-aaaaaaaa')
+            native.assert_not_called()
+
+    def test_conflicting_identity_and_seeded_modes_fail_before_native(self):
+        variants = [('--candidate-tag', 'candidate-app-v0.1.0-bbbbbbbb'),
+                    ('--candidate-tag', 'app-stable'),
+                    ('--tag', 'candidate-app-v0.1.0-aaaaaaaa'),
+                    ('--candidate-tag', 'candidate-app-v0.1.0-aaaaaaaa', '--tag', 'app-stable'),
+                    ('--candidate-tag', 'candidate-app-v0.1.0-aaaaaaaa', '--existing-user', 'current'),
+                    ('--candidate-tag', 'candidate-app-v0.1.0-aaaaaaaa', '--verify-login-shell')]
+        for flags in variants:
+            with self.subTest(flags=flags), patch.object(app, 'native') as native, self.assertRaises(ValueError):
+                self.invoke(Path('/no-inputs'), *flags)
+            native.assert_not_called()
+
+    def test_public_mode_retains_checked_public_layout(self):
+        root = Path('/public-inputs')
+        with patch.object(app, 'native') as native, patch('app_upgrade_contract.checked_public', return_value=manifest()) as public:
+            self.invoke(root)
+            public.assert_called_once_with(root, SOURCE, VERSION)
+            self.assertEqual(native.call_args.args[0], root/'assets')
+            self.assertEqual(native.call_args.kwargs['public_root'], root)
+            self.assertNotIn('candidate_tag', native.call_args.kwargs)
+
+    def test_current_baseline_checks_physical_receipts_and_freezes_versions(self):
+        import test_selected_components as selected
+        from verify_selected_components import PACKAGES
+        with tempfile.TemporaryDirectory() as temporary:
+            home = selected.SelectedContracts().fixture(Path(temporary))
+            versions = dict(camp='0.16.2', fest='0.9.8', obey=PACKAGES['obedience-corp/obey'], **{'camp-app':PACKAGES['obedience-corp/camp-app']})
+            tools = [{'tool':name, 'version':version, 'path':str(home/'bin'/name), 'present':True} for name,version in versions.items()]
+            tools[-1].update(protocol_major=1, capabilities=['status','open'])
+            tools.append({'tool':'ob','present':True,'receipt_version':PACKAGES['obedience-corp/obey']})
+            status = {'ok':True,'data':{'tools':tools}}
+            with patch.object(app, 'command', return_value=status), patch('verify_app_upgrade.installed_catalog_evidence', return_value={'files':{'fixture':'retained'}}):
+                baseline, _ = app.current_setup_selection(home/'installer', home, {})
+                self.assertEqual(baseline['packages'], PACKAGES)
+                app.current_setup_selection(home/'installer', home, {}, baseline)
+                stale = copy.deepcopy(status); stale['data']['tools'][0]['version']='99.0.0'
+                with patch.object(app, 'command', return_value=stale), self.assertRaises(ValueError):
+                    app.current_setup_selection(home/'installer', home, {}, baseline)
+                (home/'bin/camp').write_bytes(b'changed')
+                with self.assertRaisesRegex(ValueError, 'verified receipt'):
+                    app.current_setup_selection(home/'installer', home, {}, baseline)
+
+    def test_failed_service_does_not_freeze_partial_selection(self):
+        report = {}
+        with patch.object(app, 'current_setup_selection', return_value=({'packages':'partial'}, {})), patch.object(app, 'command', return_value={'installed':True}), self.assertRaises(RuntimeError):
+            app.fresh_setup_readback(Path('/installer'), Path('/managed'), {}, selection_report=report)
+        self.assertNotIn('current_selection', report)
+
+    def test_windows_candidate_requests_free_surface_public_stays_licensed(self):
+        import verify_app_upgrade as upgrade
+        for report, expected in [({'input_kind':'qualification-draft'}, 'free-workspace'), ({}, 'licensed')]:
+            with patch.object(upgrade, 'wait_windows_setup') as wait, patch.object(app, 'fresh_setup_readback', return_value={}):
+                app.wait_fresh_setup(Mock(), Path('/installer'), Path('/managed'), 'x86_64-pc-windows-msvc', Path('/proof'), {}, report, 'fresh')
+                self.assertEqual(wait.call_args.kwargs['readiness'], expected)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,7 +1,11 @@
-name: Verify fresh public App default-home setup
+name: Verify fresh App default-home setup
 on:
   workflow_dispatch:
     inputs:
+      candidate_tag:
+        description: Optional unpublished free-App candidate; blank preserves public licensed mode
+        type: string
+        default: ''
       verify_partial_install_retry:
         description: Actual companion transport failure, refreshed partial facts and same-process Retry (Deb only)
         type: boolean
@@ -40,7 +44,10 @@ concurrency:
   group: fresh-default-setup-${{ inputs.source_revision }}-${{ inputs.existing_user }}-login-${{ inputs.verify_login_shell || false }}-git-${{ inputs.verify_missing_git_manual || false }}-shell-${{ inputs.login_shell || 'default' }}-partial-${{ inputs.verify_partial_install_retry || false }}
   cancel-in-progress: false
 jobs:
-  anonymous-inputs:
+  validated-inputs:
+    # GitHub requires push access to read drafts; no token enters native jobs.
+    permissions:
+      contents: write
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     steps:
@@ -53,9 +60,11 @@ jobs:
           LOGIN_SHELL: ${{ inputs.login_shell || 'default' }}
           EXISTING: ${{ inputs.existing_user || 'none' }}
           GIT_RECOVERY: ${{ inputs.verify_missing_git_manual || false }}
+          CANDIDATE_TAG: ${{ inputs.candidate_tag }}
           PARTIAL_RETRY: ${{ inputs.verify_partial_install_retry || false }}
           SCOPE: ${{ inputs.platform_scope || 'all' }}
         run: |
+          if [[ -n "$CANDIDATE_TAG" && "$LOGIN:$EXISTING:$GIT_RECOVERY:$LOGIN_SHELL:$PARTIAL_RETRY" != false:none:false:default:false ]]; then echo 'Draft setup requires unseeded default-home mode' >&2; exit 64; fi
           if [[ "$PARTIAL_RETRY" == true && "$LOGIN:$EXISTING:$GIT_RECOVERY:$SCOPE:$LOGIN_SHELL" != false:none:false:deb:default ]]; then echo 'Partial Retry requires unseeded Deb-only mode' >&2; exit 64; fi
           if [[ "$GIT_RECOVERY" == true && "$LOGIN:$EXISTING:$SCOPE" != false:none:deb ]]; then echo "Git recovery requires unseeded Deb-only mode" >&2; exit 64; fi
           case "$LOGIN_SHELL" in
@@ -74,19 +83,29 @@ jobs:
         with:
           python-version: '3.13'
       - name: Fetch and validate anonymous public App bytes once for the native matrix
+        if: inputs.candidate_tag == ''
         env:
           CANDIDATE_RUNNER_KIND: ${{ runner.environment }}
           SOURCE: ${{ inputs.source_revision }}
           VERSION: ${{ inputs.version }}
         run: python scripts/verify_app_candidate.py --mode fetch-public --source "$SOURCE" --version "$VERSION"
+      - name: Fetch exact unpublished candidate without executing payloads
+        if: inputs.candidate_tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_RUNNER_KIND: ${{ runner.environment }}
+          TAG: ${{ inputs.candidate_tag }}
+          SOURCE: ${{ inputs.source_revision }}
+          VERSION: ${{ inputs.version }}
+        run: python scripts/verify_app_candidate.py --mode fetch --tag "$TAG" --source "$SOURCE" --version "$VERSION"
       - uses: actions/upload-artifact@v4
         with:
-          name: anonymous-setup-inputs
+          name: validated-setup-inputs
           path: app-candidate/
           if-no-files-found: error
           retention-days: 7
   native:
-    needs: anonymous-inputs
+    needs: validated-inputs
     strategy:
       fail-fast: false
       matrix:
@@ -139,7 +158,7 @@ jobs:
           cygpath -w "$RUNNER_TEMP/app-minisign/minisign-win64/x86_64" >> "$GITHUB_PATH"
       - uses: actions/download-artifact@v4
         with:
-          name: anonymous-setup-inputs
+          name: validated-setup-inputs
           path: app-candidate
       - name: Let App provision selected tools and verify normal-home relaunch
         env:
@@ -149,6 +168,7 @@ jobs:
           VERSION: ${{ inputs.version }}
           TARGET: ${{ matrix.target }}
           PACKAGE: ${{ matrix.package }}
+          CANDIDATE_TAG: ${{ inputs.candidate_tag }}
           EXISTING_USER: ${{ inputs.existing_user || 'none' }}
           VERIFY_LOGIN_SHELL: ${{ inputs.verify_login_shell || false }}
           LOGIN_SHELL: ${{ inputs.login_shell || 'default' }}
@@ -156,6 +176,7 @@ jobs:
           VERIFY_PARTIAL_RETRY: ${{ inputs.verify_partial_install_retry || false }}
         run: |
           flags=(--login-shell "$LOGIN_SHELL")
+          if [[ -n "$CANDIDATE_TAG" ]]; then flags+=(--candidate-tag "$CANDIDATE_TAG"); fi
           if [[ "$VERIFY_LOGIN_SHELL" == true ]]; then flags+=(--verify-login-shell); fi
           if [[ "$VERIFY_MISSING_GIT_MANUAL" == true ]]; then flags+=(--verify-missing-git-manual); fi
           if [[ "$VERIFY_PARTIAL_RETRY" == true ]]; then flags+=(--verify-partial-install-retry); fi
