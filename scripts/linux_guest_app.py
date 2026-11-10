@@ -221,6 +221,11 @@ class Context:
         if destination.exists() or destination.is_symlink():
             raise RuntimeError('clean desktop refuses preinstalled privileged terminal helper')
         report['terminal_input_preexisting'] = False
+        report['terminal_input_capability_tools'] = {
+            name: [str(path) for path in (Path('/usr/sbin') / name, Path('/usr/bin') / name, Path('/sbin') / name)
+                   if path.is_file() and os.access(path, os.X_OK)]
+            for name in ('setcap', 'getcap')}
+        report['terminal_input_capability_package_prompt_possible'] = not bool(report['terminal_input_capability_tools']['setcap'])
         report['git_missing_prerequisite'] = missing_git.git_status(installer, environment, False, output / 'git-absent-status.json')
         self.accessibility = command(['gsettings', 'get', 'org.gnome.desktop.interface', 'toolkit-accessibility'], environment).strip()
         if self.accessibility not in ('true', 'false'):
