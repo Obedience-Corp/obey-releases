@@ -241,3 +241,73 @@ class PolkitControls(unittest.TestCase):
         self.assertIsNone(guest.polkit_controls(4, self.api([root])))
         prompt.name = '/usr/bin/apt-get'; button.visible = False
         self.assertIsNone(guest.polkit_controls(4, self.api([root])))
+
+class CandidateDesktopControls(unittest.TestCase):
+    def test_guest_candidate_identity_layout_and_bytes_are_rechecked(self):
+        from test_app_candidate import FreshCandidateContracts, SOURCE, VERSION
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory); candidate=root/'candidate'; candidate.mkdir()
+            FreshCandidateContracts().draft(candidate)
+            config={'source':SOURCE,'version':VERSION,'package':'appimage','candidate_tag':'candidate-app-v0.1.0-aaaaaaaa'}
+            (root/'config.json').write_text(json.dumps(config))
+            document, assets, _ = guest.checked_inputs(root)
+            self.assertEqual(assets,candidate)
+            self.assertEqual(document['source_revision'],SOURCE)
+            (root/'public').mkdir()
+            with self.assertRaisesRegex(ValueError,'mixed'):
+                guest.checked_inputs(root)
+            (root/'public').rmdir()
+            config['candidate_tag']='candidate-app-v0.1.0-bbbbbbbb'
+            (root/'config.json').write_text(json.dumps(config))
+            with self.assertRaises(ValueError): guest.checked_inputs(root)
+            config.pop('candidate_tag'); (root/'config.json').write_text(json.dumps(config))
+            with self.assertRaisesRegex(ValueError,'explicit'): guest.checked_inputs(root)
+
+    def test_exact_receipt_script_child_and_birth_are_required_for_consent(self):
+        import hashlib, sqlite3
+        from contextlib import closing
+        import test_selected_components as selected
+        import linux_window_diagnostics as diagnostics
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory); managed=selected.SelectedContracts().fixture(root)
+            with closing(sqlite3.connect(managed/'state.db')) as db:
+                db.execute("update receipts set version='0.6.0' where package_id='obedience-corp/obey'")
+                for name in ('obey-pty-acquire','install-terminal-input.sh'):
+                    path=managed/'bin/libexec/obey'/name; path.parent.mkdir(parents=True,exist_ok=True)
+                    path.write_bytes(name.encode()); path.chmod(0o755)
+                    db.execute('insert into receipt_files values(?,?,?,?)',('obedience-corp/obey',str(path),hashlib.sha256(path.read_bytes()).hexdigest(),0o755))
+                db.commit()
+            script=managed/'bin/libexec/obey/install-terminal-input.sh'
+            proc=root/'proc'; child=proc/'21'; child.mkdir(parents=True)
+            args=[b'/usr/bin/pkexec',b'/bin/bash',str(script).encode(),b'']
+            (child/'cmdline').write_bytes(b'\0'.join(args)); (child/'exe').symlink_to('/usr/bin/pkexec')
+            rows=[{'pid':21,'parent_pid':20,'start_ticks':123}]
+            with patch.object(diagnostics,'process_inventory',return_value=rows), patch.object(guest,'process_birth',return_value=123):
+                result=guest.terminal_request(20,managed,proc_root=proc)
+                self.assertEqual(result['arguments'],[p.decode() for p in args[:-1]])
+                for wrong in ([b'/bin/bash',b'/tmp/foreign',b''],[b'/usr/bin/pkexec',b'/bin/bash',b'-c',b'echo hi',b''],args[:-1]+[b'--dry-run',b'']):
+                    (child/'cmdline').write_bytes(b'\0'.join(wrong))
+                    self.assertIsNone(guest.terminal_request(20,managed,proc_root=proc))
+                (child/'cmdline').write_bytes(b'\0'.join(args))
+                with patch.object(guest,'process_birth',return_value=999), self.assertRaisesRegex(RuntimeError,'identity'):
+                    guest.terminal_request(20,managed,proc_root=proc)
+                with patch.object(diagnostics,'process_inventory',return_value=[]):
+                    self.assertIsNone(guest.terminal_request(20,managed,proc_root=proc))
+                script.write_bytes(b'changed')
+                with self.assertRaisesRegex(ValueError,'receipt'):
+                    guest.terminal_request(20,managed,proc_root=proc)
+
+    def test_terminal_diagnostic_is_readonly_and_retains_actual_exit_stderr(self):
+        ctx=guest.Context.__new__(guest.Context); report={}
+        with tempfile.TemporaryDirectory() as directory:
+            managed=Path(directory); (managed/'bin').mkdir(); (managed/'bin/obey').write_text('fixture')
+            result=SimpleNamespace(returncode=7,stdout='',stderr='actual failure')
+            with patch.object(guest.subprocess,'run',return_value=result) as run:
+                self.assertEqual(ctx.terminal_input_readback(managed,{},report),{})
+                self.assertEqual(run.call_args.args[0][-2:],['--json','--check'])
+                self.assertNotIn('--authorize',run.call_args.args[0])
+            self.assertEqual(report['terminal_input_check']['exit'],7)
+            self.assertEqual(report['terminal_input_check']['stderr'],'actual failure')
+
+if __name__ == '__main__':
+    unittest.main()

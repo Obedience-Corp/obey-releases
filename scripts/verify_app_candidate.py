@@ -513,13 +513,13 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
     if any(os.environ.get(name) for name in ("GH_TOKEN", "GITHUB_TOKEN")):
         raise RuntimeError("App native execution must not receive a draft credential")
     if guest_context is not None:
-        if not fresh_setup or public_root is None or existing_user != 'none' or login_shell_proof or missing_git_manual or target != 'x86_64-unknown-linux-gnu':
-            raise ValueError('local guest requires an unseeded public Linux journey')
+        if not fresh_setup or (public_root is None and candidate_tag is None) or existing_user != 'none' or login_shell_proof or missing_git_manual or target != 'x86_64-unknown-linux-gnu':
+            raise ValueError('local guest requires an unseeded identified Linux journey')
         guest_context.validate()
     if candidate_tag is not None:
         identity(candidate_tag, document["version"], document["source_revision"])
         if (not fresh_setup or public_root is not None or existing_user != "none" or login_shell_proof
-                or missing_git_manual or partial_install_retry or guest_context is not None or login_shell_kind != "default"):
+                or missing_git_manual or partial_install_retry or login_shell_kind != "default"):
             raise ValueError("candidate fresh setup requires unseeded default-home mode")
     installer_name = installer_basename(document)
     report = {"source_revision": document["source_revision"], "version": document["version"], "target": target,
@@ -851,6 +851,8 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
                     report['git_retry_action'] = missing_git.interact(process, binary, environment, 'retry')
                 if guest_context is not None:
                     guest_context.install_git(process, binary, installer, environment, output, report)
+                    if candidate_tag is not None:
+                        guest_context.authorize_terminal_input(process, default_managed, environment, output, report)
                 report["default_after_setup"] = wait_fresh_setup(process, installer, default_managed, target, output, environment, report, "fresh", external_suite=external_fixture or standalone_fixture, active_session=active_fixture, service_recovery=service_fixture, **mac_options)
                 if partial_fixture is not None:
                     partial_fixture.preserved(report['default_after_setup'])

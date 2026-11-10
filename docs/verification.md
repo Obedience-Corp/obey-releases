@@ -148,3 +148,20 @@ same selection on reopen. Historical public-mode constants remain unchanged.
 This proves only the observed setup/reopen boundary; useful work, saved plans,
 vault variants, consumer trust and interactive Linux authorization still require
 their own evidence.
+
+The existing clean Linux VM workflow also accepts `candidate_tag` with an exact
+App source/version. Its data-only fetch job stages the checked draft; only those
+assets and public verification scripts enter the disposable Xfce guest. No token
+or fabricated public-release metadata enters the guest. The normal local-login,
+password sudo, polkit-agent and real-reboot guards remain in force.
+
+For this candidate journey, a terminal-helper OS dialog may be authenticated only
+when its request is an App descendant with unchanged process birth, exact pkexec
+and `/bin/bash` arguments, and the exact Obey receipt-hashed script/helper. Recheck
+those identities immediately before consent. Any privileged process-path readback
+is a fixed read-only observation, not a helper installation or authorization grant.
+If normal OS policy reuses the preceding real Git consent, record actual helper
+readiness without claiming a second prompt. Retain the dialog/session evidence,
+agent log and command/exit/stdout/stderr of read-only terminal-input diagnostics;
+those diagnostic exits are not the App-owned pkexec child's exit status. Review
+actual setup/reopen/reboot screenshots before accepting a rendered outcome.

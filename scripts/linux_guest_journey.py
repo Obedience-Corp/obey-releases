@@ -18,11 +18,17 @@ def copy(guest, source, destination, *, from_guest=False):
          destination if from_guest else remote + str(destination)], timeout=600)
 
 
-def prepare(guest, password, source, version, report, package='deb'):
+def prepare(guest, password, source, version, report, package='deb', *, candidate_tag=None, candidate_directory=None):
     from app_upgrade_contract import release_identity
     release_identity(source, version)
     if package not in ('deb', 'appimage'):
         raise ValueError('invalid guest App package')
+    if candidate_tag is not None or candidate_directory is not None:
+        from verify_app_candidate import identity, checked_downloads
+        if not candidate_tag or candidate_directory is None:
+            raise ValueError('draft journey requires tag and directory together')
+        identity(candidate_tag, version, source)
+        checked_downloads(candidate_directory, version, source)
     guest.ssh('mkdir -m 700 ' + ROOT)
     bundle = guest.root / 'journey-scripts.tar'
     with tarfile.open(bundle, 'w') as archive:
@@ -39,12 +45,18 @@ def prepare(guest, password, source, version, report, package='deb'):
               ' '.join(packages), input=password + '\n', timeout=1245)
     from linux_guest import READBACK
     report['app_observation_baseline'] = json.loads(guest.ssh('python3 -c ' + shlex.quote(READBACK)).stdout)
-    # Reuse the exact anonymous public inventory/digest validation. No GH token
-    # or production/provider credential crosses the guest boundary.
-    guest.ssh('cd ' + ROOT + ' && env CANDIDATE_RUNNER_KIND=github-hosted GITHUB_REPOSITORY=Obedience-Corp/obey-releases '
-              'python3 scripts/verify_app_candidate.py --mode fetch-public --source ' + source +
-              ' --version ' + version + ' --directory public', timeout=4200)
-    config = json.dumps({'source': source, 'version': version, 'package': package})
+    # Only validated data crosses into the guest; never a repository token.
+    config = {'source': source, 'version': version, 'package': package}
+    if candidate_tag is not None:
+        copy(guest, candidate_directory, ROOT + '/candidate')
+        config['candidate_tag'] = candidate_tag
+        report.update(app_input_kind='qualification-draft', app_candidate_tag=candidate_tag,
+                      app_anonymous_download_verified=False)
+    else:
+        guest.ssh('cd ' + ROOT + ' && env CANDIDATE_RUNNER_KIND=github-hosted GITHUB_REPOSITORY=Obedience-Corp/obey-releases '
+                  'python3 scripts/verify_app_candidate.py --mode fetch-public --source ' + source +
+                  ' --version ' + version + ' --directory public', timeout=4200)
+    config = json.dumps(config)
     guest.ssh('umask 077; cat > ' + ROOT + '/config.json', input=config)
     guest.ssh('umask 077; cat > ' + ROOT + '/credential', input=password)
     runner = '''#!/bin/sh

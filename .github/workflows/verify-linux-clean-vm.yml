@@ -12,6 +12,9 @@ on:
       - 'scripts/verify_candidate.py'
   workflow_dispatch:
     inputs:
+      candidate_tag:
+        description: Optional checked unpublished App candidate; no guest credentials
+        type: string
       app_source:
         description: 'Optional immutable public App source; empty qualifies desktop only'
         type: string
@@ -26,6 +29,33 @@ on:
 permissions:
   contents: read
 jobs:
+  candidate-inputs:
+    if: inputs.candidate_tag != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Validate and stage draft data only
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_RUNNER_KIND: ${{ runner.environment }}
+          TAG: ${{ inputs.candidate_tag }}
+          SOURCE: ${{ inputs.app_source }}
+          VERSION: ${{ inputs.app_version }}
+        run: python scripts/verify_app_candidate.py --mode fetch --tag "$TAG" --source "$SOURCE" --version "$VERSION"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: clean-desktop-candidate-inputs
+          path: app-candidate/
+          if-no-files-found: error
+          retention-days: 7
   native-kvm:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -57,7 +87,8 @@ jobs:
           path: ${{ runner.temp }}/linux-kvm-proof.json
           if-no-files-found: error
   clean-desktop-baseline:
-    needs: native-kvm
+    needs: [native-kvm, candidate-inputs]
+    if: always() && needs.native-kvm.result == 'success' && (needs.candidate-inputs.result == 'success' || needs.candidate-inputs.result == 'skipped')
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     steps:
@@ -72,10 +103,16 @@ jobs:
           sudo -n apt-get update
           sudo -n apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils \
             ovmf cloud-image-utils python3-pil gnupg curl openssh-client openssl
+      - uses: actions/download-artifact@v4
+        if: inputs.candidate_tag != ''
+        with:
+          name: clean-desktop-candidate-inputs
+          path: app-candidate
       - name: Boot clean desktop and optional public App journey through actual reboot
         shell: bash
         env:
           RUNNER_KIND: ${{ runner.environment }}
+          CANDIDATE_TAG: ${{ inputs.candidate_tag }}
           APP_SOURCE: ${{ inputs.app_source }}
           APP_VERSION: ${{ inputs.app_version }}
           APP_PACKAGE: ${{ inputs.app_package }}
@@ -88,6 +125,10 @@ jobs:
           elif [[ "${APP_PACKAGE:-deb}" != deb ]]; then
             echo 'AppImage selection requires a public App source/version' >&2
             exit 64
+          fi
+          if [[ -n "$CANDIDATE_TAG" ]]; then
+            [[ -n "$APP_SOURCE" && -n "$APP_VERSION" ]]
+            flags+=(--candidate-tag "$CANDIDATE_TAG" --candidate-directory "$PWD/app-candidate")
           fi
           sudo -n /usr/bin/setpriv --reuid="$(id -u)" \
             --regid="$(getent group kvm | cut -d: -f3)" --clear-groups --no-new-privs \
