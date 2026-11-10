@@ -447,12 +447,44 @@ def fresh_setup_readback(installer, managed, environment, external_suite=None, a
     return status
 
 
+def windows_fresh_chooser_ready(names, home):
+    """The unseeded App creates one default camp but opens no workspace tab."""
+    names = set(names)
+    required = {'Camps', 'Select a camp to begin', 'Create camp', 'Create org',
+                'Add machine', 'Search camps', '1 camp', 'This machine 1',
+                'festival PERSONAL ' + str(home / 'campaigns/festival')}
+    forbidden = {'Licenses', 'License key', 'Preparing your workspace',
+                 'Setup needs your attention', 'Setup progress', 'Retry', 'Failed',
+                 'Projects', 'Activity'}
+    return required <= names and not forbidden & names
+
+
+def wait_windows_fresh_chooser(process, installer, managed, target, output, environment, report, stage):
+    def ready():
+        if process.poll() is not None:
+            raise RuntimeError('App exited during fresh chooser setup')
+        window = window_capture(process, target, output / (stage + '-setup.png'), environment)
+        report[stage + '_setup_window'] = window
+        if not window.get('uia_verified') or not windows_fresh_chooser_ready(window.get('visible_names', []), Path.home()):
+            return None
+        try:
+            result = fresh_setup_readback(installer, managed, environment, selection_report=report)
+        except (RuntimeError, ValueError, OSError, sqlite3.Error) as error:
+            report[stage + '_last_provisioning_error'] = str(error)
+            return None
+        report[stage + '_fresh_chooser_verified'] = True
+        return result
+    return wait_until('fresh default camp chooser and live selected tools', ready, seconds=600)
+
+
 def wait_fresh_setup(process, installer, managed, target, output, environment, report, stage, mac_tools=None, external_suite=None, active_session=None, service_recovery=None):
     import verify_app_upgrade as upgrade
     selection_options = {"selection_report": report} if report.get("input_kind") == "qualification-draft" else {}
     if target.endswith("windows-msvc"):
-        upgrade.wait_windows_setup(process, target, output, environment, report, stage, readiness="free-workspace" if selection_options else "licensed")
-        return fresh_setup_readback(installer, managed, environment, external_suite, **selection_options)
+        if selection_options:
+            return wait_windows_fresh_chooser(process, installer, managed, target, output, environment, report, stage)
+        upgrade.wait_windows_setup(process, target, output, environment, report, stage)
+        return fresh_setup_readback(installer, managed, environment, external_suite)
     def ready():
         if process.poll() is not None:
             raise RuntimeError("App exited during fresh default-home setup")
@@ -528,7 +560,7 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
               "reboot_verified": False, "consumer_trust_verified": False, "two_version_update_verified": False, "native_packaging_launch_verified": False, "linux_package_mode": linux_package}
     if candidate_tag is not None:
         report.update(input_kind="qualification-draft", candidate_tag=candidate_tag,
-                      anonymous_download_verified=False, expected_readiness="free-workspace")
+                      anonymous_download_verified=False, expected_readiness="fresh-camp-chooser")
     output.mkdir()
     if candidate_tag is not None:
         retained = output / "candidate-inputs"

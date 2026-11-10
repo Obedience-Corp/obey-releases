@@ -142,8 +142,9 @@ signatures before execution.
 
 Candidate reports identify `qualification-draft` and explicitly leave anonymous
 public download unverified. They retain the original inventory/checksums without
-inventing public release metadata. Windows requires the free Projects/Activity
-surface. Other platforms retain screenshots for review. The App itself installs
+inventing public release metadata. Windows fresh setup requires the complete default Camps chooser and live
+receipt/service readback; the preseeded upgrade observer still requires
+Projects/Activity. Other platforms retain screenshots for review. The App itself installs
 tools: the harness does not preseed them. At service readiness it freezes the
 actual three official stable receipts, physical file hashes, native tool versions
 and signed catalog evidence through the existing validators, then requires that
