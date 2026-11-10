@@ -52,6 +52,10 @@ concurrency:
   cancel-in-progress: false
 jobs:
   validated-inputs:
+    # GitHub requires push access to read unpublished release assets.
+    # Only this data-only job receives the token; native jobs stay read-only.
+    permissions:
+      contents: write
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     steps:
