@@ -1,5 +1,7 @@
 """Wrapper/console readback negatives are filesystem-isolated contract tests."""
 import copy
+import json
+from unittest.mock import patch
 import os
 from pathlib import Path
 import sys
@@ -14,6 +16,57 @@ import windows_console
 
 
 class WindowsLoginContracts(unittest.TestCase):
+    def test_interrupted_adapter_publication_never_exposes_partial_final_record(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'exit.json'
+            def interrupted(document, stream):
+                stream.write('{')
+                raise RuntimeError('adapter killed while writing')
+            with patch.object(windows_console.json, 'dump', side_effect=interrupted):
+                with self.assertRaisesRegex(RuntimeError, 'adapter killed'):
+                    windows_console.publish_adapter_record(path, {'shell_returncode': 0})
+            self.assertFalse(path.exists())
+            self.assertEqual(path.with_name('exit.json.tmp').read_text(), '{')
+            # Stale partial evidence must be refused, not overwritten on retry.
+            with self.assertRaises(FileExistsError):
+                windows_console.publish_adapter_record(path, {'shell_returncode': 0})
+            path.with_name('exit.json.tmp').unlink()
+            windows_console.publish_adapter_record(path, {'shell_returncode': 0})
+            self.assertEqual(json.loads(path.read_text()), {'shell_returncode': 0})
+            with self.assertRaises(FileExistsError):
+                windows_console.publish_adapter_record(path, {'shell_returncode': 1})
+            self.assertEqual(json.loads(path.read_text()), {'shell_returncode': 0})
+
+    def test_truncated_exit_diagnostic_preserves_timeout_and_always_saves_report(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            record, output = root / 'exit.json', root / 'transport.json'
+            for partial in ('', '{'):
+                record.write_text(partial)
+                transport = {'tracked_console_cleanup_verified': True}
+                with self.assertRaisesRegex(RuntimeError, 'owned console timeout'):
+                    try:
+                        raise RuntimeError('owned console timeout')
+                    except RuntimeError as error:
+                        transport['failure'] = str(error)
+                        raise
+                    finally:
+                        windows_console.finish_transport_report(transport, [('shell_exit', record)], output)
+                saved = json.loads(output.read_text())
+                self.assertEqual(saved['failure'], 'owned console timeout')
+                self.assertTrue(saved['tracked_console_cleanup_verified'])
+                self.assertIn('shell_exit_read_error', saved)
+                self.assertNotIn('shell_exit', saved)
+                with self.assertRaises(json.JSONDecodeError):
+                    windows_console.finish_transport_report({}, [('shell_exit', record)], output)
+                self.assertIn('shell_exit_read_error', json.loads(output.read_text()))
+            record.unlink()
+            windows_console.finish_transport_report({'failure': 'timeout'}, [('shell_exit', record)], output)
+            self.assertEqual(json.loads(output.read_text())['shell_exit_read_error'], 'record not published')
+            with self.assertRaises(FileNotFoundError):
+                windows_console.finish_transport_report({}, [('shell_exit', record)], output)
+            self.assertEqual(json.loads(output.read_text())['shell_exit_read_error'], 'record not published')
+
     def test_foreign_same_version_wrapper_and_wrong_external_identity_are_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
             managed=Path(directory); (managed/'bin').mkdir(); native=managed/'bin/camp'; native.write_bytes(b'official')

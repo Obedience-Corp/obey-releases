@@ -78,7 +78,7 @@ class UpgradeContracts(unittest.TestCase):
             package = "obedience-corp/festival"
             index = source / "obey-marketplace.json"
             manifest = source / "package.json"
-            index.write_text(json.dumps({"packages": [{"id": package, "manifest_path": "package.json"}]}))
+            index.write_text(json.dumps({"packages": [{"id": package, "channels": ["stable"], "manifest_path": "package.json"}]}))
             manifest.write_text(json.dumps({"id": package, "releases": [{"version": "0.3.28", "channel": "stable"}]}))
             for path in (index, manifest):
                 Path(str(path) + ".sig").write_bytes(b"fixture-signature-bytes")
@@ -96,6 +96,47 @@ class UpgradeContracts(unittest.TestCase):
                 manifest.write_text(json.dumps({"id": package, "releases": [{"version": "0.3.28", "channel": "beta"}]}))
                 with self.assertRaisesRegex(ValueError, "installed stable version"):
                     upgrade.installed_catalog_evidence(managed, package, "0.3.28", {})
+
+    def test_real_signed_index_shape_records_obey_release_source_without_fabricated_manifest(self):
+        # Original public marketplace Git blob, not a reconstructed manifest.
+        raw = (Path(__file__).parent / "fixtures/official-marketplace-ebb0b7f.json").read_bytes()
+        self.assertEqual(hashlib.sha1(b"blob " + str(len(raw)).encode() + b"\0" + raw).hexdigest(),
+                         "ebb0b7f3054f2bd38cf4918da9bd1b1c0ba15011")
+        with tempfile.TemporaryDirectory() as directory:
+            managed = Path(directory)
+            source = managed / "marketplaces/official-obey"
+            source.mkdir(parents=True)
+            index = source / "obey-marketplace.json"
+            index.write_bytes(raw)
+            signature = Path(str(index) + ".sig")
+            signature.write_bytes(b"fixture-signature-not-cryptographic-proof")
+            with patch.object(upgrade, "command", return_value="a" * 40):
+                evidence = upgrade.installed_catalog_evidence(managed, "obedience-corp/obey", "0.6.0", {})
+                self.assertEqual(evidence["kind"], "release-source")
+                self.assertEqual(evidence["version"], "0.6.0")
+                self.assertEqual(set(evidence["files"]), {"obey-marketplace.json", "obey-marketplace.json.sig"})
+                import base64
+                self.assertEqual(base64.b64decode(evidence["files"]["obey-marketplace.json"]["bytes_base64"]), raw)
+                for mutation in ("duplicate", "wrong-channel", "missing-source", "wrong-source-type", "missing-checksums"):
+                    document = json.loads(raw)
+                    entry = next(e for e in document["packages"] if e["id"] == "obedience-corp/obey")
+                    if mutation == "duplicate":
+                        document["packages"].append(copy.deepcopy(entry))
+                    elif mutation == "wrong-channel":
+                        entry["channels"] = ["beta"]
+                    elif mutation == "missing-source":
+                        del entry["release_source"]
+                    elif mutation == "wrong-source-type":
+                        entry["release_source"]["type"] = "unknown"
+                    else:
+                        del entry["release_source"]["checksums_url"]
+                    index.write_text(json.dumps(document))
+                    with self.assertRaises(ValueError, msg=mutation):
+                        upgrade.installed_catalog_evidence(managed, "obedience-corp/obey", "0.6.0", {})
+                index.write_bytes(raw)
+                signature.unlink()
+                with self.assertRaisesRegex(ValueError, "missing or linked"):
+                    upgrade.installed_catalog_evidence(managed, "obedience-corp/obey", "0.6.0", {})
 
     def test_manual_candidate_keeps_original_inventory_and_rejects_wrong_inputs(self):
         with tempfile.TemporaryDirectory() as directory:
