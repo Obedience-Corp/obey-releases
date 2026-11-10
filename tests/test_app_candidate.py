@@ -370,12 +370,37 @@ class FreshCandidateContracts(unittest.TestCase):
             app.fresh_setup_readback(Path('/installer'), Path('/managed'), {}, selection_report=report)
         self.assertNotIn('current_selection', report)
 
-    def test_windows_candidate_requests_free_surface_public_stays_licensed(self):
+    def test_windows_fresh_chooser_requires_complete_unmixed_default_state(self):
+        home=Path('/home/tester')
+        names=['Camps','Select a camp to begin','Create camp','Create org','Add machine',
+               'Search camps','1 camp','This machine 1','festival PERSONAL /home/tester/campaigns/festival']
+        self.assertTrue(app.windows_fresh_chooser_ready(names,home))
+        for required in names:
+            self.assertFalse(app.windows_fresh_chooser_ready([n for n in names if n != required],home))
+        for forbidden in ['Licenses','License key','Preparing your workspace','Setup needs your attention','Retry','Projects','Activity']:
+            self.assertFalse(app.windows_fresh_chooser_ready(names+[forbidden],home))
+        self.assertFalse(app.windows_fresh_chooser_ready(names,Path('/another-home')))
+
+    def test_fresh_windows_never_uses_preseeded_upgrade_observer(self):
         import verify_app_upgrade as upgrade
-        for report, expected in [({'input_kind':'qualification-draft'}, 'free-workspace'), ({}, 'licensed')]:
-            with patch.object(upgrade, 'wait_windows_setup') as wait, patch.object(app, 'fresh_setup_readback', return_value={}):
-                app.wait_fresh_setup(Mock(), Path('/installer'), Path('/managed'), 'x86_64-pc-windows-msvc', Path('/proof'), {}, report, 'fresh')
-                self.assertEqual(wait.call_args.kwargs['readiness'], expected)
+        with patch.object(app, 'wait_windows_fresh_chooser', return_value={}) as chooser, patch.object(upgrade,'wait_windows_setup') as historical, patch.object(app,'fresh_setup_readback',return_value={}):
+            app.wait_fresh_setup(Mock(),Path('/installer'),Path('/managed'),'x86_64-pc-windows-msvc',Path('/proof'),{}, {'input_kind':'qualification-draft'},'fresh')
+            chooser.assert_called_once(); historical.assert_not_called()
+            app.wait_fresh_setup(Mock(),Path('/installer'),Path('/managed'),'x86_64-pc-windows-msvc',Path('/proof'),{}, {},'fresh')
+            historical.assert_called_once()
+
+    def test_chooser_does_not_pass_without_live_receipt_service_readback(self):
+        process=Mock();process.poll.return_value=None
+        def poll(description, ready, **kwargs):
+            self.assertIsNone(ready())
+            self.assertIsNone(ready())
+            return ready()
+        window={'uia_verified':True,'visible_names':['fixture']}
+        report={}
+        with patch.object(app,'window_capture',return_value=window), patch.object(app,'windows_fresh_chooser_ready',return_value=True), patch.object(app,'wait_until',side_effect=poll), patch.object(app,'fresh_setup_readback',side_effect=[ValueError('receipts incomplete'),RuntimeError('service absent'),{'service':'live'}]):
+            result=app.wait_windows_fresh_chooser(process,Path('/installer'),Path('/managed'),'x86_64-pc-windows-msvc',Path('/proof'),{},report,'fresh')
+        self.assertEqual(result,{'service':'live'})
+        self.assertTrue(report['fresh_fresh_chooser_verified'])
 
 
 if __name__ == "__main__":
