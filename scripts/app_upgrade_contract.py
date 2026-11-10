@@ -140,6 +140,36 @@ def checked_public(directory, source, version):
     return document
 
 
+def checked_manual_candidate(directory, source, version, tag):
+    """Validate the original qualification-draft inventory without claiming publication."""
+    from verify_app_candidate import identity
+    identity(tag, version, source)
+    if directory.is_symlink() or {p.name for p in directory.iterdir()} != {"assets"}:
+        raise ValueError("unexpected manual candidate input layout")
+    if (directory / "assets").is_symlink():
+        raise ValueError("manual candidate assets must not be a link")
+    return checked_downloads(directory / "assets", version, source)
+
+
+def checked_upgrade_selection(mechanism, failure_mode, candidate_tag, readiness):
+    if mechanism not in ("manual", "updater") or readiness not in ("licensed", "free-workspace"):
+        raise ValueError("unsupported upgrade mechanism/readiness")
+    if mechanism == "manual" and failure_mode != "none":
+        raise ValueError("manual replacement cannot claim updater failure/retry proof")
+    if (candidate_tag or readiness == "free-workspace") and mechanism != "manual":
+        raise ValueError("draft/free-workspace acceptance requires manual replacement")
+
+
+def windows_setup_ready(names, readiness):
+    """Require the selected visible surface; an empty/setup/error page is not ready."""
+    if readiness not in ("licensed", "free-workspace"):
+        raise ValueError("unsupported Windows startup readiness")
+    names = set(names)
+    if readiness == "licensed":
+        return {"Licenses", "License key"} <= names
+    return {"Projects", "Activity"} <= names and not ({"Licenses", "License key"} & names)
+
+
 def fetch_public(directory, source, version):
     tag = release_identity(source, version)
     directory.mkdir()
