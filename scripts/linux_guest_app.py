@@ -105,7 +105,7 @@ def pkexec_child(app_pid, *, missing_ok=False):
     return found[0]
 
 
-def polkit_controls(agent_pid, api):
+def polkit_controls(agent_pid, api, program_names=('/usr/bin/apt-get',)):
     desktop = api.get_desktop(0)
     if not 0 <= desktop.get_child_count() <= 64:
         raise RuntimeError('unbounded accessibility desktop')
@@ -132,9 +132,59 @@ def polkit_controls(agent_pid, api):
         if children < 0 or children + count + len(queue) > 2000:
             raise RuntimeError('invalid OS authentication child count')
         queue.extend(node.get_child_at_index(i) for i in range(children))
-    if len(entries) != 1 or len(buttons) != 1 or not any('/usr/bin/apt-get' in name for name in names):
+    if len(entries) != 1 or len(buttons) != 1 or not any(program in name for name in names for program in program_names):
         return None
     return entries[0], buttons[0], names
+
+
+def terminal_request(app_pid, managed, privileged_readlink=None, *, proc_root=Path('/proc')):
+    """Allow only the current App's exact installed terminal-input script."""
+    import sqlite3
+    from linux_window_diagnostics import process_inventory
+    from verify_selected_components import checked_receipts
+    script = managed / 'bin/libexec/obey/install-terminal-input.sh'
+    helper = script.with_name('obey-pty-acquire')
+    if not script.is_file() or not helper.is_file():
+        return None
+    database = sqlite3.connect((managed / 'state.db').as_uri() + '?mode=ro', uri=True)
+    try:
+        rows = database.execute('select package_id, version from receipts').fetchall()
+    finally:
+        database.close()
+    packages = dict(rows)
+    if len(rows) != 3 or set(packages) != {'obedience-corp/festival', 'obedience-corp/obey', 'obedience-corp/camp-app'}:
+        return None
+    receipts = checked_receipts(managed, packages=packages)
+    owned = [row for row in receipts['files'] if row['path'] in (str(script), str(helper))]
+    if len(owned) != 2 or any(row['receipt_pkg_id'] != 'obedience-corp/obey' for row in owned):
+        raise RuntimeError('terminal consent script/helper are not exact Obey receipt files')
+    expected = [b'/usr/bin/pkexec', b'/bin/bash', str(script).encode(), b'']
+    matches = []
+    for row in process_inventory(app_pid, proc=proc_root):
+        proc = proc_root / str(row['pid'])
+        try:
+            args = (proc / 'cmdline').read_bytes().split(b'\0')
+            if args != expected:
+                continue
+            try:
+                executable = os.readlink(proc / 'exe')
+            except PermissionError:
+                if privileged_readlink is None:
+                    raise
+                # setuid pkexec hides /proc/exe from its normal-user parent.
+                # A fixed readlink observation never grants the helper request.
+                executable = privileged_readlink(row['pid'])
+            if executable != '/usr/bin/pkexec' or process_birth(row['pid']) != row['start_ticks']:
+                raise RuntimeError('terminal authorization process identity changed')
+            matches.append({'pid':row['pid'], 'start_ticks':row['start_ticks'], 'parent_pid':row['parent_pid'],
+                            'executable':executable, 'arguments':[part.decode() for part in expected[:-1]],
+                            'receipt_files':owned})
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+    if len(matches) > 1:
+        raise RuntimeError('ambiguous App terminal authorization requests')
+    return matches[0] if matches else None
+
 
 
 class Context:
@@ -144,6 +194,7 @@ class Context:
         self.password = private_password(root / 'credential')
         self.agent = None
         self.accessibility = None
+        self.agent_log = None
 
     def validate(self):
         current = local_context(self.environment)
@@ -166,6 +217,15 @@ class Context:
 
     def before_launch(self, installer, environment, output, report):
         import missing_git
+        destination = Path('/usr/local/libexec/obey/obey-pty-acquire')
+        if destination.exists() or destination.is_symlink():
+            raise RuntimeError('clean desktop refuses preinstalled privileged terminal helper')
+        report['terminal_input_preexisting'] = False
+        report['terminal_input_capability_tools'] = {
+            name: [str(path) for path in (Path('/usr/sbin') / name, Path('/usr/bin') / name, Path('/sbin') / name)
+                   if path.is_file() and os.access(path, os.X_OK)]
+            for name in ('setcap', 'getcap')}
+        report['terminal_input_capability_package_prompt_possible'] = not bool(report['terminal_input_capability_tools']['setcap'])
         report['git_missing_prerequisite'] = missing_git.git_status(installer, environment, False, output / 'git-absent-status.json')
         self.accessibility = command(['gsettings', 'get', 'org.gnome.desktop.interface', 'toolkit-accessibility'], environment).strip()
         if self.accessibility not in ('true', 'false'):
@@ -188,7 +248,8 @@ class Context:
         if candidates:
             self.agent_pid = candidates[0]
         else:
-            self.agent = subprocess.Popen([str(AGENT)], env=environment, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.agent_log = (output / 'polkit-agent.log').open('w')
+            self.agent = subprocess.Popen([str(AGENT)], env=environment, stdout=self.agent_log, stderr=subprocess.STDOUT)
             self.agent_pid = self.agent.pid
         self.agent_birth = process_birth(self.agent_pid)
         report['polkit_agent'] = {'pid': self.agent_pid, 'start_ticks': self.agent_birth,
@@ -252,9 +313,88 @@ class Context:
         report['git_installed_prerequisite'] = wait_until('App-authorized Git installation', installed, seconds=600)
         report['automatic_git_authorization_verified'] = True
 
+    def authorize_terminal_input(self, process, managed, environment, output, report):
+        import gi
+        gi.require_version('Atspi', '2.0')
+        from gi.repository import Atspi
+        Atspi.set_timeout(1000, 5000)
+        report['terminal_input_authorization_verified'] = False
+        report['terminal_input_session'] = self.validate()
+        def request():
+            if process.poll() is not None:
+                raise RuntimeError('App exited before terminal input authorization')
+            return terminal_request(process.pid, managed, lambda pid: self.sudo(
+                ['/usr/bin/readlink', '--', f'/proc/{pid}/exe'], environment, 15).strip())
+        try:
+            def request_or_ready():
+                owned = request()
+                if owned is not None:
+                    return {'request':owned}
+                state = self.terminal_input_readback(managed, environment, report)
+                return {'ready':state} if state.get('ready') is True else None
+            observed = wait_until('App terminal helper request or actual readiness', request_or_ready, seconds=600)
+            if 'ready' in observed:
+                # OS policy may reuse the preceding real Git authentication.
+                # Do not invent a second observed prompt or grant one ourselves.
+                report['terminal_input_after_consent'] = observed['ready']
+                report['terminal_input_prompt_observed'] = False
+                report['terminal_input_authorization_detail'] = 'Ready after normal App setup/Git consent; no separate helper prompt observed'
+                return
+            owned = observed['request']
+            report['terminal_input_pkexec_request'] = owned
+            def prompt():
+                self.validate()
+                if process_birth(self.agent_pid) != self.agent_birth or Path(f'/proc/{self.agent_pid}/exe').resolve() != AGENT:
+                    raise RuntimeError('OS authentication agent identity changed')
+                if request() != owned:
+                    raise RuntimeError('App terminal request changed before OS consent')
+                return polkit_controls(self.agent_pid, Atspi, ('/bin/bash', '/usr/bin/bash'))
+            entry, button, names = wait_until('normal OS terminal-helper password dialog', prompt, seconds=60)
+            report['terminal_input_prompt_observed'] = True
+            report['terminal_input_authorization_prompt'] = names
+            command(['import', '-window', 'root', output / 'terminal-input-os-authorization.png'], environment)
+            current = prompt()
+            if current is None or current[0] != entry or current[1] != button:
+                raise RuntimeError('terminal authorization controls changed before password entry')
+            editable, action = entry.get_editable_text_iface(), button.get_action_iface()
+            if editable is None or action is None or action.get_n_actions() != 1:
+                raise RuntimeError('terminal authorization lacks unique password/action controls')
+            if editable.set_text_contents(self.password) is not True or action.do_action(0) is not True:
+                raise RuntimeError('normal OS terminal authentication action failed')
+            def ready():
+                result = self.terminal_input_readback(managed, environment, report)
+                return result if result.get('ready') is True else None
+            report['terminal_input_after_consent'] = wait_until('authorized terminal helper readiness', ready, seconds=90)
+            report['terminal_input_authorization_verified'] = True
+        finally:
+            # Actual command/exit/stdout/stderr from a read-only capability check.
+            # It is not a claimed exit code from the App-owned pkexec child.
+            try:
+                self.terminal_input_readback(managed, environment, report)
+                command(['import', '-window', 'root', output / 'terminal-input-result-desktop.png'], environment)
+            except Exception as error:
+                report['terminal_input_diagnostic_error'] = str(error)
+
+    def terminal_input_readback(self, managed, environment, report):
+        arguments = [str(managed / 'bin/obey'), 'terminal-input', 'setup', '--json', '--check']
+        if not Path(arguments[0]).is_file():
+            report['terminal_input_check'] = {'command':arguments, 'not_started':'Obey not installed'}
+            return {}
+        result = subprocess.run(arguments, env=environment, text=True, capture_output=True, timeout=15)
+        report['terminal_input_check'] = {'command':arguments, 'exit':result.returncode,
+                                         'stdout':result.stdout, 'stderr':result.stderr}
+        if result.returncode != 0:
+            return {}
+        value = json.loads(result.stdout)
+        if value.get('schema') != 'obey-terminal-input/v1':
+            raise ValueError('invalid terminal-input diagnostic schema')
+        return value
+
     def close(self):
         if self.agent is not None and self.agent.poll() is None:
             self.agent.terminate(); self.agent.wait(timeout=15)
+        if self.agent_log is not None:
+            self.agent_log.close(); self.agent_log = None
         if self.accessibility is not None:
             command(['gsettings', 'set', 'org.gnome.desktop.interface', 'toolkit-accessibility', self.accessibility], self.environment)
             self.accessibility = None
@@ -274,13 +414,27 @@ def persisted_state():
     return result
 
 
-def responsive_readback(installer, managed, environment):
+def responsive_readback(installer, managed, environment, selection_report=None):
     import verify_app_candidate as app
     import sqlite3
     try:
-        return app.fresh_setup_readback(installer, managed, environment)
+        return app.fresh_setup_readback(installer, managed, environment, **({"selection_report": selection_report} if selection_report is not None else {}))
     except (OSError, RuntimeError, ValueError, sqlite3.Error):
         return None
+
+
+def checked_inputs(root):
+    import verify_app_candidate as app
+    from app_upgrade_contract import checked_public
+    config = json.loads((root / 'config.json').read_text())
+    if config.get('candidate_tag'):
+        if (root / 'public').exists():
+            raise ValueError('guest refuses mixed public and candidate inputs')
+        app.identity(config['candidate_tag'], config['version'], config['source'])
+        return app.checked_downloads(root / 'candidate', config['version'], config['source']), root / 'candidate', config
+    if (root / 'candidate').exists():
+        raise ValueError('candidate inputs require explicit guest identity')
+    return checked_public(root / 'public', config['source'], config['version']), root / 'public/assets', config
 
 
 def package_kind(root):
@@ -295,8 +449,7 @@ def reboot_payload(root, environment, report):
     package = package_kind(root)
     from app_upgrade_contract import checked_public
     import verify_app_candidate as app
-    config = json.loads((root / 'config.json').read_text())
-    document = checked_public(root / 'public', config['source'], config['version'])
+    document, directory, config = checked_inputs(root)
     installer_name = app.installer_basename(document)
     report['installer_basename'] = installer_name
     if package == 'deb':
@@ -304,7 +457,7 @@ def reboot_payload(root, environment, report):
         return
     entries = document['targets'][TARGET]
     name = next(item['name'] for item in entries if item['name'].endswith('.AppImage'))
-    binary = root / 'public/assets' / name
+    binary = directory / name
     if not os.access(binary, os.X_OK):
         raise RuntimeError('retained original AppImage lost executable permission')
     with tempfile.TemporaryDirectory(prefix='reboot-observers-', dir=root / 'temporary') as temporary:
@@ -315,7 +468,7 @@ def reboot_payload(root, environment, report):
                                       'production_signature_verified': True, 'extracted_app_executed': False}
         yield commands / installer_name, binary
         # Revalidate the complete immutable download after actual launch/quit.
-        checked_public(root / 'public', config['source'], config['version'])
+        checked_inputs(root)
         report['original_appimage']['unchanged_after_reboot_launch'] = True
 
 
@@ -328,6 +481,9 @@ def reboot_readback(root, output):
     process = None
     payloads = ExitStack()
     before = json.loads((root / 'evidence/install/proof.json').read_text())
+    if before.get('input_kind') == 'qualification-draft':
+        report.update(input_kind='qualification-draft', candidate_tag=before['candidate_tag'],
+                      anonymous_download_verified=False, current_selection=before['current_selection'])
     try:
         report['local_session'] = local_context(environment)
         old = json.loads((root / 'install-boot.json').read_text())
@@ -338,7 +494,7 @@ def reboot_readback(root, output):
         managed = Path.home() / '.obey/installer'
         installer, binary = payloads.enter_context(reboot_payload(root, environment, report))
         report['before_app_launch'] = wait_until('installed user service returns after real reboot',
-            lambda: responsive_readback(installer, managed, environment), seconds=90)
+            lambda: responsive_readback(installer, managed, environment, report if report.get("input_kind") == "qualification-draft" else None), seconds=90)
         report['persisted_before_launch'] = persisted_state()
         expected_state = json.loads((root / 'persisted-after-install.json').read_text())
         if report['persisted_before_launch'] != expected_state:
@@ -407,14 +563,14 @@ def main():
         if stage == 'install':
             from app_upgrade_contract import checked_public
             import verify_app_candidate as app
-            config = json.loads((root / 'config.json').read_text())
-            document = checked_public(root / 'public', config['source'], config['version'])
+            document, directory, config = checked_inputs(root)
             context = Context(root)
             (root / 'install-boot.json').write_text(json.dumps({'boot_id': Path('/proc/sys/kernel/random/boot_id').read_text().strip()}))
-            app.native(root / 'public/assets', document, TARGET, output,
+            app.native(directory, document, TARGET, output,
                        linux_package='appimage' if package_kind(root) == 'appimage' else 'both',
-                       fresh_setup=True, public_root=root / 'public', guest_context=context)
-            checked_public(root / 'public', config['source'], config['version'])
+                       fresh_setup=True, guest_context=context,
+                       **({'candidate_tag': config['candidate_tag']} if config.get('candidate_tag') else {'public_root': root / 'public'}))
+            checked_inputs(root)
             (root / 'persisted-after-install.json').write_text(json.dumps(persisted_state(), indent=2))
         else:
             reboot_readback(root, output)

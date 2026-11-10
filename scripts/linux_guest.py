@@ -283,7 +283,7 @@ class Guest:
                 'forced_stop': forced}
 
 
-def prove(output, report, app_source=None, app_version=None, app_package='deb'):
+def prove(output, report, app_source=None, app_version=None, app_package='deb', candidate_tag=None, candidate_directory=None):
     if app_package not in ('deb', 'appimage') or app_package != 'deb' and app_source is None:
         raise ValueError('AppImage journey requires a public App source/version')
     if (app_source is None) != (app_version is None):
@@ -291,6 +291,12 @@ def prove(output, report, app_source=None, app_version=None, app_package='deb'):
     if app_source is not None:
         from app_upgrade_contract import release_identity
         release_identity(app_source, app_version)
+    if candidate_tag is not None or candidate_directory is not None:
+        from verify_app_candidate import identity, checked_downloads
+        if not candidate_tag or candidate_directory is None or app_source is None:
+            raise ValueError('draft journey requires tag, directory, source and version')
+        identity(candidate_tag, app_version, app_source)
+        checked_downloads(candidate_directory, app_version, app_source)
     linux_kvm.probe(report.setdefault('kvm', {}))
     output.mkdir(parents=True, exist_ok=False)
     report.update(guest_baseline_verified=False, guest_clone_verified=False,
@@ -334,7 +340,7 @@ def prove(output, report, app_source=None, app_version=None, app_package='deb'):
             if app_source is not None:
                 import linux_guest_journey as journey
                 app_prepared = True
-                journey.prepare(guest, password, app_source, app_version, report, app_package)
+                journey.prepare(guest, password, app_source, app_version, report, app_package, candidate_tag=candidate_tag, candidate_directory=candidate_directory)
             report['clone_login'] = guest.login(password)
             report['clone_desktop_capture'] = guest.capture_desktop(output, 'clone-logged-in', report['clone_login'])
             if app_source is not None:
@@ -377,12 +383,14 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--app-source')
+    parser.add_argument('--candidate-tag')
+    parser.add_argument('--candidate-directory', type=Path)
     parser.add_argument('--app-version')
     parser.add_argument('--app-package', choices=('deb', 'appimage'), default='deb')
     args = parser.parse_args()
     report = {'schema': 'linux-clean-guest/v1'}
     try:
-        prove(args.output, report, args.app_source, args.app_version, args.app_package)
+        prove(args.output, report, args.app_source, args.app_version, args.app_package, args.candidate_tag, args.candidate_directory)
     except Exception as error:
         report['failure'] = str(error)
         raise
