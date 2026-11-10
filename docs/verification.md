@@ -63,7 +63,10 @@ FA0034 requires a licensed 0.1.5 A to be replaced by the original free B before
 public delivery. The existing upgrade workflow accepts optional
 `b_candidate_tag=candidate-app-vVERSION-SOURCE8` with `mechanism=manual`.
 A remains the exact published immutable release. The input job downloads B with
-its read-only repository token using the existing qualification-draft validator.
+its job-scoped repository token using the existing qualification-draft validator.
+GitHub requires Contents write to read unpublished release assets; only this
+data-only fetch job has that permission. Workflow defaults and native jobs retain
+Contents read, and checkout does not persist credentials.
 Native jobs receive the checked inventory/payloads without that credential,
 recheck source/version/hashes and production signatures, and exercise the same
 manual DMG/NSIS/Deb/AppImage replacement path. Draft input is refused in updater
