@@ -91,6 +91,39 @@ def drain_terminal(terminal, read_error, stream, timeout=10, diagnostics=None,
         time.sleep(0.01)
 
 
+def publish_adapter_record(path, document):
+    # Cleanup can terminate this adapter at any instruction. Readers must see
+    # either no record or a complete record, never a newly truncated JSON file.
+    path = Path(path)
+    if path.exists():
+        raise FileExistsError(path)
+    temporary = path.with_name(path.name + '.tmp')
+    with temporary.open('x', encoding='utf-8') as stream:
+        json.dump(document, stream)
+        stream.write('\n')
+    temporary.replace(path)
+
+
+def finish_transport_report(transport, records, output):
+    try:
+        for key, path in records:
+            if not path.is_file():
+                transport[key + '_read_error'] = 'record not published'
+                if 'failure' not in transport:
+                    raise FileNotFoundError(path)
+                continue
+            try:
+                transport[key] = json.loads(path.read_text(encoding='utf-8'))
+            except (OSError, ValueError) as error:
+                transport[key + '_read_error'] = str(error)
+                # Interrupted diagnostic publication must not mask an already
+                # established timeout/cleanup failure. Successful runs stay strict.
+                if 'failure' not in transport:
+                    raise
+    finally:
+        output.write_text(json.dumps(transport, indent=2) + '\n')
+
+
 def pty_adapter(shell, status_path):
     """Separate owned process: fixed-size native WinPTY, never a TTY ioctl."""
     import codecs
@@ -119,8 +152,8 @@ def pty_adapter(shell, status_path):
         raise RuntimeError('native WinPTY loaded an unexpected DLL')
     files = [extension, expected_dll, extension.parent / 'winpty-agent.exe']
     inventory = [{'path':str(path), 'sha256':hashlib.sha256(path.read_bytes()).hexdigest()} for path in files]
-    Path(status_path + '.backend.json').write_text(json.dumps({
-        'backend':'WinPTY', 'loaded_dll':buffer.value, 'files':inventory}) + '\n')
+    publish_adapter_record(Path(status_path + '.backend.json'), {
+        'backend':'WinPTY', 'loaded_dll':buffer.value, 'files':inventory})
     if not terminal.spawn(shell, cmdline=subprocess.list2cmdline([shell, '-NoLogo']), cwd=os.getcwd(),
                           env='\0'.join(f'{k}={v}' for k, v in os.environ.items()) + '\0'):
         raise RuntimeError('WinPTY failed to spawn ordinary PowerShell')
@@ -158,8 +191,8 @@ def pty_adapter(shell, status_path):
             sys.stdout.buffer.write(chunk.encode('utf-8')); sys.stdout.buffer.flush()
         time.sleep(0.01)
     status = terminal.get_exitstatus()
-    Path(status_path).write_text(json.dumps({'shell_pid': terminal.pid, 'shell_returncode': status,
-        'backend': 'WinPTY', 'columns': 120, 'rows': 40}) + '\n')
+    publish_adapter_record(Path(status_path), {'shell_pid': terminal.pid, 'shell_returncode': status,
+        'backend': 'WinPTY', 'columns': 120, 'rows': 40})
     if type(status) is not int:
         raise RuntimeError('WinPTY shell exit status unavailable')
     # Drain every queued terminal chunk, not merely one final read. Only the
@@ -212,7 +245,7 @@ def run_prompt(shell, body, environment, output, stem, timeout=60):
     shell_exit = output / (stem + '.shell-exit.json')
     eof_diagnostics = Path(str(shell_exit) + '.eof.jsonl')
     backend_record = Path(str(shell_exit) + '.backend.json')
-    for path in [script, result, raw, ready, acknowledge, adapter_record, shell_exit, eof_diagnostics, backend_record, Path(str(result) + '.tmp'), Path(str(ready) + '.tmp')]:
+    for path in [script, result, raw, ready, acknowledge, adapter_record, shell_exit, eof_diagnostics, backend_record, Path(str(shell_exit) + '.tmp'), Path(str(backend_record) + '.tmp'), Path(str(result) + '.tmp'), Path(str(ready) + '.tmp')]:
         if path.exists() or path.is_symlink(): raise RuntimeError('refusing existing console evidence output')
     script.write_text("""$ErrorActionPreference='Stop'
 $owned=Get-Process -Id $PID
@@ -344,14 +377,11 @@ $json=$record | ConvertTo-Json -Depth 16 -Compress
     finally:
         if process is not None:
             transport['adapter_returncode'] = process.poll()
-        if backend_record.is_file():
-            transport['native_backend'] = json.loads(backend_record.read_text())
-        if shell_exit.is_file():
-            transport['shell_exit'] = json.loads(shell_exit.read_text())
         if process is not None and process.stdin is not None:
             try: process.stdin.close()
             except BrokenPipeError as close: transport['stdin_close_error'] = str(close)
-        (output / (stem + '.transport.json')).write_text(json.dumps(transport, indent=2) + '\n')
+        finish_transport_report(transport, [('native_backend', backend_record), ('shell_exit', shell_exit)],
+                                output / (stem + '.transport.json'))
 
 
 if __name__ == '__main__':
