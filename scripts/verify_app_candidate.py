@@ -381,10 +381,54 @@ def stop_owned(process, environment):
     process.wait(timeout=20)
 
 
-def fresh_setup_readback(installer, managed, environment, external_suite=None, active_session=None, service_recovery=None):
+def current_setup_selection(installer, managed, environment, baseline=None):
+    """Observe App-installed versions once; recheck exact receipts on reopen."""
+    import verify_app_upgrade as upgrade
+    from verify_selected_components import checked_receipts, checked_status
+    status = command([installer, "--managed", "status", "--plugin", "obedience-corp/camp-app", "--json"], environment, json_output=True)
+    if status.get("ok") is not True or status.get("data", {}).get("signals_incomplete"):
+        raise ValueError("current setup status is incomplete")
+    if baseline is None:
+        database = sqlite3.connect((managed / "state.db").as_uri() + "?mode=ro", uri=True)
+        try:
+            rows = database.execute("select package_id, version from receipts").fetchall()
+        finally:
+            database.close()
+        packages = dict(rows)
+        if (len(rows) != 3 or set(packages) != {"obedience-corp/festival", "obedience-corp/obey", "obedience-corp/camp-app"}
+                or any(not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", v) for v in packages.values())):
+            raise ValueError("incomplete or ambiguous current setup selection")
+        versions = {}
+        for name in ("camp", "fest"):
+            tools = [row for row in status["data"]["tools"] if row.get("tool") == name]
+            if len(tools) != 1 or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", tools[0].get("version", "")):
+                raise ValueError("missing current suite executable version")
+            versions[name] = tools[0]["version"]
+    else:
+        packages, versions = baseline["packages"], baseline["suite_versions"]
+    receipts = checked_receipts(managed, packages=packages)
+    checked_status(status, managed, packages=packages, suite_versions=versions)
+    if baseline is not None and receipts != baseline["receipts"]:
+        raise ValueError("reopened setup changed frozen selected receipts/files")
+    catalog = [upgrade.installed_catalog_evidence(managed, name, version, environment)
+               for name, version in sorted(packages.items())]
+    # App performs the install. There is no harness install-result claim here.
+    for entry in catalog:
+        entry["version_evidence"] = "app-installed-checked-receipt-and-native-status"
+    if baseline is not None and catalog != baseline["catalog"]:
+        raise ValueError("reopened setup changed frozen catalog evidence")
+    selection = {"packages": packages, "suite_versions": versions, "receipts": receipts, "catalog": catalog}
+    return selection, {"installer_status": status, "receipts": receipts,
+                       "selected_mtime_ns": {row["path"]: Path(row["path"]).stat().st_mtime_ns for row in receipts["files"]}}
+
+
+def fresh_setup_readback(installer, managed, environment, external_suite=None, active_session=None, service_recovery=None, selection_report=None):
     import verify_app_upgrade as upgrade
     from verify_selected_components import BETA_PACKAGES, checked_receipts
-    if service_recovery is not None:
+    selection = None
+    if selection_report is not None:
+        selection, status = current_setup_selection(installer, managed, environment, selection_report.get("current_selection"))
+    elif service_recovery is not None:
         status = service_recovery.readback()
     elif active_session is not None:
         status = active_session.readback()
@@ -398,19 +442,22 @@ def fresh_setup_readback(installer, managed, environment, external_suite=None, a
     if not (service.get("installed") and service.get("loaded") and service.get("socket_reachable") and service.get("daemon_pid", 0) > 0):
         raise RuntimeError("App-provisioned default service is not installed, loaded and responsive")
     status["service"] = service
+    if selection is not None:
+        selection_report.setdefault("current_selection", selection)
     return status
 
 
 def wait_fresh_setup(process, installer, managed, target, output, environment, report, stage, mac_tools=None, external_suite=None, active_session=None, service_recovery=None):
     import verify_app_upgrade as upgrade
+    selection_options = {"selection_report": report} if report.get("input_kind") == "qualification-draft" else {}
     if target.endswith("windows-msvc"):
-        upgrade.wait_windows_setup(process, target, output, environment, report, stage)
-        return fresh_setup_readback(installer, managed, environment, external_suite)
+        upgrade.wait_windows_setup(process, target, output, environment, report, stage, readiness="free-workspace" if selection_options else "licensed")
+        return fresh_setup_readback(installer, managed, environment, external_suite, **selection_options)
     def ready():
         if process.poll() is not None:
             raise RuntimeError("App exited during fresh default-home setup")
         try:
-            return fresh_setup_readback(installer, managed, environment, external_suite, active_session, service_recovery)
+            return fresh_setup_readback(installer, managed, environment, external_suite, active_session, service_recovery, **selection_options)
         except (RuntimeError, ValueError, OSError, sqlite3.Error) as error:
             report[stage + "_last_provisioning_error"] = str(error)
             return None
@@ -436,7 +483,7 @@ def extract_appimage_observers(appimage, temporary, environment, installer_name=
     return installers[0].parent, root
 
 
-def native(directory, document, target, output, linux_package="both", fresh_setup=False, public_root=None, existing_user="none", login_shell_proof=False, missing_git_manual=False, login_shell_kind='default', guest_context=None, partial_install_retry=False):
+def native(directory, document, target, output, linux_package="both", fresh_setup=False, public_root=None, existing_user="none", login_shell_proof=False, missing_git_manual=False, login_shell_kind='default', guest_context=None, partial_install_retry=False, candidate_tag=None):
     require_clean_host({"aarch64-apple-darwin": "macOS-arm64", "x86_64-apple-darwin": "macOS-x86_64", "x86_64-unknown-linux-gnu": "linux-x86_64", "x86_64-pc-windows-msvc": "windows-x86_64"}.get(target))
     if partial_install_retry and (not fresh_setup or public_root is None or
             target != 'x86_64-unknown-linux-gnu' or linux_package != 'both' or
@@ -469,12 +516,25 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
         if not fresh_setup or public_root is None or existing_user != 'none' or login_shell_proof or missing_git_manual or target != 'x86_64-unknown-linux-gnu':
             raise ValueError('local guest requires an unseeded public Linux journey')
         guest_context.validate()
+    if candidate_tag is not None:
+        identity(candidate_tag, document["version"], document["source_revision"])
+        if (not fresh_setup or public_root is not None or existing_user != "none" or login_shell_proof
+                or missing_git_manual or partial_install_retry or guest_context is not None or login_shell_kind != "default"):
+            raise ValueError("candidate fresh setup requires unseeded default-home mode")
     installer_name = installer_basename(document)
     report = {"source_revision": document["source_revision"], "version": document["version"], "target": target,
               "installer_basename": installer_name,
               "runner_platform": native_platform(), "first_use_complete": False, "useful_first_use_verified": False, "native_failure_recovery_verified": False, "license_access_verified": False,
               "reboot_verified": False, "consumer_trust_verified": False, "two_version_update_verified": False, "native_packaging_launch_verified": False, "linux_package_mode": linux_package}
+    if candidate_tag is not None:
+        report.update(input_kind="qualification-draft", candidate_tag=candidate_tag,
+                      anonymous_download_verified=False, expected_readiness="free-workspace")
     output.mkdir()
+    if candidate_tag is not None:
+        retained = output / "candidate-inputs"
+        retained.mkdir()
+        for name in ("app-candidate.json", "checksums.txt"):
+            shutil.copyfile(directory / name, retained / name)
     process = xvfb = manager = window_events = None
     installed = None
     owned_deb = False
@@ -1024,6 +1084,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=("fetch", "verify", "fetch-public", "verify-fresh"), required=True)
     parser.add_argument("--tag")
+    parser.add_argument("--candidate-tag", help="Unpublished input for unseeded free-workspace verify-fresh only")
     parser.add_argument("--verify-login-shell", action="store_true")
     parser.add_argument('--login-shell', choices=('default', 'windows-powershell', 'zsh'), default='default')
     parser.add_argument('--verify-missing-git-manual', action='store_true')
@@ -1036,6 +1097,13 @@ def main():
     parser.add_argument("--directory", type=Path, default=Path("app-candidate"))
     parser.add_argument("--output", type=Path, default=Path("app-proof"))
     args = parser.parse_args()
+    if args.candidate_tag:
+        if (args.mode != "verify-fresh" or args.tag or args.existing_user != "none" or args.verify_login_shell
+                or args.verify_missing_git_manual or args.verify_partial_install_retry or args.login_shell != "default"):
+            raise ValueError("candidate fresh setup requires unseeded default-home mode without public/tag options")
+        identity(args.candidate_tag, args.version, args.source)
+    elif args.tag and args.mode in ("fetch-public", "verify-fresh"):
+        raise ValueError("public setup refuses candidate tag; use explicit --candidate-tag")
     if args.verify_login_shell and (args.mode != "verify-fresh" or args.existing_user != "none"):
         raise ValueError("login shell proof requires unseeded verify-fresh")
     if args.verify_partial_install_retry and (args.mode != 'verify-fresh' or args.target != 'x86_64-unknown-linux-gnu' or
@@ -1051,7 +1119,11 @@ def main():
         identity(args.tag, args.version, args.source)
     if os.environ.get("CANDIDATE_RUNNER_KIND") != "github-hosted" or os.environ.get("GITHUB_REPOSITORY") != REPOSITORY:
         raise RuntimeError("App proof restricted to hosted binary-repository workflow")
-    if args.mode in ("fetch-public", "verify-fresh"):
+    if args.mode == "verify-fresh" and args.candidate_tag:
+        document = checked_downloads(args.directory, args.version, args.source)
+        native(args.directory.resolve(), document, args.target, args.output.resolve(), args.linux_package,
+               fresh_setup=True, candidate_tag=args.candidate_tag)
+    elif args.mode in ("fetch-public", "verify-fresh"):
         from app_upgrade_contract import fetch_public, checked_public
         if args.mode == "fetch-public":
             fetch_public(args.directory, args.source, args.version)

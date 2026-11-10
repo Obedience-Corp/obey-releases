@@ -125,3 +125,26 @@ Native reports, UI captures and persisted-state readbacks are the evidence for
 the behavior selected. Keep original failures as failures; later reruns have
 their own identities. The historical README linked from the maintainer index
 contains the old detailed modes and investigations while this split is underway.
+
+## Unpublished free-App setup
+
+FA0034 may select `candidate_tag` in the existing fresh-default-home workflow.
+Blank preserves the historical anonymous public/licensed path. A candidate tag
+selects the existing draft fetch and flat inventory validator, then the same
+native installer/setup/reopen executor. It accepts only unseeded default-home
+setup; existing-user, login-shell and failure-injection combinations are rejected.
+The fetch job alone has Contents write for draft access. Native jobs receive no
+repository token and recheck exact source, version, hashes and production updater
+signatures before execution.
+
+Candidate reports identify `qualification-draft` and explicitly leave anonymous
+public download unverified. They retain the original inventory/checksums without
+inventing public release metadata. Windows requires the free Projects/Activity
+surface. Other platforms retain screenshots for review. The App itself installs
+tools: the harness does not preseed them. At service readiness it freezes the
+actual three official stable receipts, physical file hashes, native tool versions
+and signed catalog evidence through the existing validators, then requires that
+same selection on reopen. Historical public-mode constants remain unchanged.
+This proves only the observed setup/reopen boundary; useful work, saved plans,
+vault variants, consumer trust and interactive Linux authorization still require
+their own evidence.
