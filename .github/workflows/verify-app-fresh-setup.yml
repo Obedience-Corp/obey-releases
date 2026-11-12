@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       candidate_tag:
-        description: Optional unpublished free-App candidate; blank preserves public licensed mode
+        description: Optional unpublished free-App candidate; blank verifies the published release named by source_revision
         type: string
         default: ''
       verify_partial_install_retry:
@@ -33,6 +33,7 @@ on:
         default: none
         options: [none, older-idle, older-active, service-recovery, standalone-companion, current, missing-companion, corrupt-integrations, foreign-companion, corrupt-receipts, external-suite-old, external-suite-minimum, external-suite-current, external-suite-mixed-fest]
       source_revision:
+        description: Full 40-hex source of a published app-test release, or stable for the published app-v<version> release
         type: string
         required: true
       version:

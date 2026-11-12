@@ -10,7 +10,7 @@ readiness or authorize publication.
 | Can the official installer install the declared selected components? | `verify-selected-components.yml` | Currently pinned component set in the script; review it first |
 | Does the App package validate and launch? | `verify-app-candidates.yml` | App draft tag, version, full source revision, platform scope |
 | Does the original AppImage launch on a separate fresh host? | `verify-appimage-candidate.yml` | App draft tag, version, full source revision |
-| Does the actual signed App update mechanism work from A to B? | `verify-app-upgrade.yml` | Immutable A/B sources and versions, package format and mode |
+| Does the actual signed App update mechanism work from A to B? | `verify-app-upgrade.yml` | Immutable A/B sources and versions (or a published stable App, source `stable`), package format and mode |
 
 For an invited beta with no automatic feed, select `mechanism=manual` in the
 existing upgrade workflow. It quits the owned A normally, installs B from the
@@ -101,6 +101,11 @@ gh workflow run verify-app-upgrade.yml --repo Obedience-Corp/obey-releases \
   -f b_readiness=free-workspace \
   -f package_format=all -f installation_context=redirected
 ```
+
+A published stable App release is selected with `source_revision=stable` (fresh
+setup) or `a_source`/`b_source=stable` (upgrade) and the matching `X.Y.Z`
+version. The checks read `app-vX.Y.Z` from `SHA256SUMS`, the `.sig` files and
+`latest.json`, and use the same camp-chooser readiness as a qualification draft.
 
 Check for existing runs before dispatching. For the separate Windows default-home
 surface and relaunch check, use the same reviewed inputs with `package_format=nsis`

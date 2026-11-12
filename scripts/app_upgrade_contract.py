@@ -7,7 +7,7 @@ import time
 import urllib.error
 import urllib.request
 
-from verify_app_candidate import checked_downloads
+from verify_app_candidate import TARGETS, checked_downloads, checked_manifest
 from verify_candidate import REPOSITORY
 
 PLATFORMS = {
@@ -23,6 +23,22 @@ def release_identity(source, version):
     if not re.fullmatch(r"[0-9a-f]{40}", source) or not re.fullmatch(r"\d+\.\d+\.\d+", version):
         raise ValueError("invalid immutable App source/version")
     return "app-test-" + source
+
+
+STABLE_SOURCE = "stable"
+# Every App release since 0.1.7 bundles this sidecar (festival-app src-tauri/tauri.conf.json:42-43).
+STABLE_INSTALLER_BASENAME = "festival-app-installer"
+
+
+def stable_identity(version):
+    if not re.fullmatch(r"\d+\.\d+\.\d+", version):
+        raise ValueError("invalid stable App version")
+    return "app-v" + version
+
+
+def release_tag(source, version):
+    """Test releases are keyed by their 40-hex source; stable releases by version."""
+    return stable_identity(version) if source == STABLE_SOURCE else release_identity(source, version)
 
 
 def sha256(path):
@@ -88,9 +104,12 @@ def anonymous_download(url, destination, limit, *, retry_rate_limit=False):
 
 
 def release_assets(metadata, source, version):
-    tag = release_identity(source, version)
-    if metadata.get("draft") is not False or metadata.get("prerelease") is not True or metadata.get("tag_name") != tag:
-        raise ValueError("requires the exact published immutable test release")
+    tag = release_tag(source, version)
+    stable = source == STABLE_SOURCE
+    if (metadata.get("draft") is not False or metadata.get("prerelease") is not (not stable)
+            or metadata.get("tag_name") != tag):
+        raise ValueError("requires the exact published immutable "
+                         + ("stable" if stable else "test") + " release")
     assets = {}
     for item in metadata.get("assets", []):
         name = item.get("name", "")
@@ -101,33 +120,30 @@ def release_assets(metadata, source, version):
                 or type(item.get("size")) is not int or not 0 < item["size"] < 2 * 1024**3):
             raise ValueError("invalid public release asset name/URL/digest/size")
         assets[name] = item
-    if not {"app-candidate.json", "checksums.txt", "latest.json", "SHA256SUMS"} <= assets.keys():
+    required = {"latest.json", "SHA256SUMS"} | (set() if stable else {"app-candidate.json", "checksums.txt"})
+    if not required <= assets.keys():
         raise ValueError("public release lacks inventory/checksums/updater manifest")
     return assets
 
 
-def checked_public(directory, source, version):
-    metadata = json.loads((directory / "release.json").read_text())
-    assets = release_assets(metadata, source, version)
-    document = checked_downloads(directory / "assets", version, source)
-    expected = {item["name"] for entries in document["targets"].values() for item in entries}
-    expected |= {"app-candidate.json", "checksums.txt", "latest.json", "SHA256SUMS"}
-    if set(assets) != expected:
-        raise ValueError("public release has unexpected or missing assets")
+def checked_bytes(directory, assets):
     for name, item in assets.items():
         path = directory / name if name in ("latest.json", "SHA256SUMS") else directory / "assets" / name
         if path.is_symlink() or not path.is_file() or path.stat().st_size != item["size"] or "sha256:" + sha256(path) != item["digest"]:
             raise ValueError("public bytes disagree with server digest/size")
+
+
+def installer_sums(directory):
     sums = {}
     for line in (directory / "SHA256SUMS").read_text().splitlines():
         match = re.fullmatch(r"([0-9a-f]{64})  (.+)", line)
         if not match or match[2] in sums:
             raise ValueError("invalid or duplicate installer SHA256SUMS row")
         sums[match[2]] = match[1]
-    payloads = {item["name"]: item["sha256"] for entries in document["targets"].values()
-                for item in entries if not item["name"].endswith(".sig")}
-    if sums != payloads:
-        raise ValueError("installer SHA256SUMS differs from original producer payloads")
+    return sums
+
+
+def checked_updater_manifest(directory, document, assets, version):
     manifest = json.loads((directory / "latest.json").read_text())
     if manifest.get("version") != version or set(manifest.get("platforms", {})) != set(PLATFORMS):
         raise ValueError("updater manifest must contain exact version and all five platforms")
@@ -137,6 +153,65 @@ def checked_public(directory, source, version):
         signature = directory / "assets" / (artifact["name"] + ".sig")
         if entry.get("url") != assets[artifact["name"]]["browser_download_url"] or entry.get("signature") != signature.read_text().strip():
             raise ValueError("manifest URL/signature differs from declared producer bytes")
+
+
+STABLE_TARGET_SUFFIXES = (
+    ("_aarch64.dmg", "aarch64-apple-darwin"), ("_aarch64.app.tar.gz", "aarch64-apple-darwin"),
+    ("_x64.dmg", "x86_64-apple-darwin"), ("_x64.app.tar.gz", "x86_64-apple-darwin"),
+    ("_amd64.deb", "x86_64-unknown-linux-gnu"), ("_amd64.AppImage", "x86_64-unknown-linux-gnu"),
+    ("_x64-setup.exe", "x86_64-pc-windows-msvc"),
+)
+
+
+def stable_target(name):
+    base = name[:-len(".sig")] if name.endswith(".sig") else name
+    matches = [target for suffix, target in STABLE_TARGET_SUFFIXES if base.endswith(suffix)]
+    if len(matches) != 1:
+        raise ValueError("public release has unexpected or missing assets")
+    return matches[0]
+
+
+def checked_public_stable(directory, version):
+    tag = stable_identity(version)
+    metadata = json.loads((directory / "release.json").read_text())
+    assets = release_assets(metadata, STABLE_SOURCE, version)
+    sums = installer_sums(directory)
+    updater_suffixes = tuple(suffix for _, suffix in PLATFORMS.values())
+    signatures = {name + ".sig" for name in sums if name.endswith(updater_suffixes)}
+    files = set(sums) | signatures
+    if set(assets) != files | {"latest.json", "SHA256SUMS"}:
+        raise ValueError("public release has unexpected or missing assets")
+    checked_bytes(directory, assets)
+    if any(assets[name]["digest"] != "sha256:" + digest for name, digest in sums.items()):
+        raise ValueError("installer SHA256SUMS differs from published payload bytes")
+    targets = {target: [] for target in TARGETS}
+    for name in sorted(files):
+        targets[stable_target(name)].append(
+            {"name": name, "sha256": assets[name]["digest"][len("sha256:"):], "bytes": assets[name]["size"]})
+    document = {"schema": "festival-app-candidate/v1", "source_revision": STABLE_SOURCE, "version": version,
+                "release_tag": tag, "installer_basename": STABLE_INSTALLER_BASENAME, "targets": targets}
+    checked_manifest(document, version, STABLE_SOURCE)
+    checked_updater_manifest(directory, document, assets, version)
+    return document
+
+
+def checked_public(directory, source, version):
+    if source == STABLE_SOURCE:
+        return checked_public_stable(directory, version)
+    metadata = json.loads((directory / "release.json").read_text())
+    assets = release_assets(metadata, source, version)
+    document = checked_downloads(directory / "assets", version, source)
+    expected = {item["name"] for entries in document["targets"].values() for item in entries}
+    expected |= {"app-candidate.json", "checksums.txt", "latest.json", "SHA256SUMS"}
+    if set(assets) != expected:
+        raise ValueError("public release has unexpected or missing assets")
+    checked_bytes(directory, assets)
+    sums = installer_sums(directory)
+    payloads = {item["name"]: item["sha256"] for entries in document["targets"].values()
+                for item in entries if not item["name"].endswith(".sig")}
+    if sums != payloads:
+        raise ValueError("installer SHA256SUMS differs from original producer payloads")
+    checked_updater_manifest(directory, document, assets, version)
     return document
 
 
@@ -151,12 +226,13 @@ def checked_manual_candidate(directory, source, version, tag):
     return checked_downloads(directory / "assets", version, source)
 
 
-def checked_upgrade_selection(mechanism, failure_mode, candidate_tag, readiness):
+def checked_upgrade_selection(mechanism, failure_mode, candidate_tag, readiness, b_source=None):
     if mechanism not in ("manual", "updater") or readiness not in ("licensed", "free-workspace"):
         raise ValueError("unsupported upgrade mechanism/readiness")
     if mechanism == "manual" and failure_mode != "none":
         raise ValueError("manual replacement cannot claim updater failure/retry proof")
-    if (candidate_tag or readiness == "free-workspace") and mechanism != "manual":
+    stable_updater = mechanism == "updater" and b_source == STABLE_SOURCE and not candidate_tag
+    if (candidate_tag or readiness == "free-workspace") and mechanism != "manual" and not stable_updater:
         raise ValueError("draft/free-workspace acceptance requires manual replacement")
 
 
@@ -171,7 +247,7 @@ def windows_setup_ready(names, readiness):
 
 
 def fetch_public(directory, source, version):
-    tag = release_identity(source, version)
+    tag = release_tag(source, version)
     directory.mkdir()
     anonymous_download(f"https://api.github.com/repos/{REPOSITORY}/releases/tags/{tag}", directory / "release.json", 1024**2, retry_rate_limit=True)
     metadata = json.loads((directory / "release.json").read_text())
@@ -184,9 +260,9 @@ def fetch_public(directory, source, version):
 
 
 def checked_upgrade_pair(a, b):
-    release_identity(a["source_revision"], a["version"])
-    release_identity(b["source_revision"], b["version"])
-    if a["source_revision"] == b["source_revision"] or tuple(map(int, a["version"].split("."))) >= tuple(map(int, b["version"].split("."))):
+    a_tag = release_tag(a["source_revision"], a["version"])
+    b_tag = release_tag(b["source_revision"], b["version"])
+    if a_tag == b_tag or tuple(map(int, a["version"].split("."))) >= tuple(map(int, b["version"].split("."))):
         raise ValueError("upgrade requires distinct sources and increasing versions")
     for target, suffix in PLATFORMS.values():
         old = next(item for item in a["targets"][target] if item["name"].endswith(suffix))
