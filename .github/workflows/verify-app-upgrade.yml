@@ -23,14 +23,14 @@ on:
         options: [all, deb, nsis, appimage]
         default: all
       a_source:
-        description: Published app-test A source (updater mode requires its endpoint to serve B)
+        description: Published app-test A source (40 hex), or stable for the published app-v<a_version> release (updater mode requires its endpoint to serve B)
         type: string
         required: true
       a_version:
         type: string
         default: '0.1.0'
       b_source:
-        description: Full reviewed source of immutable published or qualification-draft B
+        description: Full reviewed 40-hex source of immutable published or qualification-draft B, or stable for the published app-v<b_version> release
         type: string
         required: true
       b_candidate_tag:

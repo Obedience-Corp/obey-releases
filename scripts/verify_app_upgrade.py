@@ -415,7 +415,7 @@ def signature_check_then_retry(process, binary, fixture, proxy, target, output, 
 
 def native(root, target, package_format, a_source, a_version, b_source, b_version, output, installation_context="redirected", failure_mode="none", mechanism="updater", b_candidate_tag=None, b_readiness="licensed"):
     require_clean_host(MACHINES.get(target))
-    checked_upgrade_selection(mechanism, failure_mode, b_candidate_tag, b_readiness)
+    checked_upgrade_selection(mechanism, failure_mode, b_candidate_tag, b_readiness, b_source)
     if target not in MACHINES or native_platform() != app.TARGETS[target][0] or package_format not in FORMATS:
         raise ValueError("upgrade target/format does not match native machine")
     allowed = "dmg" if target.endswith("apple-darwin") else "nsis" if target.endswith("windows-msvc") else None
@@ -697,7 +697,7 @@ if __name__ == "__main__":
     parser.add_argument("--format", choices=tuple(FORMATS))
     parser.add_argument("--installation-context", choices=("redirected", "default-home"), default="redirected")
     args = parser.parse_args()
-    checked_upgrade_selection(args.mechanism, args.failure_mode, args.b_candidate_tag, args.b_readiness)
+    checked_upgrade_selection(args.mechanism, args.failure_mode, args.b_candidate_tag, args.b_readiness, args.b_source)
     root = Path("upgrade-candidates").resolve()
     if args.mode == "fetch":
         root.mkdir()

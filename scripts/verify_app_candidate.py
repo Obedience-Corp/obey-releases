@@ -477,9 +477,18 @@ def wait_windows_fresh_chooser(process, installer, managed, target, output, envi
     return wait_until('fresh default camp chooser and live selected tools', ready, seconds=600)
 
 
+def retain_public_inputs(public_root, retained, document):
+    retained.mkdir()
+    for name in ("release.json", "SHA256SUMS", "latest.json"):
+        shutil.copyfile(public_root / name, retained / name)
+    if document.get("source_revision") != "stable":
+        for name in ("app-candidate.json", "checksums.txt"):
+            shutil.copyfile(public_root / "assets" / name, retained / name)
+
+
 def wait_fresh_setup(process, installer, managed, target, output, environment, report, stage, mac_tools=None, external_suite=None, active_session=None, service_recovery=None):
     import verify_app_upgrade as upgrade
-    selection_options = {"selection_report": report} if report.get("input_kind") == "qualification-draft" else {}
+    selection_options = {"selection_report": report} if report.get("input_kind") in ("qualification-draft", "published-stable") else {}
     if target.endswith("windows-msvc"):
         if selection_options:
             return wait_windows_fresh_chooser(process, installer, managed, target, output, environment, report, stage)
@@ -553,6 +562,11 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
         if (not fresh_setup or public_root is not None or existing_user != "none" or login_shell_proof
                 or missing_git_manual or partial_install_retry or login_shell_kind != "default"):
             raise ValueError("candidate fresh setup requires unseeded default-home mode")
+    if document.get("source_revision") == "stable" and (
+            not fresh_setup or public_root is None or existing_user != "none" or login_shell_proof
+            or missing_git_manual or partial_install_retry or login_shell_kind != "default"
+            or guest_context is not None):
+        raise ValueError("stable fresh setup requires unseeded default-home mode")
     installer_name = installer_basename(document)
     report = {"source_revision": document["source_revision"], "version": document["version"], "target": target,
               "installer_basename": installer_name,
@@ -561,6 +575,9 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
     if candidate_tag is not None:
         report.update(input_kind="qualification-draft", candidate_tag=candidate_tag,
                       anonymous_download_verified=False, expected_readiness="fresh-camp-chooser")
+    if document.get("source_revision") == "stable":
+        report.update(input_kind="published-stable", release_tag=document["release_tag"],
+                      expected_readiness="fresh-camp-chooser")
     output.mkdir()
     if candidate_tag is not None:
         retained = output / "candidate-inputs"
@@ -650,12 +667,7 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
         # The machine/account itself is disposable. Native OS lookup retains
         # its real HOME, unlike redirected-home tests that miss supervisors.
         if public_root is not None:
-            retained = output / "public-inputs"
-            retained.mkdir()
-            for name in ("release.json", "SHA256SUMS", "latest.json"):
-                shutil.copyfile(public_root / name, retained / name)
-            for name in ("app-candidate.json", "checksums.txt"):
-                shutil.copyfile(public_root / "assets" / name, retained / name)
+            retain_public_inputs(public_root, output / "public-inputs", document)
         entries = document["targets"][target]
         updater = next(item["name"] for item in entries if item["name"].endswith((".app.tar.gz", ".AppImage", "-setup.exe")))
         report["original_updater_payload"] = next(item for item in entries if item["name"] == updater)
