@@ -21,6 +21,7 @@ from app_upgrade_contract import checked_upgrade_pair, checked_public, fetch_pub
 from verify_candidate import command, native_platform, wait_until
 from owned_update_proxy import UpdateProxy, SignatureFallbackProxy
 from verify_selected_components import BETA_PACKAGES, BETA_SUITE_VERSIONS, TARGETS as COMPONENT_TARGETS, checked_bootstrap, checked_receipts, checked_status, fetch, require_clean_host
+from app_environment import without_app_telemetry
 
 SCRIPT = Path(__file__).resolve().parent
 MACHINES = {"aarch64-apple-darwin": "macOS-arm64", "x86_64-apple-darwin": "macOS-x86_64",
@@ -448,7 +449,7 @@ def native(root, target, package_format, a_source, a_version, b_source, b_versio
               "automatic_update_verified": False, "manual_update_verified": False,
               "default_home_relaunch_verified": False, "two_version_update_verified": False,
               "license_access_verified": False, "useful_first_use_verified": False, "consumer_trust_verified": False, "reboot_verified": False, "native_failure_recovery_verified": False}
-    environment = {key: value for key, value in os.environ.items() if not key.endswith(("_TOKEN", "_PASSWORD", "_PRIVATE_KEY"))}
+    environment = without_app_telemetry({key: value for key, value in os.environ.items() if not key.endswith(("_TOKEN", "_PASSWORD", "_PRIVATE_KEY"))})
     default_managed = default_home_layout(Path.home(), environment) if installation_context == "default-home" else None
     process = display = manager = proxy = None
     owned_deb = owned_nsis = False
