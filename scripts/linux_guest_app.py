@@ -18,6 +18,7 @@ import time
 
 from verify_candidate import command, require_disposable, wait_until
 import linux_guest_session
+from app_environment import without_app_telemetry
 
 TARGET = 'x86_64-unknown-linux-gnu'
 AGENT = Path('/usr/lib/policykit-1-gnome/polkit-gnome-authentication-agent-1')
@@ -189,7 +190,7 @@ def terminal_request(app_pid, managed, privileged_readlink=None, *, proc_root=Pa
 
 class Context:
     def __init__(self, root):
-        self.environment = dict(os.environ)
+        self.environment = without_app_telemetry(os.environ)
         self.session = local_context(self.environment)
         self.password = private_password(root / 'credential')
         self.agent = None
@@ -475,7 +476,7 @@ def reboot_payload(root, environment, report):
 def reboot_readback(root, output):
     import verify_app_candidate as app
     import verify_app_upgrade as upgrade
-    environment = dict(os.environ)
+    environment = without_app_telemetry(os.environ)
     report = {'reboot_verified': False, 'useful_first_use_verified': False, 'consumer_trust_verified': False}
     output.mkdir()
     process = None
@@ -545,7 +546,7 @@ def main():
     stage = (root / 'stage').read_text().strip()
     if stage not in ('install', 'reboot'):
         raise ValueError('invalid guest App stage')
-    environment = dict(os.environ)
+    environment = without_app_telemetry(os.environ)
     environment.update(CANDIDATE_NATIVE_DISPOSABLE='1', CANDIDATE_RUNNER_KIND='github-hosted',
                        GITHUB_REPOSITORY='Obedience-Corp/obey-releases', RUNNER_TEMP=str(root / 'temporary'))
     os.environ.update(environment)

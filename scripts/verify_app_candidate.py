@@ -23,6 +23,7 @@ from verify_candidate import REPOSITORY, command, native_platform, wait_until
 from verify_selected_components import require_clean_host, record_windows_discovery_snapshot
 from mac_candidate_diagnostics import diagnose as diagnose_mac_failure
 from linux_window_diagnostics import capture_failure as capture_linux_failure
+from app_environment import without_app_telemetry
 
 TARGETS = {
     "aarch64-apple-darwin": ("darwin/arm64", {".dmg", ".app.tar.gz", ".app.tar.gz.sig"}),
@@ -592,6 +593,7 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
     for key in list(environment):
         if key.endswith(("_TOKEN", "_PASSWORD", "_PRIVATE_KEY")):
             environment.pop(key, None)
+    environment = without_app_telemetry(environment)
     default_managed = None
     packaging_root = None
     existing_fixture = None
@@ -824,7 +826,7 @@ def native(directory, document, target, output, linux_package="both", fresh_setu
             import partial_setup
             partial_fixture = partial_setup.Fixture(installer, default_managed, output, environment,
                                                     report.setdefault('partial_selected_install', {}))
-            app_environment = partial_fixture.prepare()
+            app_environment = without_app_telemetry(partial_fixture.prepare())
         with (output / "app.log").open("w") as log:
             process = subprocess.Popen([str(binary)], env=app_environment, stdout=log, stderr=subprocess.STDOUT, start_new_session=os.name != "nt")
             report["pid"] = process.pid
