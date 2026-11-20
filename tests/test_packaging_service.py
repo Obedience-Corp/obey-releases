@@ -45,6 +45,35 @@ class PackagingServiceTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 service.checked_owner(damaged, root / 'managed/bin/obey.exe', root / 'obey.yaml', root / 'data')
 
+    def test_the_headless_console_host_action_from_obey_0_7_0_is_owned(self):
+        root = Path('/unique-owned-fixture')
+        state = metadata(root)
+        action = state['tasks'][0]['actions'][0]
+        action.update(execute='CONHOST.EXE', arguments='--headless powershell.exe ' + action['arguments'])
+        self.assertTrue(service.checked_owner(state, root / 'managed/bin/obey.exe', root / 'obey.yaml', root / 'data'))
+
+    def test_console_host_variants_other_than_the_exact_shape_stay_foreign(self):
+        root = Path('/unique-owned-fixture')
+        script = metadata(root)['script']
+        args = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + script + '"'
+        variants = [('conhost.exe', 'powershell.exe ' + args), ('conhost.exe', args),
+                    ('conhost.exe', '--headless cmd.exe ' + args), ('conhost.exe', '--headless powershell.exe -File "C:/foreign/service-start.ps1"'),
+                    ('conhost.exe', '--headless  powershell.exe ' + args), ('powershell.exe', '--headless powershell.exe ' + args),
+                    ('conhost.exe', '--headless powershell.exe ' + args + ' -Extra')]
+        for execute, arguments in variants:
+            state = metadata(root)
+            state['tasks'][0]['actions'][0].update(execute=execute, arguments=arguments)
+            with self.subTest(execute=execute, arguments=arguments), self.assertRaises(ValueError):
+                service.checked_owner(state, root / 'managed/bin/obey.exe', root / 'obey.yaml', root / 'data')
+
+    def test_the_headless_action_still_requires_the_data_working_directory(self):
+        root = Path('/unique-owned-fixture')
+        state = metadata(root)
+        action = state['tasks'][0]['actions'][0]
+        action.update(execute='conhost.exe', arguments='--headless powershell.exe ' + action['arguments'], working_directory='/foreign/data')
+        with self.assertRaises(ValueError):
+            service.checked_owner(state, root / 'managed/bin/obey.exe', root / 'obey.yaml', root / 'data')
+
     def test_baseline_refuses_old_task_files_and_processes(self):
         root = Path('/unique-owned-fixture')
         for key, value in [('tasks', [{}]), ('script_exists', True), ('unit_exists', True), ('processes', [{'pid': 1}])]:

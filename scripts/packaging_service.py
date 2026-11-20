@@ -15,6 +15,18 @@ def same_file(actual, expected):
         return False
 
 
+def owned_action(action, script):
+    """Obey's service task runs service-start.ps1 directly (before 0.7.0) or under a
+    headless console host (0.7.0 and later). Only those two exact shapes are owned."""
+    expected_args = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + script + '"'
+    execute = action['execute'].lower()
+    if execute == 'powershell.exe':
+        return action['arguments'] == expected_args
+    if execute == 'conhost.exe':
+        return action['arguments'] == '--headless powershell.exe ' + expected_args
+    return False
+
+
 def checked_owner(state, executable, config, data):
     tasks = state['tasks']
     artifacts = state['unit_exists'] or state['script_exists']
@@ -29,8 +41,7 @@ def checked_owner(state, executable, config, data):
     if task['name'] != state['expected_task'] or task['path'] != '\\' or len(task['actions']) != 1:
         raise ValueError('foreign packaging supervisor task')
     action = task['actions'][0]
-    expected_args = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + state['script'] + '"'
-    if action['execute'].lower() != 'powershell.exe' or action['arguments'] != expected_args or not same_file(action['working_directory'], data):
+    if not owned_action(action, state['script']) or not same_file(action['working_directory'], data):
         raise ValueError('foreign packaging supervisor action')
     invokes = state['invocations']
     if len(invokes) != 1 or len(invokes[0]) != 3 or not same_file(invokes[0][0], executable) or invokes[0][1:] != ['serve', '--daemon-mode']:
